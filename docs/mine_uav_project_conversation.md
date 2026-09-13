@@ -1334,3 +1334,30 @@ rostopic echo /mine_uav/mission/goaf_enable
 
 - “雷达断电→重新上电→Livox Driver恢复→Fast-LIO2新估计器启动→决策器重新订阅”的自动恢复链路实机验收通过。
 - PX4视觉桥状态话题本次没有返回样本，下一步在任务一静态闭环中检查并启动位姿桥；随后在PX4指令门关闭的条件下启用决策器，观察前沿点、目标点和SUPER轨迹。
+
+## 第51轮：任务一真实点云静态规划闭环测试
+
+用户要求继续下一步。本轮在不控制PX4的条件下，使用Mid360s真实点云和Fast-LIO2里程计验证“决策器→SUPER”的静态闭环。
+
+### 安全前提
+
+- 调用 `/super_px4_command_bridge/enable=false`，返回“task-one PX4 command output disabled”。
+- 测试前后 `/mavros/setpoint_raw/local` 均无任何消息；MAVROS当前无飞控心跳，调度器保持 `hold`。
+- 测试结束后再次关闭决策器和指令桥，并停止临时 `fsm_node`。
+
+### 已通过的链路
+
+- SUPER `fsm_node` 正确加载 `click_smooth_ros1.yaml`，实际订阅 `/cloud_registered`、`/Odometry` 和 `/goal`；点云与里程计输入约10 Hz。
+- 决策器重置启用后进入 `EXPLORING`，生成大量frontier候选，当前选择的目标点为 `(5.25, 3.75, 1.25) m`，坐标系为 `camera_init`，朝向基本保持当前机头方向。
+- SUPER收到 `/goal` 后首次记录 `GenerateExpTrajectory SUCCESS`，状态由 `INIT→WAIT_GOAL→GENERATE_TRAJ→FOLLOW_TRAJ`，并输出 `/planning/pos_cmd`。这证明“真实雷达→Fast-LIO2→自主决策器→目标点→SUPER→轨迹指令”的接口链路已经贯通。
+
+### 暴露的问题与边界
+
+- 无人机在台架上没有移动，但SUPER的轨迹时钟继续前进，实际里程计无法跟踪期望轨迹，随后出现大量重复重规划、`Yaw rate too large`、`Omg or thr or Pos violation`、备份轨迹优化失败等警告。
+- 这些警告主要来自“输出轨迹但机体完全不跟随”的开环静态条件，不能仅靠原地测试判断真实闭环稳定性；同时也说明当前尚不能带桨实飞，必须继续做运动闭环和参数验证。
+- 当前任务一完成程度是数据/接口闭环通过，不是动态控制闭环通过。
+
+### 下一步
+
+- 优先在PX4 SITL中让模拟机体真实跟随SUPER指令，验证目标方向、轨迹连续性、重规划频率、避障和到达目标后的下一frontier切换。
+- 动态闭环通过后，再连接实物PX4检查视觉位姿桥；最后才进行拆桨OFFBOARD台架测试。
