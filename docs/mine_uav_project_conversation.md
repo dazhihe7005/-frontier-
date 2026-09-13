@@ -621,3 +621,19 @@ git -C /home/nuc/frontier-upload push origin main
 ```
 
 私钥只保存在 NUC，不应发送到对话中。也可以使用 GitHub PAT 通过 HTTPS 认证，但 PAT 应按密码保护，不能明文发布。
+
+## 第18轮：生成 SSH key 时的保存路径
+
+用户执行 `ssh-keygen -t ed25519` 后看到默认保存路径提示：`/home/nuc/.ssh/id_ed25519`。
+
+说明：此处直接按回车，接受默认路径即可。随后出现 passphrase 提示时，可以设置一个密钥密码；如果希望后续推送不重复输入，也可以直接回车留空。若提示文件已存在，不应直接覆盖，应先确认是否要复用已有密钥。
+
+## 第19轮：SSH key 已生成
+
+用户已成功生成 Ed25519 SSH key：
+
+- 私钥：`/home/nuc/.ssh/id_ed25519`
+- 公钥：`/home/nuc/.ssh/id_ed25519.pub`
+- 指纹：`SHA256:4fKQFit6+pBtqrnqoq12OowdskcZB149XEJ1Iu3OZYs`
+
+下一步是复制公钥到 GitHub 的 SSH keys 页面，测试 `ssh -T git@github.com`，再将 `/home/nuc/frontier-upload` 的远程地址切换为 SSH 并推送 `main` 分支。
