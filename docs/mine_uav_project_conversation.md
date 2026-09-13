@@ -1248,3 +1248,39 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - `task1_real.launch` 的默认雷达启动项改为 `msg_MID360s.launch`，避免后续重新启动时再次选错型号。
 - 雷达补丁改名为 `livox_ros_driver2_mid360s_reconnect.patch`，配置目标改为 `MID360s_config.json`；保留真实数据包驱动 Sampling 状态和 Fast-LIO2 断流重启保护。
 - 当前Livox Driver和Fast-LIO2保持运行。下一项硬件验收应是运行中单独给雷达断电再上电，验证自动恢复；该测试与PX4无关。
+
+## 第47轮：确认雷达数据内容及其是否到达自主决策器
+
+用户询问如何查看雷达传来的数据，以及如何确认数据已经送达自主决策器。
+
+### 数据链路与现场证据
+
+- 雷达驱动输出 `/livox/lidar`，消息类型为 `livox_ros_driver2/CustomMsg`；它包含单点的三维坐标、反射强度、线号和相对时间等原始测量。现场抽取的一帧 `point_num=19968`、`lidar_id=192`。
+- 雷达IMU输出 `/livox/imu`，消息类型为 `sensor_msgs/Imu`。
+- Fast-LIO2融合原始点云和IMU后输出 `/cloud_registered`（`sensor_msgs/PointCloud2`）和 `/Odometry`（`nav_msgs/Odometry`）。现场配准点云一帧宽度为 `3520`，坐标系为 `camera_init`。
+- `/super_exploration_decider` 明确订阅 `/cloud_registered` 和 `/Odometry`；ROS连接详情显示两个话题均由 `/laserMapping` 通过实际TCPROS入站连接送入决策器。`rostopic info`也显示发布者为 `/laserMapping`、订阅者为 `/super_exploration_decider`，因此数据已真实到达，不只是存在同名话题。
+
+### 当前为什么没有输出探索目标
+
+- 决策器状态为 `DISABLED`，调度器信号 `/mine_uav/mission/goaf_enable=False`。
+- 这表示“雷达→Fast-LIO2→决策器”的接收链路正常，但任务一尚未被调度器允许执行；因此当前不会生成新的 `/goal` 或前沿点。
+- `finished=False`、`returning=False`，当前不是建模完成或返航状态。
+
+### 常用自检命令
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/nuc/fastlio2_ws/devel/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+
+rostopic hz /livox/lidar
+rostopic echo -n 1 /livox/lidar/point_num
+rostopic hz /cloud_registered
+rostopic echo -n 1 /cloud_registered/width
+rostopic info /cloud_registered
+rosnode info /super_exploration_decider
+rostopic echo /mine_uav/exploration/status
+rostopic echo /mine_uav/mission/goaf_enable
+```
+
+- 判断标准：话题有稳定频率、每帧点数大于零、`rostopic info`能看到决策器作为Subscriber，三项同时成立才能确认数据已送达决策器。
