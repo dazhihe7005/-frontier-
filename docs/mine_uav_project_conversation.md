@@ -705,3 +705,14 @@ git -C /home/nuc/frontier-upload push origin main
 - 调度器实际订阅 `/mavros/local_position/odom`、`/mavros/rc/in` 和 `/mavros/state`。
 - SITL 中临时发布 RC 低位得到任务一、高位得到任务二，切换结果正确。
 - 标准 PX4 SITL 不产生 Fast-LIO2 的 `/cloud_registered`，所以当前只完成调度器/MAVROS/SITL 链路验证；SUPER 完整规划需要后续接入点云回放或仿真点云源。
+
+## 第24轮：同步 GitHub 当前最新内容
+
+用户要求将当前最新源码和 README 再次更新到 GitHub。
+
+### 同步结果
+
+- 已核对本地 `mine_uav_control` 与 GitHub 工作副本，源码、调度器、SUPER enable 门控、配置、launch 和 README 内容一致。
+- README 已包含 Fast-LIO2 → 任务调度器 → 采空区/竖井任务架构、任务话题、SITL 启动方法和当前限制。
+- 本轮仅新增 GitHub 同步记录，不重复修改已经验证通过的源码。
+- 待推送提交用于保存本次最新同步状态。
