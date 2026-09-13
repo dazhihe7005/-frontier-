@@ -637,3 +637,9 @@ git -C /home/nuc/frontier-upload push origin main
 - 指纹：`SHA256:4fKQFit6+pBtqrnqoq12OowdskcZB149XEJ1Iu3OZYs`
 
 下一步是复制公钥到 GitHub 的 SSH keys 页面，测试 `ssh -T git@github.com`，再将 `/home/nuc/frontier-upload` 的远程地址切换为 SSH 并推送 `main` 分支。
+
+## 第20轮：GitHub SSH 认证成功
+
+用户执行 `ssh -T git@github.com` 成功，GitHub 返回已认证用户 `dazhihe7005`，说明 SSH key 已正确添加。
+
+用户随后复制命令时多输入了单引号，导致 Shell 出现 `>` 续行提示；通过 `Ctrl+C` 取消即可。下一步直接使用无多余引号的 SSH remote 推送本地提交。
