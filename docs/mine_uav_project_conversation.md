@@ -716,3 +716,22 @@ git -C /home/nuc/frontier-upload push origin main
 - README 已包含 Fast-LIO2 → 任务调度器 → 采空区/竖井任务架构、任务话题、SITL 启动方法和当前限制。
 - 本轮仅新增 GitHub 同步记录，不重复修改已经验证通过的源码。
 - 待推送提交用于保存本次最新同步状态。
+
+## 第25轮：梳理任务一/任务二 NUC 核心工作完成度
+
+用户希望逐个了解：任务一和任务二的 NUC 核心工作已完成哪些、还需完善哪些、已验证哪些、SITL 能看到什么以及能否生成采空区地图。约定本轮先只回答第一个问题：当前已完成的核心工作。
+
+### 当前完成内容
+
+- 已建立 ROS1/MAVROS/PX4 的 NUC 工程基础，已有串口链路和 MAVROS 通信配置。
+- 已完成 Fast-LIO2 输入接口约定：采空区决策器接收 `/cloud_registered` (`sensor_msgs/PointCloud2`) 和 `/Odometry` (`nav_msgs/Odometry`)。
+- 已完成任务一第一版 `super_exploration_decider`：轻量体素地图、free/occupied 更新、frontier 候选、信息增益/距离评分、目标发布到 SUPER `/goal`、完成/返航条件。
+- 已完成任务一的调度门控：任务一订阅 `/mine_uav/mission/goaf_enable`，切换到任务二时暂停，切回任务一时恢复。
+- 已完成任务调度器 `mission_scheduler`：通过 MAVROS `/mavros/rc/in` 的二段开关在任务一和任务二之间选择，并检查位姿新鲜度、RC 丢失和返航请求。
+- 已完成任务二的调度接口占位：发布 `shaft_enable` 和 `active_task=2`，但竖井探测的下降、匀速、测距触底和返航控制器尚未实现。
+- 已完成 SITL 启动文件和 MAVROS 位姿重映射，用于先验证调度器链路。
+- 代码已通过 `catkin_make --pkg mine_uav_control`，调度器已在模拟消息和 PX4 SITL 中验证任务切换。
+
+### 重要边界
+
+当前“任务一”完成的是任务级 frontier 决策器的第一版和 SUPER 门控，不等于已经完成真实采空区自主探测闭环；当前“任务二”只完成任务选择接口，不等于已经完成竖井探测任务本体。统一 PX4 command router 和两个任务到 PX4 setpoint 的完整闭环也尚未完成。
