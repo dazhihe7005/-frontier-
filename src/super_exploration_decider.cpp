@@ -25,6 +25,18 @@ double squaredDistance(const geometry_msgs::Point& a,
   return dx * dx + dy * dy + dz * dz;
 }
 
+double normalizeAngle(double angle) {
+  while (angle > M_PI) angle -= 2.0 * M_PI;
+  while (angle < -M_PI) angle += 2.0 * M_PI;
+  return angle;
+}
+
+double poseYaw(const geometry_msgs::Pose& pose) {
+  const auto& q = pose.orientation;
+  return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
 geometry_msgs::Quaternion yawQuaternion(double yaw) {
   geometry_msgs::Quaternion q;
   q.w = std::cos(yaw * 0.5);
@@ -129,6 +141,32 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("distance_weight", distance_weight_, distance_weight_);
   private_nh_.param("information_weight", information_weight_,
                     information_weight_);
+  private_nh_.param("heading_priority_weight", heading_priority_weight_,
+                    heading_priority_weight_);
+  private_nh_.param("fallback_heading_weight", fallback_heading_weight_,
+                    fallback_heading_weight_);
+  private_nh_.param("forward_sector_deg", forward_sector_deg_,
+                    forward_sector_deg_);
+  private_nh_.param("side_wall_sector_deg", side_wall_sector_deg_,
+                    side_wall_sector_deg_);
+  private_nh_.param("side_wall_min_range", side_wall_min_range_,
+                    side_wall_min_range_);
+  private_nh_.param("side_wall_max_range", side_wall_max_range_,
+                    side_wall_max_range_);
+  private_nh_.param("front_obstacle_range", front_obstacle_range_,
+                    front_obstacle_range_);
+  private_nh_.param("directional_vertical_tolerance",
+                    directional_vertical_tolerance_,
+                    directional_vertical_tolerance_);
+  private_nh_.param("directional_floor_exclusion",
+                    directional_floor_exclusion_,
+                    directional_floor_exclusion_);
+  private_nh_.param("side_wall_missing_confirm_frames",
+                    side_wall_missing_confirm_frames_,
+                    side_wall_missing_confirm_frames_);
+  private_nh_.param("front_obstacle_confirm_frames",
+                    front_obstacle_confirm_frames_,
+                    front_obstacle_confirm_frames_);
   private_nh_.param("sync_queue_size", sync_queue_size_, sync_queue_size_);
   private_nh_.param("max_points_per_cloud", max_points_per_cloud_,
                     max_points_per_cloud_);
@@ -142,6 +180,22 @@ bool SuperExplorationDecider::loadParameters() {
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
+      !std::isfinite(heading_priority_weight_) ||
+      !std::isfinite(fallback_heading_weight_) ||
+      !std::isfinite(forward_sector_deg_) || forward_sector_deg_ <= 0.0 ||
+      forward_sector_deg_ >= 180.0 ||
+      !std::isfinite(side_wall_sector_deg_) || side_wall_sector_deg_ <= 0.0 ||
+      side_wall_sector_deg_ >= 180.0 ||
+      !std::isfinite(side_wall_min_range_) || side_wall_min_range_ <= 0.0 ||
+      !std::isfinite(side_wall_max_range_) ||
+      side_wall_max_range_ <= side_wall_min_range_ ||
+      !std::isfinite(front_obstacle_range_) || front_obstacle_range_ <= 0.0 ||
+      !std::isfinite(directional_vertical_tolerance_) ||
+      directional_vertical_tolerance_ <= 0.0 ||
+      !std::isfinite(directional_floor_exclusion_) ||
+      directional_floor_exclusion_ < 0.0 ||
+      side_wall_missing_confirm_frames_ < 1 ||
+      front_obstacle_confirm_frames_ < 1 ||
       sync_queue_size_ < 2 || max_points_per_cloud_ < 1) {
     ROS_FATAL("Invalid exploration decider parameters");
     return false;
@@ -187,6 +241,7 @@ void SuperExplorationDecider::synchronizedCallback(
              home_pose_.pose.position.z);
   }
   updateMap(*cloud, current_pose_);
+  updateDirectionalEvidence(*cloud, current_pose_);
 }
 
 bool SuperExplorationDecider::dataIsFresh() const {
@@ -293,6 +348,77 @@ void SuperExplorationDecider::updateMap(
 
   if (accepted > 0) {
     pruneMap();
+  }
+}
+
+void SuperExplorationDecider::updateDirectionalEvidence(
+    const sensor_msgs::PointCloud2& cloud,
+    const geometry_msgs::PoseStamped& pose) {
+  pcl::PointCloud<pcl::PointXYZ> input;
+  try {
+    pcl::fromROSMsg(cloud, input);
+  } catch (const std::exception& error) {
+    ROS_WARN_THROTTLE(2.0,
+                      "Cannot inspect directional Fast-LIO2 cloud: %s",
+                      error.what());
+    return;
+  }
+
+  const double yaw = poseYaw(pose.pose);
+  const double side_half_angle = side_wall_sector_deg_ * M_PI / 360.0;
+  const double front_half_angle = forward_sector_deg_ * M_PI / 360.0;
+  bool left_seen = false;
+  bool right_seen = false;
+  bool front_seen = false;
+
+  for (const auto& point : input) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+        !std::isfinite(point.z)) {
+      continue;
+    }
+    const double dx = point.x - pose.pose.position.x;
+    const double dy = point.y - pose.pose.position.y;
+    const double dz = point.z - pose.pose.position.z;
+    const double horizontal_range = std::hypot(dx, dy);
+    if (horizontal_range < side_wall_min_range_ ||
+        horizontal_range > side_wall_max_range_ ||
+        dz < -directional_floor_exclusion_ ||
+        dz > directional_vertical_tolerance_) {
+      continue;
+    }
+
+    const double relative_angle = normalizeAngle(std::atan2(dy, dx) - yaw);
+    if (std::abs(normalizeAngle(relative_angle - M_PI_2)) <=
+        side_half_angle) {
+      left_seen = true;
+    }
+    if (std::abs(normalizeAngle(relative_angle + M_PI_2)) <=
+        side_half_angle) {
+      right_seen = true;
+    }
+    if (horizontal_range <= front_obstacle_range_ &&
+        std::abs(relative_angle) <= front_half_angle) {
+      front_seen = true;
+    }
+    if (left_seen && right_seen && front_seen) {
+      break;
+    }
+  }
+
+  left_wall_visible_ = left_seen;
+  right_wall_visible_ = right_seen;
+  front_obstacle_visible_ = front_seen;
+  if (!left_seen && !right_seen) {
+    side_wall_missing_streak_ = std::min(
+        side_wall_missing_streak_ + 1, side_wall_missing_confirm_frames_);
+  } else {
+    side_wall_missing_streak_ = 0;
+  }
+  if (front_seen) {
+    front_obstacle_streak_ = std::min(
+        front_obstacle_streak_ + 1, front_obstacle_confirm_frames_);
+  } else {
+    front_obstacle_streak_ = 0;
   }
 }
 
@@ -405,6 +531,96 @@ SuperExplorationDecider::findFrontiers() const {
   return candidates;
 }
 
+bool SuperExplorationDecider::isForwardCandidate(
+    const FrontierCandidate& candidate) const {
+  const double dx = candidate.goal.pose.position.x -
+                    current_pose_.pose.position.x;
+  const double dy = candidate.goal.pose.position.y -
+                    current_pose_.pose.position.y;
+  if (std::hypot(dx, dy) < min_goal_distance_) {
+    return false;
+  }
+  const double relative_angle = normalizeAngle(
+      std::atan2(dy, dx) - poseYaw(current_pose_.pose));
+  return std::abs(relative_angle) <= forward_sector_deg_ * M_PI / 360.0 &&
+         std::cos(relative_angle) > 0.0;
+}
+
+double SuperExplorationDecider::candidateHeadingAlignment(
+    const FrontierCandidate& candidate) const {
+  const double dx = candidate.goal.pose.position.x -
+                    current_pose_.pose.position.x;
+  const double dy = candidate.goal.pose.position.y -
+                    current_pose_.pose.position.y;
+  const double distance = std::hypot(dx, dy);
+  if (distance < 1e-6) {
+    return -1.0;
+  }
+  const double relative_angle = normalizeAngle(
+      std::atan2(dy, dx) - poseYaw(current_pose_.pose));
+  return std::cos(relative_angle);
+}
+
+const SuperExplorationDecider::FrontierCandidate*
+SuperExplorationDecider::selectForwardCandidate(
+    const std::vector<FrontierCandidate>& candidates) const {
+  const FrontierCandidate* best = nullptr;
+  double best_score = -std::numeric_limits<double>::infinity();
+  for (const auto& candidate : candidates) {
+    if (!isForwardCandidate(candidate)) {
+      continue;
+    }
+    const double score = candidate.score +
+                         heading_priority_weight_ *
+                             candidateHeadingAlignment(candidate);
+    if (score > best_score) {
+      best_score = score;
+      best = &candidate;
+    }
+  }
+  return best;
+}
+
+void SuperExplorationDecider::updateExplorationPhase(
+    const std::vector<FrontierCandidate>& candidates) {
+  const FrontierCandidate* forward_candidate =
+      selectForwardCandidate(candidates);
+  const bool side_walls_unavailable =
+      side_wall_missing_streak_ >= side_wall_missing_confirm_frames_;
+
+  const bool front_obstacle_confirmed =
+      front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+  if (front_obstacle_confirmed) {
+    if (exploration_phase_ != ExplorationPhase::kFrontierFallback) {
+      ROS_INFO("Exploration phase: forward obstacle confirmed; enabling "
+               "frontier fallback");
+    }
+    exploration_phase_ = ExplorationPhase::kFrontierFallback;
+  } else if (forward_candidate != nullptr) {
+    if (exploration_phase_ != ExplorationPhase::kForwardPriority) {
+      ROS_INFO("Exploration phase: forward candidate available; restoring "
+               "heading priority");
+    }
+    exploration_phase_ = ExplorationPhase::kForwardPriority;
+  } else if (side_walls_unavailable) {
+    if (exploration_phase_ != ExplorationPhase::kFrontierFallback) {
+      ROS_INFO("Exploration phase: both side-wall observations missing for "
+               "configured confirmation window; enabling frontier fallback");
+    }
+    exploration_phase_ = ExplorationPhase::kFrontierFallback;
+  }
+}
+
+const char* SuperExplorationDecider::explorationPhaseName() const {
+  switch (exploration_phase_) {
+    case ExplorationPhase::kForwardPriority:
+      return "FORWARD_PRIORITY";
+    case ExplorationPhase::kFrontierFallback:
+      return "FRONTIER_FALLBACK";
+  }
+  return "UNKNOWN";
+}
+
 void SuperExplorationDecider::publishVisualization(
     const std::vector<FrontierCandidate>& candidates) {
   visualization_msgs::MarkerArray marker_array;
@@ -470,8 +686,58 @@ bool SuperExplorationDecider::selectAndPublishFrontier() {
     return false;
   }
 
+  updateExplorationPhase(candidates);
+  const FrontierCandidate* selected = nullptr;
+  std::string reason;
+  if (exploration_phase_ == ExplorationPhase::kForwardPriority) {
+    selected = selectForwardCandidate(candidates);
+    if (selected == nullptr) {
+      return false;
+    }
+    reason = "heading_priority";
+  } else {
+    // A confirmed front obstacle must not be crossed just because a frontier
+    // candidate happens to have a high information score. Prefer a lateral or
+    // rear candidate in fallback mode; if none exists, wait for more map data.
+    const bool front_obstacle_confirmed =
+        front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+    if (front_obstacle_confirmed) {
+      for (const auto& candidate : candidates) {
+        if (!isForwardCandidate(candidate)) {
+          if (selected == nullptr || candidate.score > selected->score) {
+            selected = &candidate;
+          }
+        }
+      }
+      if (selected == nullptr) {
+        return false;
+      }
+      reason = "front_obstacle_fallback";
+    } else {
+      selected = &*std::max_element(
+          candidates.begin(), candidates.end(),
+          [this](const FrontierCandidate& left,
+                 const FrontierCandidate& right) {
+            const double left_score =
+                left.score + fallback_heading_weight_ *
+                                 candidateHeadingAlignment(left);
+            const double right_score =
+                right.score + fallback_heading_weight_ *
+                                  candidateHeadingAlignment(right);
+            return left_score < right_score;
+          });
+      reason = "frontier_fallback";
+    }
+  }
+
   last_frontier_time_ = ros::Time::now();
-  publishGoal(candidates.front().goal, "frontier_information_gain");
+  geometry_msgs::PoseStamped selected_goal = selected->goal;
+  if (exploration_phase_ == ExplorationPhase::kForwardPriority) {
+    // Keep the commanded yaw aligned with the current body heading. SUPER may
+    // apply its own yaw policy, but this preserves the task-level intent.
+    selected_goal.pose.orientation = yawQuaternion(poseYaw(current_pose_.pose));
+  }
+  publishGoal(selected_goal, reason);
   return true;
 }
 
@@ -625,6 +891,12 @@ void SuperExplorationDecider::clearMissionState() {
   have_battery_ = false;
   battery_percentage_ = -1.0;
   reached_goal_count_ = 0;
+  exploration_phase_ = ExplorationPhase::kForwardPriority;
+  left_wall_visible_ = false;
+  right_wall_visible_ = false;
+  front_obstacle_visible_ = false;
+  side_wall_missing_streak_ = 0;
+  front_obstacle_streak_ = 0;
   first_data_time_ = ros::Time();
   last_frontier_time_ = ros::Time();
   std_msgs::Bool false_message;

@@ -30,6 +30,21 @@ candidate_spacing: 3.0
 min_unknown_neighbors: 1
 information_weight: 1.0
 distance_weight: 0.35
+
+# 任务一方向策略：优先选择当前机头前方的 frontier。
+# 角度均以 Fast-LIO2 world 坐标系中的机体 yaw 为基准。
+heading_priority_weight: 4.0
+fallback_heading_weight: 0.75
+forward_sector_deg: 70.0
+side_wall_sector_deg: 50.0
+side_wall_min_range: 1.0
+side_wall_max_range: 12.0
+front_obstacle_range: 6.0
+directional_vertical_tolerance: 4.0
+directional_floor_exclusion: 0.5
+side_wall_missing_confirm_frames: 8
+front_obstacle_confirm_frames: 3
+
 goal_reached_distance: 1.0
 goal_timeout: 30.0
 

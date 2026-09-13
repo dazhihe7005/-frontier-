@@ -828,3 +828,26 @@ crw-rw----+ 1 root dialout 166, 0 /dev/ttyACM0
 ### 要实现用户描述的采空区逻辑
 
 后续需要增加专门的任务状态机：入口确认 → 主方向探索 → 尽头/障碍确认 → 侧向 frontier 覆盖 → 已覆盖区域复核 → 完整性判定 → 沿安全路径返航。只有完成全局覆盖判据后，才能把返航称为“建模完成返航”，而不是“当前局部没有 frontier 就返航”。
+
+## 第31轮：完成机头方向优先状态机并分析 USB 日志
+
+用户要求先完成任务一的机头方向优先状态及策略，再分析 `usb usb4-port1: Cannot enable. Maybe the USB cable is bad?`。
+
+### 本轮代码变更
+
+- `super_exploration_decider` 增加 `FORWARD_PRIORITY` 和 `FRONTIER_FALLBACK` 两个方向阶段。
+- 在 `FORWARD_PRIORITY` 阶段，根据 Fast-LIO2 位姿四元数计算当前机体 yaw，只在机头前方角度范围内的 frontier 中选目标，并增加机头方向评分权重；发布目标时将目标 yaw 对齐当前机头方向。
+- 当前方点云障碍连续多帧确认后，进入 `FRONTIER_FALLBACK`；确认的前方障碍存在时，优先选择非前方候选，若没有安全的非前方候选则等待更多地图数据，不直接穿越障碍。
+- 当连续多帧既没有左右墙体观测又没有前方可行 frontier 时，进入 `FRONTIER_FALLBACK`，再使用一般 frontier 选择策略。
+- 左右墙体、前方障碍的证据来自当前 Fast-LIO2 `/cloud_registered`，通过确认帧数抑制单帧误检；增加了地面点垂直方向过滤，避免将地面误判为前方墙体。
+- 参数已加入 `config/super_exploration_decider.yaml`：前方角度、左右墙体扇区和量程、前方障碍量程、确认帧数及方向权重。
+- 该逻辑只影响发给 SUPER 的 `geometry_msgs/PoseStamped` 观察目标，不直接发布 PX4 setpoint，也不改动 Fast-LIO2 到 PX4 的定位链路。
+- 已将源码同步至 `/home/nuc/super_ws/src/mine_uav_control`，并通过 `catkin_make --pkg mine_uav_control` 编译。
+
+### USB 日志分析
+
+- `usb usb4-port1: Cannot enable` 表示 Linux 正在尝试启用 NUC 的 USB 总线 4、端口 1，但端口初始化失败；它本身不能证明 PX4 Type-C 口损坏。
+- 当前 `lsusb -t` 显示 PX4（`Auterion / PX4 FMU v6C.x`，`cdc_acm`）位于 USB 总线 3、端口 2，而报错反复指向 USB 总线 4、端口 1，因此这批错误很可能来自 NUC 的另一个 USB 端口/控制器，不能直接归因于 PX4。
+- 更可能的原因依次包括：USB 数据线质量或仅充电线、接头接触/松动、NUC 端口供电或端口本身问题、USB 控制器/扩展坞问题；只有在拔插 PX4 时明确看到 PX4 所在端口也出现同样错误，才重点怀疑 PX4 Type-C 接口。
+- 推荐定位顺序：不用 HUB 换一根确认支持数据传输的短线；换 NUC 的另一个 USB 口；用同一线缆/端口测试其他设备；再用同一 PX4 和线缆接另一台电脑。用 `dmesg -w` 配合拔插，确认报错端口是否与 PX4 枚举出的端口一致。
+- `/dev/ttyACM0` 节点存在只能说明 CDC ACM 设备已枚举；是否通信稳定仍需观察 `USB disconnect`、MAVROS `/mavros/state.connected` 和 `/mavros/local_position/odom`。

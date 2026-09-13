@@ -59,6 +59,11 @@ class SuperExplorationDecider {
 
   enum CellState : uint8_t { FREE = 1, OCCUPIED = 2 };
 
+  enum class ExplorationPhase {
+    kForwardPriority,
+    kFrontierFallback,
+  };
+
   struct FrontierCandidate {
     VoxelKey key;
     geometry_msgs::PoseStamped goal;
@@ -81,6 +86,8 @@ class SuperExplorationDecider {
   bool dataIsFresh() const;
   void updateMap(const sensor_msgs::PointCloud2& cloud,
                  const geometry_msgs::PoseStamped& pose);
+  void updateDirectionalEvidence(const sensor_msgs::PointCloud2& cloud,
+                                 const geometry_msgs::PoseStamped& pose);
   void pruneMap();
   void markFree(const VoxelKey& key);
   void markOccupied(const VoxelKey& key);
@@ -91,6 +98,13 @@ class SuperExplorationDecider {
   std::vector<FrontierCandidate> findFrontiers() const;
   bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
   bool selectAndPublishFrontier();
+  bool isForwardCandidate(const FrontierCandidate& candidate) const;
+  double candidateHeadingAlignment(const FrontierCandidate& candidate) const;
+  const FrontierCandidate* selectForwardCandidate(
+      const std::vector<FrontierCandidate>& candidates) const;
+  void updateExplorationPhase(
+      const std::vector<FrontierCandidate>& candidates);
+  const char* explorationPhaseName() const;
   void publishGoal(const geometry_msgs::PoseStamped& goal,
                    const std::string& reason);
   void beginReturnHome(const std::string& reason);
@@ -141,6 +155,13 @@ class SuperExplorationDecider {
   double battery_percentage_{-1.0};
   int reached_goal_count_{0};
 
+  ExplorationPhase exploration_phase_{ExplorationPhase::kForwardPriority};
+  bool left_wall_visible_{false};
+  bool right_wall_visible_{false};
+  bool front_obstacle_visible_{false};
+  int side_wall_missing_streak_{0};
+  int front_obstacle_streak_{0};
+
   std::string cloud_topic_;
   std::string odom_topic_;
   std::string goal_topic_;
@@ -170,6 +191,17 @@ class SuperExplorationDecider {
   double battery_return_threshold_{0.20};
   double distance_weight_{0.35};
   double information_weight_{1.0};
+  double heading_priority_weight_{4.0};
+  double fallback_heading_weight_{0.75};
+  double forward_sector_deg_{70.0};
+  double side_wall_sector_deg_{50.0};
+  double side_wall_min_range_{1.0};
+  double side_wall_max_range_{12.0};
+  double front_obstacle_range_{6.0};
+  double directional_vertical_tolerance_{4.0};
+  double directional_floor_exclusion_{0.5};
+  int side_wall_missing_confirm_frames_{8};
+  int front_obstacle_confirm_frames_{3};
   int sync_queue_size_{20};
   int max_points_per_cloud_{5000};
   int min_unknown_neighbors_{1};
