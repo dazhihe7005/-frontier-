@@ -1124,3 +1124,7 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 本轮新增源码、配置、README 和对话记录已推送 GitHub `main`，提交为 `97b5edc feat: connect task-one SUPER loop to PX4`。
 - 收尾复查仍只有 Livox 发现端口 `56000` 被驱动绑定，`/livox/lidar` 无新消息；PX4 同时保持 `connected=true`、`ALTCTL`、`armed=false`，任务一 `command_ready=false`，没有向 PX4 发送设定值。
 - 下一步需要用户保持当前 Livox 驱动运行，将 MID360 单独断电再上电一次，然后立即复查 `56201/56301/56401` 端口、点云、IMU、Fast-LIO2 位姿和注册点云。
+
+## 第42轮：再次确认 MID360 当前状态
+
+用户询问雷达是否仍未调通。实时复查确认：`192.168.1.157` 仍处于 `REACHABLE`，说明雷达网络在线；但 Livox 驱动仍只绑定 UDP 发现端口 `56000`，未绑定 `56201/56301/56401`，且 `/livox/lidar` 连续检查无新消息。因此目前是“雷达硬件与 NUC 网络已通，Livox ROS 驱动尚未完成重连握手”，还不能称为 ROS 雷达链路已调通。下一步仍是保持驱动运行并将 MID360 单独断电再上电。
