@@ -717,6 +717,18 @@ git -C /home/nuc/frontier-upload push origin main
 - 本轮仅新增 GitHub 同步记录，不重复修改已经验证通过的源码。
 - 待推送提交用于保存本次最新同步状态。
 
+## 第26轮：确认 PX4 坐标获取与 SUPER 坐标对齐
+
+用户询问是否可以从已连接的 PX4 获取坐标系，并将 SUPER 输出坐标对齐到 PX4，同时进一步询问任务一能否完成采空区自主飞行、探测和完整建模。
+
+### 本轮先回答坐标对齐问题
+
+- 当前代码中的 SUPER `/goal` 使用 `world` 坐标系，规划器假设 Fast-LIO2 点云、Fast-LIO2 位姿和 SUPER ROG-Map 处于同一地图坐标系。
+- 当前调度器和 frontier 决策器不会读取或修改 PX4 外部定位，也不向 PX4 发布位姿。
+- PX4 对齐应放在“统一 PX4 输出/command router”中：先读取 MAVROS 的 `/mavros/local_position/odom`、TF 和 `/mavros/state`，在初始化时计算 Fast-LIO2 world 到 PX4 local ENU 的刚体变换，再将 SUPER 目标变换后输出给 PX4。
+- MAVROS 对外通常使用 ENU，PX4 内部使用 NED；不应手工重复做 ENU/NED 转换，统一通过 MAVROS 接口和明确的 `frame_id` 管理。
+- 当前实际检查时 ROS master 未启动，系统也未看到 `/dev/ttyACM*` 或 `/dev/ttyUSB*`，因此尚未从真实 PX4 读取坐标话题；这只是链路未启动/设备未枚举，不代表对齐方案不可行。
+
 ## 第25轮：梳理任务一/任务二 NUC 核心工作完成度
 
 用户希望逐个了解：任务一和任务二的 NUC 核心工作已完成哪些、还需完善哪些、已验证哪些、SITL 能看到什么以及能否生成采空区地图。约定本轮先只回答第一个问题：当前已完成的核心工作。
