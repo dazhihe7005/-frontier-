@@ -606,3 +606,18 @@ git -C /home/nuc/frontier-upload push origin main
 ```
 
 不要在对话中发送 GitHub 密码或 PAT。
+
+## 第17轮：配置 GitHub 推送认证
+
+用户询问如何配置 GitHub 认证。
+
+### 推荐方案：SSH key
+
+在 NUC 上生成 Ed25519 SSH key，将 `.pub` 公钥添加到 GitHub 的 Settings → SSH and GPG keys，然后把本地仓库远程地址改为：
+
+```bash
+git -C /home/nuc/frontier-upload remote set-url origin git@github.com:dazhihe7005/-frontier-.git
+git -C /home/nuc/frontier-upload push origin main
+```
+
+私钥只保存在 NUC，不应发送到对话中。也可以使用 GitHub PAT 通过 HTTPS 认证，但 PAT 应按密码保护，不能明文发布。
