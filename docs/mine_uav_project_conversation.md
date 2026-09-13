@@ -643,3 +643,11 @@ git -C /home/nuc/frontier-upload push origin main
 用户执行 `ssh -T git@github.com` 成功，GitHub 返回已认证用户 `dazhihe7005`，说明 SSH key 已正确添加。
 
 用户随后复制命令时多输入了单引号，导致 Shell 出现 `>` 续行提示；通过 `Ctrl+C` 取消即可。下一步直接使用无多余引号的 SSH remote 推送本地提交。
+
+## 第21轮：源码成功推送到 GitHub
+
+- SSH remote 已配置为 `git@github.com:dazhihe7005/-frontier-.git`。
+- 本地 `main` 分支已成功推送到远程 `main` 分支。
+- 推送范围包含 `mine_uav_control` 源码、配置、launch、测试、README、对话记录和 SUPER 技术导读。
+- 最新提交为：`d6579d6 docs: record successful GitHub authentication`。
+- GitHub 仓库地址：[dazhihe7005/-frontier-](https://github.com/dazhihe7005/-frontier-)
