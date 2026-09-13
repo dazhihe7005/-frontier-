@@ -851,3 +851,188 @@ crw-rw----+ 1 root dialout 166, 0 /dev/ttyACM0
 - 更可能的原因依次包括：USB 数据线质量或仅充电线、接头接触/松动、NUC 端口供电或端口本身问题、USB 控制器/扩展坞问题；只有在拔插 PX4 时明确看到 PX4 所在端口也出现同样错误，才重点怀疑 PX4 Type-C 接口。
 - 推荐定位顺序：不用 HUB 换一根确认支持数据传输的短线；换 NUC 的另一个 USB 口；用同一线缆/端口测试其他设备；再用同一 PX4 和线缆接另一台电脑。用 `dmesg -w` 配合拔插，确认报错端口是否与 PX4 枚举出的端口一致。
 - `/dev/ttyACM0` 节点存在只能说明 CDC ACM 设备已枚举；是否通信稳定仍需观察 `USB disconnect`、MAVROS `/mavros/state.connected` 和 `/mavros/local_position/odom`。
+
+## 第32轮：生成当前工作空间代码与原理 Word 文档
+
+用户要求生成当前工作空间全部代码及其原理、算法名称、运行原理等内容的 Word 文档，并明确本轮不更新 GitHub，后续轮次恢复正常同步规则。
+
+### 本轮完成
+
+- 以当前 `/home/nuc/super_ws/src/mine_uav_control` 为源码范围，生成本地 Word 文档：`/home/nuc/mine_uav_control_workspace_code_guide.docx`。
+- 文档包括：总体架构、技术栈、ROS 话题接口、mission_scheduler 原理、super_exploration_decider 的体素/射线地图、Frontier 探索、机头方向优先有限状态机、SUPER/PX4/MAVROS/Fast-LIO2 数据链路、坐标系边界、运行时序、SITL 验证、USB 分析、后续开发优先级。
+- 附录收录 `mine_uav_control` 当前全部文本源码：C++、头文件、Python、YAML、launch、package.xml、CMakeLists、README 和测试文件；排除了 `__pycache__/*.pyc` 二进制缓存。
+- 文档已通过 ZIP/XML 结构完整性检查生成；本轮未提交、未推送 GitHub。
+
+## 第33轮：安装本地 WeChat `.deb` 文件
+
+用户执行 `sudo apt install WeChatLinux_x86_64.deb` 时得到 `Unable to locate package`。
+
+原因：`apt install` 默认把参数当作软件包名搜索；本地 `.deb` 文件必须使用带路径的形式，例如当前目录使用 `./WeChatLinux_x86_64.deb`，或使用绝对路径。还需要确认文件名大小写和当前目录确实存在该文件。
+
+正确方式：
+
+```bash
+ls -l ./WeChatLinux_x86_64.deb
+sudo apt install ./WeChatLinux_x86_64.deb
+```
+
+如果文件不在当前目录，应先 `cd` 到实际目录，或直接执行 `sudo apt install /实际路径/WeChatLinux_x86_64.deb`。如果旧版本 apt 无法处理本地文件，可先使用 `sudo dpkg -i /实际路径/WeChatLinux_x86_64.deb`，再使用 `sudo apt -f install` 修复依赖。
+
+## 第34轮：本地 WeChat `.deb` 路径仍未被识别
+
+用户在家目录执行 `sudo apt install ./WeChatLinux_x86_64.deb`，收到 `Unsupported file ./WeChatLinux_x86_64.deb given on commandline`。
+
+判断：当前目录很可能没有这个文件，或者实际文件名/大小写不同；也可能是系统 apt 版本对本地 deb 路径支持不完整。应先用 `pwd`、`ls -l` 或 `find ~/ -type f -iname 'WeChatLinux*.deb'` 定位真实文件，再使用完整路径；最兼容的安装方式是 `sudo dpkg -i /实际路径/文件.deb`，随后执行 `sudo apt-get -f install` 修复依赖。本轮不上传 GitHub。
+
+## 第35轮：实测 Fast-LIO2、任务一决策器和 SUPER 通信链路
+
+用户表示 Fast-LIO2 雷达已经接入 NUC，希望实际打通 Fast-LIO2 与现有 SUPER。
+
+### 已确认的 ROS 图连接
+
+- ROS Master 可访问。
+- `/livox_lidar_publisher2`、`/laserMapping`、`/super_exploration_decider` 已运行。
+- `/laserMapping` 发布 `/Odometry`、`/cloud_registered`；`/super_exploration_decider` 已同时订阅这两个话题，TCPROS 连接已建立。
+- SUPER 的 `/fsm_node` 已成功启动，并订阅 `/goal`、`/Odometry`、`/cloud_registered`。
+- SUPER 配置实际读取到：`fsm.click_goal_topic=/goal`、`rog_map/ros_callback/cloud_topic=/cloud_registered`、`rog_map/ros_callback/odom_topic=/Odometry`。
+- `/goal` 的消息类型为 `geometry_msgs/PoseStamped`，任务一决策器发布端与 SUPER 订阅端类型一致。
+
+### 当前阻塞点
+
+- `/livox/lidar`、`/livox/imu`、`/Odometry`、`/cloud_registered` 实测均没有新消息。
+- 任务一状态持续为 `WAIT_DATA: Fast-LIO2 synchronized data is stale or absent`。
+- `enp89s0` 是配置的 MID360 网口，地址为 `192.168.1.10`，但当前显示 `NO-CARRIER`、`state DOWN`、对应路由为 `linkdown`。
+- Livox 驱动虽然运行并向 `/laserMapping` 建立了 ROS 发布连接，但没有收到雷达 UDP 数据；因此 Fast-LIO2 没有输入，后面的两个输出自然为空。
+- SUPER 能收到任务一的锁存旧 `/goal`，但因没有实时位姿和点云而报 `No odom`、`No point cloud input`，这属于输入链路未恢复，不是 `/goal` 话题接口不匹配。
+
+### 下一步
+
+检查 MID360 电源、网线、网口指示灯和 NUC 的实际网口；确认 `enp89s0` 从 `NO-CARRIER` 变为有 carrier 后，再测试 `ping -I enp89s0 192.168.1.157`、`rostopic hz /livox/lidar`、`rostopic hz /Odometry` 和 `rostopic hz /cloud_registered`。数据恢复后再处理 SUPER 的 `fix_map_origin`、虚拟地面高度和实际坐标系校准。本轮不上传 GitHub。
+
+### 本次实际启动 SUPER 的结果
+
+- 直接运行已编译的 `/home/nuc/super_ws/devel/lib/super_planner/fsm_node` 后，配置成功加载，且日志明确显示 `click_goal_topic=/goal`、`cloud_topic=/cloud_registered`、`odom_topic=/Odometry`。
+- `rosnode info /fsm_node` 确认 SUPER 已订阅 `/goal`、`/Odometry`、`/cloud_registered`；任务一决策器也已经发布 `/goal`，两端消息类型匹配。
+- 因没有实时位姿和点云，SUPER 日志出现 `No odom`、`No point cloud input` 和 `PlanFromRest failed`；这证明阻塞在输入数据，不是 SUPER 接口不通。测试结束后已停止临时 SUPER 进程。
+- 当前发现同时存在两个 `livox_ros_driver2_node` 进程（PID 82026 和 85919），启动时间分别为 14:57 和 15:45，但 ROS 图上只有一个同名节点。应保留一个 Livox 驱动实例，避免 UDP 端口或雷达控制冲突；不要在问题解决前重复启动驱动。
+
+## 第36轮：雷达上线后完成 Fast-LIO2 → 决策器 → SUPER 实机数据联调
+
+用户打开 MID360 后要求重新测试，并修复上一轮发现的问题。
+
+### 雷达与 Fast-LIO2 恢复结果
+
+- MID360 网络链路恢复，NUC 使用 `192.168.1.10/24`，雷达 `192.168.1.157` 可达。
+- 清理了一个未注册到当前 ROS Master 的旧 Livox 驱动进程，只保留实际发布数据的 `/livox_lidar_publisher2`，避免重复驱动争用雷达 UDP/控制链路。
+- 原 Fast-LIO2 曾发散到数千至数万米，已停止旧实例并在雷达数据稳定后重新启动；IMU 初始化完成后位姿恢复到起点附近。
+- 最终实测 `/livox/lidar` 约 `10 Hz`、`/livox/imu` 约 `200 Hz`、`/Odometry` 和 `/cloud_registered` 均约 `10 Hz`。当前位姿约为 `(0.02, 0.03, -0.07)`，未再出现发散。
+- Fast-LIO2 注册点云字段为标准 `x/y/z/intensity/normal_x/normal_y/normal_z/curvature`，点云和里程计均使用 `camera_init`。
+
+### 接口和源码修复
+
+- 决策器 `world_frame` 改为 `camera_init`，并启用 `strict_cloud_frame: true`；不再接受未经变换的其他坐标系点云。
+- SUPER 配置改为：`click_height: -10.0`，保留决策器给出的三维 z；`fix_map_origin: [0,0,0]`；可视化坐标系为 `camera_init`。
+- 台架联调将 SUPER `virtual_ground_height` 临时设为 `-2.0 m`，实际离散后的有效虚拟地面约为 `-1.5 m`，避免起点附近 z 被误判为低于地面。正式飞行前必须按雷达安装高度和真实地面重新标定。
+- 发现 SUPER ROS1 源码仍把 ROG-Map、轨迹命令、TF 和可视化消息的 frame 硬编码为 `world`。已改为统一读取 YAML 的 `rog_map/visualization/frame_id`，而不是写死 `camera_init`，以便以后通过配置切换真机和 SITL。
+- 新增统一环境脚本 `scripts/setup_fastlio2_super_env.sh`，同时保留 Fast-LIO2 与 SUPER 的 `ROS_PACKAGE_PATH`、`PYTHONPATH`、动态库和 CMake 搜索路径。实测 `CustomMsg import: OK`，解决后 source 的工作空间覆盖前一个工作空间、导致 `rostopic` 无法解析 `livox_ros_driver2/CustomMsg` 的问题。
+- 从历史目标日志发现决策器曾发布 z 为 `6–12 m` 的观察点，超过 SUPER 当前有效上限约 `2.9 m`。已新增相对任务起点的观察点高度范围，默认 `0.5–2.5 m`；返航 home 高度不受该观察点限制。
+
+### 编译和端到端验证
+
+- `super_planner` 和 `mine_uav_control` 均重新编译成功。
+- 决策器成功实时记录 home、分析点云并发布 `/goal`；短超时连续抽测 11 个目标，z 均为 `0.75–1.75 m`，没有再越过高度边界。
+- SUPER 成功订阅 `/goal`、`/Odometry`、`/cloud_registered`，生成 ROG 占据地图和轨迹。抽样地图包含 `3249` 个占据点，规划阶段 `/planning/pos_cmd` 以 `100 Hz` 输出。
+- 修复后实测 `/goal`、`/fsm_node/rog_map/occ`、`/planning/pos_cmd` 的 `frame_id` 全部为 `camera_init`，Fast-LIO2 → 决策器 → SUPER 数据链路已打通。
+- 台架上的无人机不会执行 SUPER 轨迹，因此运行一段时间后会出现目标超时、重复重规划、优化失败或 yaw rate 告警；这不能替代闭环 SITL/拆桨真机跟踪验证。为避免持续空转刷日志，本轮验证结束后停止了临时 SUPER，保留雷达、Fast-LIO2 和正式参数的决策器在线。
+- 决策器没有 SUPER 的轨迹执行反馈，因此将原先可能误导的状态文字“SUPER is following”改成“目标已发布，等待里程计进展”；后续闭环阶段应再接入 SUPER 规划成功/失败反馈。
+- 本轮只更新本地源码、README 和本对话记录，没有推送 GitHub。
+
+## 第37轮：项目完成度盘点并加入任务一闭环算法仿真
+
+用户询问整个项目已完成部分、完成程度、待调参数、SUPER 参数、剩余任务、可完成场景，以及如何在仿真中观察现象。
+
+### 当前完成度结论
+
+- 项目已经形成可运行的任务一原型，但还不是可下井自主飞行的完整系统。NUC 软件功能原型整体约完成一半，真机自主任务闭环完成度更低。
+- 真雷达、Livox 驱动和 Fast-LIO2 已实测输出稳定；Fast-LIO2 点云和位姿已打通决策器与 SUPER。
+- 任务调度器已实现 RC 二段开关选择、稳定时间、RC/里程计超时和 HOLD/返航请求；实际遥控器通道和真机故障保护仍需标定。
+- 任务一已实现轻量体素/射线地图、frontier 候选、机头优先、前障碍 fallback、观察点高度限制、home 水平安全围栏、简单无 frontier 完成判据和返航目标。
+- SUPER 已完成 `camera_init` 坐标系适配、ROG-Map 接入、目标接入和轨迹输出；真机 PX4 闭环尚未完成。
+- 任务二目前只有调度器的 `shaft_enable` 输出，没有竖井下降、测距触底、匀速控制和返航控制器。
+- Fast-LIO2 位姿送入 PX4 外部视觉估计、SUPER `PositionCommand` 转 MAVROS 指令、任务一/任务二唯一命令仲裁器尚未实现。现有 `offboard_bridge` 只转发已经是 `mavros_msgs/PositionTarget` 的 `/mine_uav/setpoint_cmd`。
+- 当前“建模完成”仍是局部 frontier 超时启发式，不等同于连续三面墙或全局模型完整性验证。
+
+### 本轮新增安全约束
+
+- 增加 `max_exploration_radius_from_home`：候选观察点不得超过相对 home 的水平安全半径，真机默认 `35 m`，需要按采空区长度、通信和续航重新设置。
+- 该约束来自仿真中发现的真实接口问题：滚动探索目标可持续向外漂移，而 SUPER 示例地图是固定有限范围。
+
+### 新增任务一算法仿真
+
+- 新增 `launch/goaf_algorithm_sim.launch`，使用 SUPER 的 `perfect_drone_sim` 在独立 ROS Master 上闭环运行：模拟 360° 点云和理想里程计 → `super_exploration_decider` → SUPER → 模拟无人机。
+- 该模式不是 PX4 SITL，也绕过 Fast-LIO2 状态估计；用途是先验证任务一决策、局部规划和返回逻辑。
+- 首轮发现目标超出 SUPER 示例固定地图；加入 `6 m` 仿真搜索半径和 home 围栏后，闭环验证通过。
+- 实测模拟点云约 `10 Hz`、里程计约 `100 Hz`。模拟无人机执行多个观察点后返回 home，最终状态为 `COMPLETE`，终点约 `(0.025, 0.025, 1.525)`，起点为 `(0,0,1.5)`。
+- 图形运行命令：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://127.0.0.1:11312
+roslaunch mine_uav_control goaf_algorithm_sim.launch
+```
+
+- 第二终端必须设置相同 `ROS_MASTER_URI` 后再观察状态和话题。无图形验证可追加 `rviz:=false`。
+- 真雷达继续使用默认 `11311`，算法仿真使用 `11312`，两套 ROS 图互不干扰。验证结束后已停止仿真，重新启动了包含 `35 m` home 围栏的真机决策器。
+
+### 完整 PX4 SITL 仍缺的部分
+
+- 当前工作空间没有 MID360/Livox Gazebo 仿真插件。真正的全链路需要模拟雷达原始包和 IMU、Fast-LIO2、PX4 SITL/MAVROS、外部视觉注入、SUPER 指令转换与命令仲裁器。
+- 可立即运行的 `mission_scheduler_sitl.launch` 只验证 PX4/MAVROS 和任务切换；本轮新增的 `goaf_algorithm_sim.launch` 验证任务一算法闭环。后续应把这两条链路合并。
+- 本轮没有推送 GitHub。
+
+## 第38轮：RViz 点云确认与 Gazebo 全链路仿真边界
+
+用户询问 RViz 是否能看到当前点云，以及能否把采空区环境、雷达、Fast-LIO2、SUPER、NUC 控制和 PX4 SITL 全部放入 Gazebo 仿真。
+
+### RViz 点云结论
+
+- 本轮检查时默认 ROS Master 没有运行，因此“当前这一刻”RViz 不会收到真实雷达点云；这只是软件栈未启动，不能据此判断雷达故障。
+- 真雷达链路启动后，在 RViz 中将 Fixed Frame 设为 `camera_init`，添加 `PointCloud2` 并选择 `/cloud_registered`，即可显示 Fast-LIO2 注册后的点云地图。原始 `/livox/lidar` 是 Livox 自定义消息，不能直接作为 RViz 的标准 `PointCloud2` 显示。
+- 现有 `goaf_algorithm_sim.launch` 的 RViz Fixed Frame 为 `world`，可显示 `/cloud_registered`、`/global_pc`、里程计、SUPER 轨迹和地图；决策器候选点使用 `MarkerArray` 话题 `/mine_uav/exploration/frontiers`。
+- 本轮再次无界面短测算法仿真：`/cloud_registered` 约 `10 Hz`，单帧约 `76765` 点，frame 为 `world`；`/lidar_slam/odom` 约 `100 Hz`，同时存在 frontier、SUPER 目标和轨迹话题。测试后已停止临时仿真。
+
+### Gazebo 全链路可行性
+
+- 技术上可行，但当前还没有一个启动文件能把全部模块一次启动。现有算法仿真使用 SUPER 的 `perfect_drone_sim`，不是 Gazebo/PX4；现有 `mission_scheduler_sitl.launch` 只有 Gazebo/PX4/MAVROS/调度器，没有雷达点云、Fast-LIO2 和 SUPER 控制闭环。
+- 本机已安装 Gazebo Classic 的三维 block-laser、GPU laser、深度相机和 IMU ROS 插件；PX4 v1.14.4 也自带 `iris_rplidar`、`iris_depth_camera` 和 `iris_triple_depth_camera` 模型。
+- 当前 Fast-LIO2 源码包含 `lidar_type: 4` 的 MARSIM 接口，可直接读取 `sensor_msgs/PointCloud2` 和仿真 IMU，因此无需强制模拟 Livox UDP 协议或 `CustomMsg` 才能做算法级闭环。
+- 真正完整的目标链路应为：Gazebo 采空区世界和虚拟三维雷达/IMU → Fast-LIO2 → `/Odometry`、`/cloud_registered` → 自主决策器 → SUPER → `PositionCommand` 转换和任务命令仲裁 → MAVROS → PX4 SITL → Gazebo 飞行动力学。
+- 物理 MID360 不能作为虚拟无人机的闭环传感器，因为真雷达不随 Gazebo 飞行器运动；仿真必须使用虚拟雷达。真雷达 rosbag 只能用于数据接口回放和开环测试。
+- 当前全链路还缺：采空区 Gazebo world、适合三维建图的虚拟雷达模型及 IMU 话题、Gazebo/ROS/PX4/Fast-LIO 坐标与时间同步、Fast-LIO 外部视觉送 PX4、SUPER `quadrotor_msgs/PositionCommand` 到 MAVROS 的转换、任务一/任务二唯一命令仲裁器，以及一键启动文件。
+- 推荐分两步实施：先完成 Gazebo + PX4 + 虚拟注册点云 + 决策器 + SUPER + 控制转换，验证飞行控制闭环；再接入虚拟原始雷达和 IMU，通过 Fast-LIO2 估计并将位姿反馈给 PX4。这样能将规划/控制问题与定位问题分开定位。
+- 本轮仅检查、验证并更新本对话记录，没有推送 GitHub。
+
+## 第39轮：CH340 转 TELEM2 串口链路检查与对话记录同步
+
+用户将 CH340 USB 转 TTL 接到 NUC，并将 TTL 端连接 PX4 TELEM2，要求检查链路稳定性，同时把此前对话记录更新到 GitHub。
+
+### 本轮串口检查结果
+
+- 内核日志表明 CH340 曾于 17:31:35 被正确识别：USB VID:PID 为 `1a86:7523`，位于 `usb 3-3`，驱动 `ch341` 已加载，并成功创建过 `/dev/ttyUSB0`。
+- 本轮实际检查时，`lsusb` 中已经没有 CH340，`/dev/ttyUSB0`、`/dev/ttyACM0` 和 `/dev/serial/by-id` 均不存在。
+- 连续 15 秒、每 0.2 秒检查一次 `/dev/ttyUSB0`，始终为 `absent`。因此目前只能判定电脑到 CH340 的 USB 枚举链路不在线，无法继续验证串口字节流、MAVLink 心跳和 MAVROS 连接稳定性。
+- 即使 TELEM2 的 TX/RX 没接或 PX4 参数未配置，CH340 只要插在 NUC USB 口上也应稳定枚举。因此当前问题优先位于 CH340、USB 插头/延长线或 NUC USB 口一侧，而不是 PX4 的 `MAV_1_CONFIG`、`SER_TEL2_BAUD` 等参数。
+- 此前反复出现 `usb4-port1: Cannot enable` 的设备实际是 VID:PID `05e3:0626` 的 GenesysLogic USB3.1 Hub；本次 CH340 在 `usb 3-3`，两者不是同一个 USB 设备。旧 Hub/Type-C 链路仍不稳定，但不能用该日志直接判定 CH340 或 PX4 TELEM2 故障。
+- 当前 `nuc` 用户的补充组列表中未见 `dialout`。待 `/dev/ttyUSB0` 恢复后，需要检查设备 ACL；如果当前用户没有读写权限，再执行 `sudo usermod -aG dialout nuc` 并注销重新登录。
+
+### 恢复枚举后的验证顺序
+
+1. 先只把 CH340 插入 NUC，确认 `/dev/ttyUSB0` 连续存在；这一阶段不依赖 PX4 和 TELEM2。
+2. 接线使用共地、交叉收发：CH340 TX 接 TELEM2 RX，CH340 RX 接 TELEM2 TX，GND 接 GND；确认使用 3.3 V TTL 电平，不要用 RS-232 电平，也不要把 CH340 的 5 V/VCC 接到 TELEM2 供电针脚。
+3. PX4 中将对应 MAVLink 实例配置到 TELEM2，保证 `SER_TEL2_BAUD` 与 MAVROS 波特率一致。项目现有 `px4_serial.launch` 默认仍是 `/dev/ttyACM0:115200`，使用 CH340 时必须通过参数改为实际 `/dev/ttyUSB0` 和 TELEM2 的实际波特率；稳定后建议改用 `/dev/serial/by-id` 或自定义 udev 固定名称。
+4. 串口设备稳定后启动 MAVROS，检查 `/mavros/state.connected`、MAVLink 丢包率和持续心跳，再进行拔插/晃动和较长时间稳定性测试。
+
+### GitHub 同步范围
+
+- 按用户要求，将截至本轮的完整对话记录同步到仓库 `git@github.com:dazhihe7005/-frontier-.git` 的 `docs/mine_uav_project_conversation.md`。
+- 串口链路尚未通过，因此记录中明确保留当前阻塞结论，不宣称 MAVLink 已连通。
