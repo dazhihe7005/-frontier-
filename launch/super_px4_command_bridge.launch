@@ -1,0 +1,16 @@
+<launch>
+  <arg name="config" default="$(find mine_uav_control)/config/super_px4_command_bridge.yaml"/>
+  <arg name="offboard_rate" default="50.0"/>
+
+  <node pkg="mine_uav_control" type="super_px4_command_bridge"
+        name="super_px4_command_bridge" output="screen" required="true">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+
+  <!-- This node only repeats a fresh validated target. It never arms PX4 or
+       changes flight mode. -->
+  <node pkg="mine_uav_control" type="offboard_bridge"
+        name="offboard_bridge" output="screen" required="true">
+    <param name="rate" value="$(arg offboard_rate)"/>
+  </node>
+</launch>

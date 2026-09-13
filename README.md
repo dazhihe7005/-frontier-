@@ -36,6 +36,65 @@ CH340 串口，QGC 通过 NUC 转发的 UDP MAVLink 链路连接，或暂时关�
 
 启动前确认 CH340 串口没有被其他串口程序占用。
 
+## 任务一真实闭环
+
+任务一现在使用一条唯一的控制链：
+
+```text
+MID360 → Fast-LIO2 → 自主决策器 → SUPER
+                     ↓            ↓
+                  任务调度器   坐标/安全指令桥 → MAVROS → PX4
+Fast-LIO2 ─────────→ 外部视觉位姿桥 ─────────────→ PX4 EKF2
+```
+
+`fastlio_px4_vision_bridge` 将 `/Odometry` 对齐到起飞时的 PX4 本地原点，
+以 30 Hz 发布 `/mavros/vision_pose/pose_cov`。对齐只允许在未解锁状态建立，
+Fast-LIO2 跳变、超时或 MAVROS 断开都会停止外部视觉输出。
+
+`super_px4_command_bridge` 使用同一对齐关系，将 SUPER 的
+`/planning/pos_cmd` 转成 MAVROS 本地位置目标。输出受任务一选择、视觉定位健康、
+MAVROS 连接和人工使能四重门控；默认人工门关闭，且节点绝不自动解锁或切换
+OFFBOARD。SUPER 短暂重规划时会发送当前位置悬停目标；任务切走、定位失效、
+通信断开或指令越界时会立即停止并锁回关闭。
+
+统一启动文件（首次实机必须拆桨）：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+roslaunch mine_uav_control task1_real.launch
+```
+
+关键状态检查：
+
+```bash
+rostopic echo /mavros/state
+rostopic hz /livox/lidar
+rostopic hz /Odometry
+rostopic echo /mine_uav/task1/vision_status
+rostopic echo /mine_uav/mission/status
+rostopic echo /mine_uav/task1/command_status
+```
+
+只有上述状态正常、SUPER 已产生新轨迹且 PX4 仍未解锁时，才打开最终指令门：
+
+```bash
+rosservice call /super_px4_command_bridge/enable "data: true"
+```
+
+关闭指令门：
+
+```bash
+rosservice call /super_px4_command_bridge/enable "data: false"
+```
+
+当前 MID360 的实际地址是 `192.168.1.157`，NUC 雷达网口是
+`192.168.1.10/24`。若雷达正在向 `56301/56401` 发包但 Livox 驱动只监听
+`56000`，应保持驱动运行并重启一次雷达，让 SDK 重新收到设备发现广播。
+
+注意：在正式飞行前仍必须通过移动机体验证 PX4 确实融合外部视觉、标定
+雷达 IMU 坐标与飞行器 FRD 机体系安装关系，并确认 `EKF2_EV_CTRL` 的高度源选择。
+“话题有数据”不等于 EKF 已可靠融合，也不等于已经可以带桨飞行。
+
 ## 操作顺序
 
 1. 确认 MAVROS 状态为“已连接”。
@@ -72,8 +131,7 @@ CH340 串口，QGC 通过 NUC 转发的 UDP MAVLink 链路连接，或暂时关�
 启动：
 
 ```bash
-source /opt/ros/noetic/setup.bash
-source /home/nuc/super_ws/devel/setup.bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
 roslaunch mine_uav_control super_exploration_decider.launch
 ```
 
@@ -81,7 +139,13 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 注意：当前 SUPER 的 `FsmRos1::setGoalPosiAndYaw()` 会在 `fsm.click_height > -5` 时强制覆盖目标 z。要让观察点使用点云计算出的三维 z 高度，应在 SUPER 使用的 YAML 中设置 `fsm.click_height: -10.0`。
 
-Fast-LIO2 点云必须已经是与 SUPER 一致的 world/地图坐标系。该节点不做 TF 变换；验证完成后建议把配置中的 `strict_cloud_frame` 改成 `true`。
+当前真机链路统一使用 Fast-LIO2 的 `camera_init`：`/Odometry`、`/cloud_registered`、决策器 `/goal`、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。该节点不做 TF 变换，`strict_cloud_frame: true` 会拒绝其他坐标系的点云。
+
+观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标仍使用原始 home 高度，不受观察点高度限制。
+
+`max_exploration_radius_from_home` 是相对任务起点的水平安全围栏，避免目标随着滚动点云不断向外漂移。真机默认值为 `35 m`，应按实际采空区长度和通信/续航能力调整；算法演示因 SUPER 示例地图较窄而覆盖为 `6 m`。
+
+必须使用上面的统一环境脚本同时加载两个 Catkin 工作空间。直接依次 source 两个工作空间时，后一个会覆盖前一个的搜索路径，常见现象是 `rostopic` 无法加载 `livox_ros_driver2/CustomMsg`。统一脚本会同时保留 Fast-LIO2 与 SUPER 的 ROS 包、Python 消息和动态库路径。
 
 观察运行状态：
 
@@ -132,6 +196,26 @@ roslaunch mine_uav_control mission_scheduler.launch
 该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。两个任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免两个任务同时控制飞行器。当前任务一的 `super_exploration_decider` 已订阅 `goaf_enable`；任务二实现后接入 `shaft_enable`。
 
 ### SITL 联调
+
+#### 任务一算法闭环仿真（建议先运行）
+
+该模式使用 SUPER 自带的 `perfect_drone_sim` 产生 360° 模拟点云和理想里程计，闭环运行“模拟传感器 → 自主决策器 → SUPER → 模拟无人机”。它可以直接观察 frontier、目标、局部地图、规划轨迹和无人机运动，但不包含 PX4、MAVROS 和 Fast-LIO2 状态估计。
+
+为了不和真雷达使用的 ROS Master 冲突，建议使用独立端口：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://127.0.0.1:11312
+roslaunch mine_uav_control goaf_algorithm_sim.launch
+```
+
+RViz 默认配置会显示 `/cloud_registered`、SUPER 占据地图/轨迹、无人机模型和运动路径。要显示决策器候选点，在 RViz 中点击 `Add → MarkerArray`，将 Topic 设为 `/mine_uav/exploration/frontiers`。无图形界面测试时使用：
+
+```bash
+roslaunch mine_uav_control goaf_algorithm_sim.launch rviz:=false
+```
+
+#### PX4 SITL 调度器联调
 
 可以先使用：
 

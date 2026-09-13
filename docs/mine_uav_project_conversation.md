@@ -1064,3 +1064,57 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - `px4_serial.launch` 和 `real_uav_ground_station.launch` 默认设备改为 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`，默认波特率改为 `500000`。
 - README 已更新为当前 CH340/TELEM2 接法、参数和启动命令。
 - 不带覆盖参数重新启动验证通过：MAVROS 实际 FCU URL 为 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:500000`，连接正常且错误计数均为 0。
+
+## 第41轮：任务一 PX4 闭环补齐、指令安全桥和雷达重连诊断
+
+用户要求暂时不处理任务二，逐步确保“采空区任务一”形成完整闭环。
+
+### 开始本轮时的准确结论
+
+- 已分别验证两段链路：MID360 → Fast-LIO2 → 自主决策器 → SUPER，以及 NUC → CH340 → TELEM2 → PX4/MAVROS。
+- 两段链路当时还没有真正连成一个控制闭环，缺少 Fast-LIO2 位姿送 PX4 EKF2，以及 SUPER `PositionCommand` 到 MAVROS/PX4 设定值的坐标转换和安全门控。
+- 因此不能仅凭“雷达和串口都通”宣称任务一已经可飞。
+
+### Fast-LIO2 外部视觉位姿桥
+
+- 新增 `fastlio_px4_vision_bridge`，订阅 `/Odometry` 和 `/mavros/state`，以 30 Hz 发布 `/mavros/vision_pose/pose_cov`。
+- 默认在 PX4 未解锁时捕获 Fast-LIO2 起点和初始 yaw，使 PX4 本地原点与 Fast-LIO2 当前起点对齐；同时发布锁存的 `/mine_uav/task1/fastlio_to_px4_alignment`，供控制指令使用同一变换。
+- 增加帧名、有限值、输入跳变、数据超时、MAVROS 连接和“禁止解锁后重建对齐”等保护；健康状态发布到 `/mine_uav/task1/vision_healthy` 和 `/mine_uav/task1/vision_status`。
+- 实机台架测试中，位姿桥成功捕获约 `[-0.269, 0.144, -0.082]`、初始 yaw 约 `-25.40°`，输出稳定为 `30 Hz`；PX4 保持 `ALTCTL`、未解锁，MAVLink 无丢包和解析错误。
+- PX4 当前 `EKF2_EV_CTRL=9`，即启用外部视觉水平位置和 yaw，未启用外部视觉垂直位置/速度。估计器仍出现 `const_pos_mode=true`，所以仍需通过实际小幅移动机体和日志确认 EV 已可靠融合；当前不能据此带桨飞行。
+
+### SUPER 到 PX4 指令桥
+
+- 新增 `super_px4_command_bridge`，订阅 SUPER `/planning/pos_cmd`，把位置、速度、加速度、yaw 和 yaw rate 从 `camera_init` 按位姿桥的同一对齐关系转换到 PX4 本地 ENU，并输出 `/mine_uav/setpoint_cmd`；现有 `offboard_bridge` 再以 50 Hz 转发到 `/mavros/setpoint_raw/local`。
+- MAVROS 的 `PositionTarget` 在 ROS 一侧使用 ENU；消息的 `coordinate_frame=FRAME_LOCAL_NED` 由 MAVROS 在发送 MAVLink 时完成 ENU/NED 转换，桥接节点不再重复交换轴或反转 z。
+- 增加四重安全门：任务调度器选择任务一、视觉定位健康、MAVROS 在线、操作者显式调用 `/super_px4_command_bridge/enable`。默认关闭，节点永不自动解锁，也不自动切换 OFFBOARD。
+- 增加帧名、非有限数、轨迹状态、速度、加速度、水平半径和高度围栏检查。任务切走、视觉失效、MAVROS 断开、PX4 本地位姿超时或越界指令会停止输出并锁回人工关闭。
+- 修复了首次版本的连续性问题：SUPER 在两段轨迹之间会短暂停止发布，不能把它直接视为永久故障。新版在规划间隙按 PX4 当前本地位姿持续输出悬停目标；新轨迹到达后可自动恢复跟踪，而关键健康门失效仍会锁断。
+
+### 隔离回归测试结果
+
+- 在独立 ROS Master 上注入“绕 z 轴旋转 90°、平移 `(10,20,1)`”的对齐关系，SUPER 输入位置 `(1,2,0.5)` 精确转换为 `(8,21,1.5)`；速度 `(1,0,0)` 转为 `(0,1,0)`，加速度 `(0,1,0)` 转为 `(-1,0,0)`，yaw `0.25` 转为约 `1.8208 rad`。
+- 停止 SUPER 轨迹后，桥接器以 50 Hz 输出 PX4 当前测试位姿 `(3,4,1.2)` 和 yaw `0.5 rad` 的位置悬停目标，状态为 `HOLD_COMMAND_TIMEOUT`。
+- 将任务一选择改为 false 后，设定值立即停止，人工使能锁回关闭。以上测试完全在隔离 ROS 环境中进行，没有连接真实 PX4。
+
+### 一键启动和首次实机参数
+
+- 新增 `task1_real.launch`，可统一启动 Livox、Fast-LIO2、MAVROS、位姿桥、任务调度器、自主决策器、SUPER、指令桥和设定值转发器。
+- 修正统一环境脚本：Fast-LIO2 使用 `devel` 空间，SUPER 以保留前一 overlay 的方式加载；`roslaunch --nodes` 已成功解析出 9 个预期节点。
+- SUPER 首次实机限速降为 `1.0 m/s`、最大加速度 `1.5 m/s²`、最大 jerk `20 m/s³`、最大 yaw rate `1.0 rad/s`，机体安全半径统一为 `0.35 m`。
+- 调度器正式配置改为必须检查 MAVROS 连接。当前 `/mavros/rc/in` 的物理 CH6 值约 `1499`，落在无效中间区，因此调度器实际输出 `hold`；必须让用户拨动开关并观察通道变化后，才能确定 CH6 是否真是目标二段开关。
+
+### 当前真实链路状态与 MID360 阻塞
+
+- PX4 链路当前仍为 `connected=true`、`ALTCTL`、`armed=false`。真实指令桥和调度器已启动，但指令桥状态为 `WAIT_TASK1_SELECTION`、`command_ready=false`，实测没有向 `/mavros/setpoint_raw/local` 发布任何设定值。
+- 本轮重启 Livox 驱动时发现源配置误写为雷达 `192.168.1.5`；实际 MID360 是 `192.168.1.157`，已把 Livox 源配置改为 `.157`。
+- 进一步用端口监听确认 `.157` 正在正确向 NUC `.10` 发送点云约 `2084 包/s` 到 UDP `56301`、IMU 约 `200 包/s` 到 `56401`、状态到 `56201`。网线和雷达数据发送本身正常。
+- 当前 Livox 驱动只绑定发现端口 `56000`，没有绑定数据端口，内核 `UdpNoPorts` 约增加 `2290 包/s`。原因是新驱动启动时雷达仍保持上一连接状态、没有重新完成设备发现握手。
+- 当前需要保持 Livox 驱动运行，将 MID360 单独断电再上电一次，让 SDK 重新收到设备发现广播。雷达恢复后再启动 SUPER，并在“未解锁”状态验证 `/planning/pos_cmd → /mine_uav/setpoint_cmd → /mavros/setpoint_raw/local` 的真实全链路。
+
+### 仍未完成的飞行放行项
+
+- 通过移动机体确认 PX4 EKF2 真正融合外部视觉，且坐标移动方向、尺度、yaw 和复位行为正确；解决或解释 `const_pos_mode`。
+- 标定 MID360/IMU 到无人机 PX4 FRD 机体系的安装旋转和平移。目前 Fast-LIO2 内部的雷达到 IMU 外参不等于整机安装外参。
+- 根据高度源方案决定是否启用 EV z/速度；完成拆桨 OFFBOARD 跟踪、失联/定位故障保护和系留低空测试后，才能进行带桨自主探索。
+- 当前任务一的“建模完成”仍是 frontier 超时启发式，连续三面墙覆盖率判据尚未实现；这不影响控制链打通，但影响最终采空区完整建模验收。

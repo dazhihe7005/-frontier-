@@ -1,0 +1,23 @@
+input_topic: "/Odometry"
+output_topic: "/mavros/vision_pose/pose_cov"
+input_frame: "camera_init"
+output_frame: "odom"
+output_child_frame: "base_link"
+
+# PX4 recommends external-vision messages at 30-50 Hz. Fast-LIO2 currently
+# updates at 10 Hz, so the latest validated pose is restamped at 30 Hz.
+publish_rate: 30.0
+data_timeout: 0.3
+max_input_jump: 2.0
+
+# Minimum covariance floors prevent the repeated 30 Hz pose from appearing
+# unrealistically perfect to EKF2.
+position_stddev: 0.05
+orientation_stddev: 0.10
+
+# Establish a task-local PX4 frame when the bridge starts while disarmed.
+zero_initial_xy: true
+zero_initial_z: true
+zero_initial_yaw: true
+require_mavros_connection: true
+allow_alignment_while_armed: false

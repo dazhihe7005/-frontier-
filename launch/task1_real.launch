@@ -1,0 +1,37 @@
+<launch>
+  <!-- Load the Fast-LIO2 workspace first, then load the SUPER workspace while
+       preserving the first overlay before running this launch file. -->
+  <arg name="start_livox" default="true"/>
+  <arg name="start_fastlio" default="true"/>
+  <arg name="start_mavros" default="true"/>
+  <arg name="start_super" default="true"/>
+  <arg name="rviz" default="false"/>
+
+  <group if="$(arg start_livox)">
+    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch"/>
+  </group>
+
+  <group if="$(arg start_fastlio)">
+    <include file="$(find fast_lio)/launch/mapping_mid360.launch">
+      <arg name="rviz" value="$(arg rviz)"/>
+    </include>
+  </group>
+
+  <group if="$(arg start_mavros)">
+    <include file="$(find mine_uav_control)/launch/px4_serial.launch"/>
+  </group>
+
+  <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>
+  <include file="$(find mine_uav_control)/launch/mission_scheduler.launch"/>
+  <include file="$(find mine_uav_control)/launch/super_exploration_decider.launch"/>
+
+  <group if="$(arg start_super)">
+    <node pkg="super_planner" type="fsm_node" name="fsm_node"
+          output="screen" required="true">
+      <param name="config_path"
+             value="$(find super_planner)/config/click_smooth_ros1.yaml"/>
+    </node>
+  </group>
+
+  <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch"/>
+</launch>

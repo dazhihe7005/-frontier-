@@ -9,6 +9,7 @@ find_package(catkin REQUIRED COMPONENTS
   mavros_msgs
   nav_msgs
   pcl_conversions
+  quadrotor_msgs
   roscpp
   sensor_msgs
   std_msgs
@@ -20,7 +21,7 @@ catkin_package(
   INCLUDE_DIRS include
   LIBRARIES arc_trajectory
   CATKIN_DEPENDS geometry_msgs message_filters mavros_msgs nav_msgs
-                 pcl_conversions roscpp sensor_msgs std_msgs std_srvs
+                 pcl_conversions quadrotor_msgs roscpp sensor_msgs std_msgs std_srvs
                  visualization_msgs
 )
 
@@ -44,6 +45,16 @@ add_executable(offboard_bridge
 )
 target_link_libraries(offboard_bridge ${catkin_LIBRARIES})
 
+add_executable(fastlio_px4_vision_bridge
+  src/fastlio_px4_vision_bridge.cpp
+)
+target_link_libraries(fastlio_px4_vision_bridge ${catkin_LIBRARIES})
+
+add_executable(super_px4_command_bridge
+  src/super_px4_command_bridge.cpp
+)
+target_link_libraries(super_px4_command_bridge ${catkin_LIBRARIES})
+
 add_executable(super_exploration_decider
   src/super_exploration_decider.cpp
 )
@@ -64,6 +75,8 @@ if(CATKIN_ENABLE_TESTING)
 endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
+                fastlio_px4_vision_bridge
+                super_px4_command_bridge
                 super_exploration_decider mission_scheduler
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

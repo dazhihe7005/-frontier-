@@ -4,16 +4,16 @@ odom_topic: "/Odometry"
 
 # SUPER FsmRos1 默认订阅的目标话题。
 goal_topic: "/goal"
-world_frame: "world"
+world_frame: "camera_init"
 
 # Task scheduler gate. If no scheduler is running, the decider keeps its
 # backward-compatible default enabled=true; a latched scheduler message will
 # override it when mission_scheduler is started.
 mission_enable_topic: "/mine_uav/mission/goaf_enable"
 
-# 输入点云不能依赖 TF 自动转换；false 表示仅告警并假设坐标已经是 world。
-# 验证完坐标系后建议改为 true。
-strict_cloud_frame: false
+# 本节点不做 TF 自动转换；实测 Fast-LIO2 点云与位姿均为 camera_init。
+# 严格拒绝其他坐标系，避免把未转换点云写进地图。
+strict_cloud_frame: true
 
 # 轻量 frontier 地图参数。SUPER 自己仍使用其 ROG-Map。
 voxel_resolution: 0.5
@@ -23,8 +23,15 @@ raycast_enable: true
 max_points_per_cloud: 5000
 vehicle_radius: 0.35
 
+# 观察点相对任务起点的高度范围。当前上限与 SUPER 的局部地图高度匹配；
+# 正式飞行前应按巷道净高、雷达安装高度和安全裕量重新标定。
+min_observation_height_above_home: 0.5
+max_observation_height_above_home: 2.5
+
 # 观察点选择与覆盖策略。
 frontier_search_radius: 30.0
+# 水平安全围栏；候选观察点不得离任务起点超过该距离。
+max_exploration_radius_from_home: 35.0
 min_goal_distance: 2.0
 candidate_spacing: 3.0
 min_unknown_neighbors: 1
@@ -32,7 +39,7 @@ information_weight: 1.0
 distance_weight: 0.35
 
 # 任务一方向策略：优先选择当前机头前方的 frontier。
-# 角度均以 Fast-LIO2 world 坐标系中的机体 yaw 为基准。
+# 角度均以 Fast-LIO2 camera_init 坐标系中的机体 yaw 为基准。
 heading_priority_weight: 4.0
 fallback_heading_weight: 0.75
 forward_sector_deg: 70.0

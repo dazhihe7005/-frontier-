@@ -1,0 +1,11 @@
+<launch>
+  <arg name="config"
+       default="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml" />
+
+  <node pkg="mine_uav_control"
+        type="fastlio_px4_vision_bridge"
+        name="fastlio_px4_vision_bridge"
+        output="screen">
+    <rosparam command="load" file="$(arg config)" />
+  </node>
+</launch>

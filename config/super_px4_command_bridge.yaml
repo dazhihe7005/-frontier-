@@ -1,0 +1,16 @@
+command_topic: /planning/pos_cmd
+output_topic: /mine_uav/setpoint_cmd
+expected_frame: camera_init
+
+# SUPER commands must remain fresh. A timeout latches the operator gate off.
+command_timeout: 0.25
+local_pose_timeout: 0.5
+output_rate: 50.0
+
+# Conservative indoor commissioning limits; tune only after log review.
+max_speed: 2.0
+max_acceleration: 3.0
+max_horizontal_radius: 40.0
+min_height: -0.5
+max_height: 3.0
+use_acceleration: true
