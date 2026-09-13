@@ -21,3 +21,4 @@ zero_initial_z: true
 zero_initial_yaw: true
 require_mavros_connection: true
 allow_alignment_while_armed: false
+auto_realign_after_odometry_timeout: true

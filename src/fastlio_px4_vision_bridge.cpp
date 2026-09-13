@@ -89,6 +89,8 @@ class FastlioPx4VisionBridge {
                       true);
     private_nh_.param("allow_alignment_while_armed",
                       allow_alignment_while_armed_, false);
+    private_nh_.param("auto_realign_after_odometry_timeout",
+                      auto_realign_after_odometry_timeout_, true);
 
     if (!finite(publish_rate_) || publish_rate_ < 1.0) {
       publish_rate_ = 30.0;
@@ -176,6 +178,20 @@ class FastlioPx4VisionBridge {
                         "Rejecting invalid Fast-LIO odometry or frame mismatch");
       return;
     }
+    if (odometry_outage_seen_ && auto_realign_after_odometry_timeout_) {
+      if (!allow_alignment_while_armed_ && have_mavros_state_ &&
+          mavros_armed_) {
+        publishHealth(false);
+        publishStatus("WAIT_DISARMED_AFTER_ODOMETRY_RESTART");
+        return;
+      }
+      odometry_outage_seen_ = false;
+      alignment_ready_ = false;
+      have_previous_input_ = false;
+      jump_detected_ = false;
+      ROS_WARN("Fast-LIO odometry recovered after an outage; capturing a fresh "
+               "alignment while PX4 is disarmed");
+    }
     if (!alignment_ready_) {
       if (!allow_alignment_while_armed_ && have_mavros_state_ &&
           mavros_armed_) {
@@ -255,6 +271,12 @@ class FastlioPx4VisionBridge {
       if (!alignment_ready_ || !have_odometry_) {
         publishStatus("WAIT_ODOMETRY");
       } else if (!data_fresh) {
+        if (auto_realign_after_odometry_timeout_) {
+          odometry_outage_seen_ = true;
+          alignment_ready_ = false;
+          have_previous_input_ = false;
+          jump_detected_ = false;
+        }
         publishStatus("ODOMETRY_TIMEOUT");
       } else if (!mavros_ok) {
         publishStatus("MAVROS_DISCONNECTED");
@@ -335,10 +357,12 @@ class FastlioPx4VisionBridge {
   bool zero_initial_yaw_{true};
   bool require_mavros_connection_{true};
   bool allow_alignment_while_armed_{false};
+  bool auto_realign_after_odometry_timeout_{true};
   bool have_odometry_{false};
   bool have_previous_input_{false};
   bool alignment_ready_{false};
   bool jump_detected_{false};
+  bool odometry_outage_seen_{false};
   bool have_mavros_state_{false};
   bool mavros_connected_{false};
   bool mavros_armed_{false};

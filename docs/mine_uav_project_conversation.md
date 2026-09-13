@@ -1192,3 +1192,35 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 
 - 用户需要指定遥控器上准备作为“自动/手动”开关的物理开关，并依次拨到低、高档；通过 `/mavros/rc/in` 找出对应的空闲物理通道。
 - 通道确认后，再修改任务调度器和指令桥，使其接入独立 `auto_enable`，并在不装桨状态验证“预发送悬停 → OFFBOARD → 任务一 → 人工接管”的完整状态转换。
+
+## 第45轮：定位雷达反复重连故障的根因并补齐自动恢复生命周期
+
+用户质疑每次重新插入后都出现雷达或定位问题，询问是否因为飞控没有断电、是否必须先插雷达再插飞控，并要求解决根因而不是继续依赖人工断电和临时补丁。
+
+### 根因结论
+
+- MID360 经以太网向 NUC 发送点云/IMU，PX4 经 CH340/TELEM2 向 NUC 发送 MAVLink；两条链路彼此独立。PX4 是否断电不会决定 Livox 驱动是否发布点云，因此不存在必须“先雷达、后飞控”的系统要求。
+- 全部断开时实测雷达网口 `enp89s0=DOWN`，点云、IMU 和 `/Odometry` 均停止，位姿桥进入 `ODOMETRY_TIMEOUT`；MAVROS 同时为 `connected=false`。CH340 的 `/dev/ttyUSB0` 仍存在，说明 USB 转串口本体仍插在 NUC，飞控侧断电与串口设备枚举是两件事。
+- 上一次雷达恢复后，Livox 驱动已经发布数据，但长期存活的 Fast-LIO2 出现大量 `Too few input point cloud`、`No Effective Points`。源码检查确认 Fast-LIO2 在点云或 IMU 时间回跳时只清输入缓冲区，不会重置 EKF、地图和 IMU 状态；因此雷达断流/重启后的新数据可能接到旧估计器状态上，随后出现大位姿跳变并被位姿桥以 `INPUT_JUMP` 拦截。
+- 初次 Livox 不发布问题来自 SDK 异步设备/配置回调未把设备状态推进到 Sampling。先前“初始化时静态强制 Sampling”虽然恢复了数据，但状态依据不够严格，本轮已替换为真实数据包驱动的状态转换。
+
+### 根因修复
+
+- `livox_ros_driver2` 不再在初始化时无条件把静态 IP 设备设为 Sampling；只有真正收到该 MID360 的有效点云或 IMU 包后，才设置 `kConnectStateSampling`。因此设备重连不再依赖可能漏掉的异步配置回调，同时雷达不存在时不会伪装成正在采样。
+- MID360 配置保持雷达 `192.168.1.157`、主机 `192.168.1.10`，并按 Livox-SDK2 1.4.3 使用数组式 `host_net_info` 与 `multicast_ip`。
+- Fast-LIO2 新增点云/IMU 时间连续性检查，默认任一数据流间隔超过 `1.0 s` 或时间戳回跳就主动正常退出；`mapping_mid360.launch` 配置 `respawn=true`、延迟 `1.0 s`，从而自动创建全新的 EKF 和地图，不再跨雷达断电延续旧状态。
+- 位姿桥新增断流恢复处理：若 `/Odometry` 超时后恢复，只有 PX4 未解锁时才自动清除旧跳变锁存并重新捕获对齐；若 PX4 已解锁，则拒绝重建坐标系并保持视觉输出关闭。
+
+### 验证结果
+
+- `fastlio2_ws` 和 `super_ws` 均重新编译成功。
+- 隔离测试向 Fast-LIO2 输入时间为 `100 s`、`102 s` 的两帧 IMU，进程识别 `2.000 s` 中断后正常退出。
+- `roslaunch` 自动恢复测试中，旧 PID `126692` 正常结束，1 秒后以新 PID `126804` 拉起，证明新 EKF/地图进程自动重建有效。
+- 位姿桥隔离测试模拟断流后 Fast-LIO 原点由 `0 m` 变为 `100 m`；桥在 PX4 未解锁时自动重建为 `-100 m` 对齐，没有触发 `INPUT_JUMP`。
+- 可复用变更保存为 `patches/livox_ros_driver2_mid360_reconnect.patch` 和 `patches/fast_lio2_sensor_restart.patch`，两个补丁均通过反向应用检查。
+
+### 下一次实物复测方法
+
+- 为便于定位，下一次可以先只接通 MID360，确认 `/livox/lidar≈10 Hz`、`/livox/imu≈200 Hz`、`/Odometry≈10 Hz` 且位姿稳定，再给 PX4 上电并确认 MAVROS；这只是分段验收方法，不是永久启动顺序要求。
+- 后续还要做一次真实的“运行中断开 MID360 → 等待数秒 → 重新上电”测试，验证驱动恢复、Fast-LIO PID 自动变化、位姿桥在未解锁时重新对齐，以及全程不向 PX4 输出任务控制。
+- 对 TELEM2 航插/杜邦连接，最安全做法仍是断电接线后再上电；但 MAVLink 软件链路本身应能重连。PX4 Type-C 的旧 `error -71` 属于另一条物理 USB 问题，与 MID360 重连无关。

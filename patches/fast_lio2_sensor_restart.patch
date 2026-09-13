@@ -1,0 +1,131 @@
+diff --git a/config/mid360.yaml b/config/mid360.yaml
+index 20c0e01..6fb0320 100644
+--- a/config/mid360.yaml
++++ b/config/mid360.yaml
+@@ -4,6 +4,11 @@ common:
+     time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
+     time_offset_lidar_to_imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
+                                   # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
++    # A MID360 power cycle creates a new sensor stream. Never continue an old
++    # EKF/map across that boundary; exit and let roslaunch respawn cleanly.
++    restart_on_time_discontinuity: true
++    max_lidar_gap: 1.0
++    max_imu_gap: 1.0
+ 
+ preprocess:
+     lidar_type: 1                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 
+diff --git a/launch/mapping_mid360.launch b/launch/mapping_mid360.launch
+index 0fe04fd..5eb4a01 100644
+--- a/launch/mapping_mid360.launch
++++ b/launch/mapping_mid360.launch
+@@ -12,7 +12,8 @@
+ 	<param name="filter_size_map" type="double" value="0.5" />
+ 	<param name="cube_side_length" type="double" value="1000" />
+ 	<param name="runtime_pos_log_enable" type="bool" value="0" />
+-    <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" /> 
++	<node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
++	      output="screen" respawn="true" respawn_delay="1.0" />
+ 
+ 	<group if="$(arg rviz)">
+ 	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz" />
+diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
+index fc41408..62d4e73 100644
+--- a/src/laserMapping.cpp
++++ b/src/laserMapping.cpp
+@@ -33,6 +33,7 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ // POSSIBILITY OF SUCH DAMAGE.
+ #include <omp.h>
++#include <algorithm>
+ #include <mutex>
+ #include <math.h>
+ #include <thread>
+@@ -71,12 +72,14 @@ double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_pl
+ double match_time = 0, solve_time = 0, solve_const_H_time = 0;
+ int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
+ bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
++bool   restart_on_time_discontinuity = true;
+ /**************************/
+ 
+ float res_last[100000] = {0.0};
+ float DET_RANGE = 300.0f;
+ const float MOV_THRESHOLD = 1.5f;
+ double time_diff_lidar_to_imu = 0.0;
++double max_lidar_gap = 1.0, max_imu_gap = 1.0;
+ 
+ mutex mtx_buffer;
+ condition_variable sig_buffer;
+@@ -119,6 +122,20 @@ pcl::VoxelGrid<PointType> downSizeFilterMap;
+ 
+ KD_TREE<PointType> ikdtree;
+ 
++bool sensorTimeDiscontinuity(const char *sensor_name, double previous,
++                             double current, double max_gap)
++{
++    if (!restart_on_time_discontinuity || previous <= 0.0) return false;
++    const double delta = current - previous;
++    if (delta >= 0.0 && delta <= max_gap) return false;
++
++    ROS_ERROR("%s timestamp discontinuity (previous=%.9f current=%.9f delta=%.3f s); "
++              "shutting down so roslaunch can restart Fast-LIO with a fresh EKF/map",
++              sensor_name, previous, current, delta);
++    ros::shutdown();
++    return true;
++}
++
+ V3F XAxisPoint_body(LIDAR_SP_LEN, 0.0, 0.0);
+ V3F XAxisPoint_world(LIDAR_SP_LEN, 0.0, 0.0);
+ V3D euler_cur;
+@@ -281,6 +298,12 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg) 
+     mtx_buffer.lock();
+     scan_count ++;
+     double preprocess_start_time = omp_get_wtime();
++    if (sensorTimeDiscontinuity("lidar", last_timestamp_lidar,
++                                msg->header.stamp.toSec(), max_lidar_gap))
++    {
++        mtx_buffer.unlock();
++        return;
++    }
+     if (msg->header.stamp.toSec() < last_timestamp_lidar)
+     {
+         ROS_ERROR("lidar loop back, clear buffer");
+@@ -304,6 +327,12 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg) 
+     mtx_buffer.lock();
+     double preprocess_start_time = omp_get_wtime();
+     scan_count ++;
++    if (sensorTimeDiscontinuity("lidar", last_timestamp_lidar,
++                                msg->header.stamp.toSec(), max_lidar_gap))
++    {
++        mtx_buffer.unlock();
++        return;
++    }
+     if (msg->header.stamp.toSec() < last_timestamp_lidar)
+     {
+         ROS_ERROR("lidar loop back, clear buffer");
+@@ -350,6 +379,13 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) 
+ 
+     mtx_buffer.lock();
+ 
++    if (sensorTimeDiscontinuity("imu", last_timestamp_imu, timestamp,
++                                max_imu_gap))
++    {
++        mtx_buffer.unlock();
++        return;
++    }
++
+     if (timestamp < last_timestamp_imu)
+     {
+         ROS_WARN("imu loop back, clear buffer");
+@@ -768,6 +804,12 @@ int main(int argc, char** argv)
+     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
+     nh.param<bool>("common/time_sync_en", time_sync_en, false);
+     nh.param<double>("common/time_offset_lidar_to_imu", time_diff_lidar_to_imu, 0.0);
++    nh.param<bool>("common/restart_on_time_discontinuity",
++                   restart_on_time_discontinuity, true);
++    nh.param<double>("common/max_lidar_gap", max_lidar_gap, 1.0);
++    nh.param<double>("common/max_imu_gap", max_imu_gap, 1.0);
++    max_lidar_gap = std::max(0.2, max_lidar_gap);
++    max_imu_gap = std::max(0.2, max_imu_gap);
+     nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
+     nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
+     nh.param<double>("filter_size_map",filter_size_map_min,0.5);

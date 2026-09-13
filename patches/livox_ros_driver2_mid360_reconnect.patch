@@ -18,8 +18,8 @@
 -    }
 +    "host_net_info" : [
 +      {
-+        "lidar_ip"       : ["192.168.1.157"],
 +        "host_ip"        : "192.168.1.10",
++        "multicast_ip"   : "224.1.1.5",
 +        "cmd_data_port"  : 56101,
 +        "push_msg_port"  : 56201,
 +        "point_data_port": 56301,
@@ -35,12 +35,14 @@
        "pcl_data_type" : 1,
        "pattern_mode" : 0,
        "extrinsic_parameter" : {
---- a/src/lds_lidar.cpp
-+++ b/src/lds_lidar.cpp
-@@ -158,0 +159,6 @@
-+    // A statically configured MID360 can already be streaming to the host
-+    // before SDK2 finishes its work-mode/configuration callback sequence.
-+    // Accept packets from this explicitly whitelisted handle immediately;
-+    // otherwise valid point-cloud and IMU packets remain queued but ROS never
-+    // publishes them when that callback is missed by some firmware versions.
-+    p_lidar->connect_state = kConnectStateSampling;
+--- a/src/lds.cpp
++++ b/src/lds.cpp
+@@ -115,0 +116,4 @@
++  // Receiving a valid packet is stronger evidence of an active stream than the
++  // asynchronous configuration callback. This also restores publication after
++  // a MID360 power cycle when the SDK misses an info-change callback.
++  p_lidar->connect_state = kConnectStateSampling;
+@@ -165,0 +170,3 @@
++    if (lidar_point.points_num > 0) {
++      lidars_[index].connect_state = kConnectStateSampling;
++    }
