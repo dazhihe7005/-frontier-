@@ -1021,6 +1021,7 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 内核日志表明 CH340 曾于 17:31:35 被正确识别：USB VID:PID 为 `1a86:7523`，位于 `usb 3-3`，驱动 `ch341` 已加载，并成功创建过 `/dev/ttyUSB0`。
 - 本轮实际检查时，`lsusb` 中已经没有 CH340，`/dev/ttyUSB0`、`/dev/ttyACM0` 和 `/dev/serial/by-id` 均不存在。
 - 连续 15 秒、每 0.2 秒检查一次 `/dev/ttyUSB0`，始终为 `absent`。因此目前只能判定电脑到 CH340 的 USB 枚举链路不在线，无法继续验证串口字节流、MAVLink 心跳和 MAVROS 连接稳定性。
+- 后续内核日志又捕捉到 CH340 于 17:38:40 从 `usb 3-3` 断开，17:38:49 改从 `usb 3-2` 重新接入并再次创建 `/dev/ttyUSB0`；但 17:42 最终复查时，`lsusb` 和 `/dev` 中又都找不到该设备。这进一步证明 CH340 的电脑侧 USB 枚举确实不稳定。
 - 即使 TELEM2 的 TX/RX 没接或 PX4 参数未配置，CH340 只要插在 NUC USB 口上也应稳定枚举。因此当前问题优先位于 CH340、USB 插头/延长线或 NUC USB 口一侧，而不是 PX4 的 `MAV_1_CONFIG`、`SER_TEL2_BAUD` 等参数。
 - 此前反复出现 `usb4-port1: Cannot enable` 的设备实际是 VID:PID `05e3:0626` 的 GenesysLogic USB3.1 Hub；本次 CH340 在 `usb 3-3`，两者不是同一个 USB 设备。旧 Hub/Type-C 链路仍不稳定，但不能用该日志直接判定 CH340 或 PX4 TELEM2 故障。
 - 当前 `nuc` 用户的补充组列表中未见 `dialout`。待 `/dev/ttyUSB0` 恢复后，需要检查设备 ACL；如果当前用户没有读写权限，再执行 `sudo usermod -aG dialout nuc` 并注销重新登录。
@@ -1036,3 +1037,4 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 
 - 按用户要求，将截至本轮的完整对话记录同步到仓库 `git@github.com:dazhihe7005/-frontier-.git` 的 `docs/mine_uav_project_conversation.md`。
 - 串口链路尚未通过，因此记录中明确保留当前阻塞结论，不宣称 MAVLink 已连通。
+- GitHub 默认 DNS 和 SSH 22 端口在当前网络中不可用，最终通过 GitHub SSH 443 入口完成推送；远端 `main` 已包含本轮记录。
