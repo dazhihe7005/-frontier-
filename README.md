@@ -89,7 +89,47 @@ rostopic pub -1 /mine_uav/exploration/return_home std_msgs/Bool "data: true"
 
 重要限制：这是第一版 frontier/viewpoint 决策器，使用本节点的轻量 voxel map；SUPER 仍使用自己的 ROG-Map。两者共享同一份 Fast-LIO2 输入，但不是同一份内存地图。后续可以把决策器改成直接读取 ROG-Map 的 frontier API，或将全局建模地图独立出来。
 
-## 项目文档
+## Fast-LIO2 → 任务调度器 → 采空区/竖井任务
 
-- [对话记录](docs/mine_uav_project_conversation.md)
-- [SUPER 源码与原理技术栈导读](docs/SUPER源码与原理技术栈导读.md)
+`mission_scheduler` 通过 MAVROS 的 `/mavros/rc/in` 读取遥控器二段开关，并发布唯一的任务选择结果：
+
+- RC 低位：任务一 `goaf_exploration`，采空区自主探测与建模；
+- RC 高位：任务二 `shaft_exploration`，竖井探测；
+- 遥控器丢失、开关处于中间无效区或 Fast-LIO2 位姿超时：进入 `hold`，并在已进入任务后发布返航请求。
+
+启动：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+roslaunch mine_uav_control mission_scheduler.launch
+```
+
+默认 `rc_switch_channel: 5` 是 ROS 数组下标，对应物理 CH6，不代表一定是你的实际二段开关；应通过 `/mavros/rc/in` 和 QGroundControl 确认后修改配置。
+
+主要输出：
+
+```text
+/mine_uav/mission/active_task   std_msgs/UInt8   0=hold, 1=采空区, 2=竖井
+/mine_uav/mission/goaf_enable   std_msgs/Bool    任务一是否允许运行
+/mine_uav/mission/shaft_enable  std_msgs/Bool    任务二是否允许运行
+/mine_uav/mission/return_home   std_msgs/Bool    是否请求当前任务返航
+/mine_uav/mission/status        std_msgs/String  状态与健康信息
+```
+
+该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。两个任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免两个任务同时控制飞行器。当前任务一的 `super_exploration_decider` 已订阅 `goaf_enable`；任务二实现后接入 `shaft_enable`。
+
+### SITL 联调
+
+可以先使用：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:$ROS_PACKAGE_PATH
+source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
+  /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
+roslaunch mine_uav_control mission_scheduler_sitl.launch
+```
+
+该启动文件使用 PX4 SITL/MAVROS 的 `/mavros/local_position/odom` 作为调度器的临时位姿健康输入，并不代表真实 Fast-LIO2 已接入。调度器的 RC 输入仍然是 `/mavros/rc/in`。SITL 中可以先验证 PX4/MAVROS 连接、RC 通道、任务一/任务二切换和位姿超时保护；任务一 SUPER 的完整规划还需要另行提供 SITL 点云或回放 Fast-LIO2 点云，因为标准 PX4 SITL 不会自动产生 Fast-LIO2 的 `/cloud_registered`。

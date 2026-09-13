@@ -651,3 +651,57 @@ git -C /home/nuc/frontier-upload push origin main
 - 推送范围包含 `mine_uav_control` 源码、配置、launch、测试、README、对话记录和 SUPER 技术导读。
 - 最新提交为：`d6579d6 docs: record successful GitHub authentication`。
 - GitHub 仓库地址：[dazhihe7005/-frontier-](https://github.com/dazhihe7005/-frontier-)
+
+## 第22轮：实现遥控器二段开关任务调度器
+
+用户希望在 Fast-LIO2 位姿输入之后、采空区探测和竖井探测任务之前加入任务调度器，并使用无人机遥控器上的二段开关选择任务。
+
+### 架构判断
+
+该设计合理。调度器负责任务选择、RC 去抖、Fast-LIO2 位姿健康检查和失联保护；它不直接向 PX4 发布 setpoint。两个任务分别订阅自己的 enable 信号，最终由唯一的 PX4 command router 输出控制指令，避免任务一和任务二并发控制飞行器。
+
+### 本轮实现
+
+- 新增 `mission_scheduler` 节点。
+- 订阅 `/mavros/rc/in`、`/Odometry` 和 `/mavros/state`。
+- 默认使用 ROS 通道下标 `5`，即物理 CH6；实际通道号可在 YAML 中修改。
+- RC 低位选择任务一 `goaf_exploration`，高位选择任务二 `shaft_exploration`。
+- 采用 0.5 秒稳定去抖；中间无效值、RC 丢失或 Fast-LIO2 位姿超时进入 `hold`。
+- 任务已经运行后发生 RC/位姿失联时发布 `/mine_uav/mission/return_home=true`。
+- 发布 `/mine_uav/mission/active_task`、`goaf_enable`、`shaft_enable`、`return_home`、`status` 和 `switch_event`。
+- `super_exploration_decider` 已接入 `/mine_uav/mission/goaf_enable`；切换到任务二时暂停任务一，切回任务一时恢复任务一。
+
+### 验证结果
+
+- `catkin_make --pkg mine_uav_control` 编译通过。
+- 模拟低位 RC + Fast-LIO2 位姿：`active_task=1`、`goaf_enable=True`。
+- 模拟高位 RC + Fast-LIO2 位姿：`active_task=2`、`goaf_enable=False`。
+- 停止模拟 Fast-LIO2 位姿：进入 `active_task=0`，`return_home=True`。
+- ROS 图检查确认 SUPER 订阅 `/mine_uav/mission/goaf_enable`。
+
+### 当前边界
+
+- 任务二节点尚未实现，因此目前只发布其 enable 信号。
+- 调度器还没有接管或路由 PX4 setpoint；后续需要实现唯一的 `px4_command_router`，并让任务一/任务二分别发布到独立命令话题。
+- 真机使用前必须通过 `rostopic echo /mavros/rc/in` 移动开关确认实际物理通道及 PWM 阈值。
+
+## 第23轮：确认点云接口、PX4 位姿链路并完成 SITL 验证
+
+用户确认之前的规划器是否接收 Fast-LIO2 点云、是否会干扰给 PX4 的位姿，以及是否可以先用 SITL。
+
+### 接口结论
+
+- `super_exploration_decider` 接收 `/cloud_registered` (`sensor_msgs/PointCloud2`) 和 `/Odometry` (`nav_msgs/Odometry`)。
+- 点云通过 `pcl::fromROSMsg` 转为 `pcl::PointXYZ`，原生使用标准 `x/y/z` 字段；其他字段不会参与 frontier 计算。
+- 当前节点只发布 SUPER 的 `/goal`，不发布 PX4 外部定位话题或 PX4 setpoint，因此与 Fast-LIO2 → PX4 位姿链路没有直接发布冲突。
+- 调度器只订阅位姿做健康检查，也不发布 PX4 位姿。
+- 当前点云适配前提是坐标已经处于 `world` 地图坐标系；节点不自动做 TF 变换。`strict_cloud_frame` 可在确认坐标系后设为 `true`。
+
+### SITL 启动与验证
+
+- 新增 `mission_scheduler_sitl.launch`，使用 PX4 SITL/MAVROS 的 `/mavros/local_position/odom` 临时替代 `/Odometry`，不改变真实 Fast-LIO2 接口。
+- 启动时需要加载 PX4/Gazebo 的 `ROS_PACKAGE_PATH` 和 `setup_gazebo.bash`。
+- 已成功启动 PX4 SITL、Gazebo、MAVROS 和调度器，MAVROS 状态为 `connected=True`。
+- 调度器实际订阅 `/mavros/local_position/odom`、`/mavros/rc/in` 和 `/mavros/state`。
+- SITL 中临时发布 RC 低位得到任务一、高位得到任务二，切换结果正确。
+- 标准 PX4 SITL 不产生 Fast-LIO2 的 `/cloud_registered`，所以当前只完成调度器/MAVROS/SITL 链路验证；SUPER 完整规划需要后续接入点云回放或仿真点云源。

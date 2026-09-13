@@ -65,6 +65,9 @@ SuperExplorationDecider::SuperExplorationDecider(
   return_request_subscriber_ = nh_.subscribe(
       return_request_topic_, 1,
       &SuperExplorationDecider::returnRequestCallback, this);
+  mission_enable_subscriber_ = nh_.subscribe(
+      mission_enable_topic_, 1,
+      &SuperExplorationDecider::missionEnableCallback, this);
   battery_subscriber_ =
       nh_.subscribe(battery_topic_, 1, &SuperExplorationDecider::batteryCallback,
                     this);
@@ -91,6 +94,8 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("world_frame", world_frame_, std::string("world"));
   private_nh_.param("return_request_topic", return_request_topic_,
                     std::string("/mine_uav/exploration/return_home"));
+  private_nh_.param("mission_enable_topic", mission_enable_topic_,
+                    std::string("/mine_uav/mission/goaf_enable"));
   private_nh_.param("battery_topic", battery_topic_,
                     std::string("/mavros/battery"));
   private_nh_.param("status_topic", status_topic_,
@@ -572,6 +577,22 @@ void SuperExplorationDecider::returnRequestCallback(
     const std_msgs::Bool::ConstPtr& message) {
   if (message->data) {
     return_requested_ = true;
+  }
+}
+
+void SuperExplorationDecider::missionEnableCallback(
+    const std_msgs::Bool::ConstPtr& message) {
+  if (enabled_ == message->data) {
+    return;
+  }
+  enabled_ = message->data;
+  if (!enabled_) {
+    have_active_goal_ = false;
+    publishStatus("DISABLED", "task scheduler selected another task");
+    ROS_INFO("SUPER exploration paused by mission scheduler");
+  } else {
+    publishStatus("WAIT_DATA", "task scheduler selected goaf exploration");
+    ROS_INFO("SUPER exploration enabled by mission scheduler");
   }
 }
 

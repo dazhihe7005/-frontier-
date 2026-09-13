@@ -69,6 +69,7 @@ class SuperExplorationDecider {
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
   void decisionTimerCallback(const ros::TimerEvent& event);
+  void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
   void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
   bool enableCallback(std_srvs::SetBool::Request& request,
@@ -106,6 +107,7 @@ class SuperExplorationDecider {
   std::unique_ptr<Synchronizer> synchronizer_;
 
   ros::Subscriber return_request_subscriber_;
+  ros::Subscriber mission_enable_subscriber_;
   ros::Subscriber battery_subscriber_;
   ros::Publisher goal_publisher_;
   ros::Publisher status_publisher_;
@@ -144,6 +146,7 @@ class SuperExplorationDecider {
   std::string goal_topic_;
   std::string world_frame_;
   std::string return_request_topic_;
+  std::string mission_enable_topic_;
   std::string battery_topic_;
   std::string status_topic_;
   std::string finished_topic_;

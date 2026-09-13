@@ -6,6 +6,11 @@ odom_topic: "/Odometry"
 goal_topic: "/goal"
 world_frame: "world"
 
+# Task scheduler gate. If no scheduler is running, the decider keeps its
+# backward-compatible default enabled=true; a latched scheduler message will
+# override it when mission_scheduler is started.
+mission_enable_topic: "/mine_uav/mission/goaf_enable"
+
 # 输入点云不能依赖 TF 自动转换；false 表示仅告警并假设坐标已经是 world。
 # 验证完坐标系后建议改为 true。
 strict_cloud_frame: false

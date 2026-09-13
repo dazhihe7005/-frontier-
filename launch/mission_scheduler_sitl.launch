@@ -1,0 +1,25 @@
+<launch>
+  <!-- PX4 SITL + Gazebo + MAVROS. This launch replaces Fast-LIO2 odometry
+       with MAVROS local odometry only for scheduler bench testing. -->
+  <arg name="gui" default="false" />
+  <arg name="interactive" default="false" />
+  <arg name="vehicle" default="iris" />
+  <arg name="fcu_url" default="udp://:14540@localhost:14557" />
+  <arg name="config" default="$(find mine_uav_control)/config/mission_scheduler.yaml" />
+
+  <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="interactive" value="$(arg interactive)" />
+    <arg name="vehicle" value="$(arg vehicle)" />
+    <arg name="fcu_url" value="$(arg fcu_url)" />
+  </include>
+
+  <node pkg="mine_uav_control"
+        type="mission_scheduler"
+        name="mission_scheduler"
+        output="screen">
+    <rosparam command="load" file="$(arg config)" />
+    <!-- PX4 SITL provides this topic; real deployment uses Fast-LIO2 /Odometry. -->
+    <remap from="/Odometry" to="/mavros/local_position/odom" />
+  </node>
+</launch>

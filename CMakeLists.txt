@@ -49,6 +49,11 @@ add_executable(super_exploration_decider
 )
 target_link_libraries(super_exploration_decider ${catkin_LIBRARIES})
 
+add_executable(mission_scheduler
+  src/mission_scheduler.cpp
+)
+target_link_libraries(mission_scheduler ${catkin_LIBRARIES})
+
 if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_arc_trajectory
     test/test_arc_trajectory.cpp
@@ -59,7 +64,7 @@ if(CATKIN_ENABLE_TESTING)
 endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
-                super_exploration_decider
+                super_exploration_decider mission_scheduler
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
