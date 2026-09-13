@@ -6,13 +6,14 @@
 
 ## 启动真实 PX4 链路
 
-先确认飞控串口设备，例如：
+当前真机链路使用 CH340 转接 PX4 TELEM2。先确认稳定设备名存在：
 
 ```bash
-ls -l /dev/ttyUSB*
+ls -l /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
 ```
 
-单 USB 链路默认使用 `/dev/ttyACM0:115200`：
+默认使用 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:500000`，与当前
+PX4 的 `MAV_1_CONFIG=102`、`MAV_1_MODE=2` 和 `SER_TEL2_BAUD=500000` 匹配：
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -24,16 +25,16 @@ roslaunch mine_uav_control real_uav_ground_station.launch
 
 ```bash
 roslaunch mine_uav_control real_uav_ground_station.launch \
-  device:=/dev/ttyUSB0 baud:=115200
+  device:=/dev/ttyUSB0 baud:=500000
 ```
 
 ## 与 QGC 的连接方式
 
-MAVROS 和 QGC 不能同时独占同一个串口设备。单 USB 链路下应让 MAVROS 独占
-`/dev/ttyACM0`，QGC 通过 NUC 转发的 UDP MAVLink 链路连接，或暂时关闭 MAVROS
+MAVROS 和 QGC 不能同时独占同一个串口设备。TELEM2 链路下应让 MAVROS 独占
+CH340 串口，QGC 通过 NUC 转发的 UDP MAVLink 链路连接，或暂时关闭 MAVROS
 后再让 QGC 直接打开 USB。
 
-启动前确认 `/dev/ttyACM0` 没有被其他串口程序占用。
+启动前确认 CH340 串口没有被其他串口程序占用。
 
 ## 操作顺序
 

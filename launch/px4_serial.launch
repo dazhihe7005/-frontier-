@@ -1,6 +1,6 @@
 <launch>
-  <arg name="device" default="/dev/ttyACM0" />
-  <arg name="baud" default="115200" />
+  <arg name="device" default="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0" />
+  <arg name="baud" default="500000" />
   <arg name="gcs_url" default="" />
   <arg name="fcu_protocol" default="v2.0" />
   <arg name="respawn_mavros" default="false" />

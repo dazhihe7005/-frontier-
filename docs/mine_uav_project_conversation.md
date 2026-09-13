@@ -1021,7 +1021,7 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 内核日志表明 CH340 曾于 17:31:35 被正确识别：USB VID:PID 为 `1a86:7523`，位于 `usb 3-3`，驱动 `ch341` 已加载，并成功创建过 `/dev/ttyUSB0`。
 - 本轮实际检查时，`lsusb` 中已经没有 CH340，`/dev/ttyUSB0`、`/dev/ttyACM0` 和 `/dev/serial/by-id` 均不存在。
 - 连续 15 秒、每 0.2 秒检查一次 `/dev/ttyUSB0`，始终为 `absent`。因此目前只能判定电脑到 CH340 的 USB 枚举链路不在线，无法继续验证串口字节流、MAVLink 心跳和 MAVROS 连接稳定性。
-- 后续内核日志又捕捉到 CH340 于 17:38:40 从 `usb 3-3` 断开，17:38:49 改从 `usb 3-2` 重新接入并再次创建 `/dev/ttyUSB0`；但 17:42 最终复查时，`lsusb` 和 `/dev` 中又都找不到该设备。这进一步证明 CH340 的电脑侧 USB 枚举确实不稳定。
+- 后续内核日志又捕捉到 CH340 于 17:38:40 从 `usb 3-3` 断开，17:38:49 改从 `usb 3-2` 重新接入并再次创建 `/dev/ttyUSB0`。本轮当时在受限检查环境中看不到 `/dev/ttyUSB0`，曾据此判断设备再次消失；第40轮通过主机权限复查后确认这是设备节点隔离造成的假阴性，17:38:49 以后 CH340 实际保持在线。
 - 即使 TELEM2 的 TX/RX 没接或 PX4 参数未配置，CH340 只要插在 NUC USB 口上也应稳定枚举。因此当前问题优先位于 CH340、USB 插头/延长线或 NUC USB 口一侧，而不是 PX4 的 `MAV_1_CONFIG`、`SER_TEL2_BAUD` 等参数。
 - 此前反复出现 `usb4-port1: Cannot enable` 的设备实际是 VID:PID `05e3:0626` 的 GenesysLogic USB3.1 Hub；本次 CH340 在 `usb 3-3`，两者不是同一个 USB 设备。旧 Hub/Type-C 链路仍不稳定，但不能用该日志直接判定 CH340 或 PX4 TELEM2 故障。
 - 当前 `nuc` 用户的补充组列表中未见 `dialout`。待 `/dev/ttyUSB0` 恢复后，需要检查设备 ACL；如果当前用户没有读写权限，再执行 `sudo usermod -aG dialout nuc` 并注销重新登录。
@@ -1038,3 +1038,29 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 按用户要求，将截至本轮的完整对话记录同步到仓库 `git@github.com:dazhihe7005/-frontier-.git` 的 `docs/mine_uav_project_conversation.md`。
 - 串口链路尚未通过，因此记录中明确保留当前阻塞结论，不宣称 MAVLink 已连通。
 - GitHub 默认 DNS 和 SSH 22 端口在当前网络中不可用，最终通过 GitHub SSH 443 入口完成推送；远端 `main` 已包含本轮记录。
+
+## 第40轮：CH340/TELEM2 在 500000 波特率下通信验证通过
+
+用户确认 CH340 已正确连接且指示灯常亮，并补充 TELEM2 波特率为 `500000`，要求重新判断是否需要配置 TELEM2、是否为 NUC 故障。
+
+### 纠正设备可见性误判
+
+- 普通工具检查运行在受限设备环境中，虽然能看到内核 sysfs 的 `ttyUSB0`，却看不到主机真实 `/dev/ttyUSB0`，导致上一轮最终检查出现假阴性。
+- 使用主机权限重新检查后确认 CH340 正常存在：VID:PID `1a86:7523`，设备为 `/dev/ttyUSB0`，稳定链接为 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`。
+- 设备权限是 `root:dialout`、`0660`，同时 ACL 已给 `nuc` 用户读写权限，因此当前不需要为串口访问修改用户组。
+- 连续 30 秒 USB 监测中设备一直存在，没有新增断开事件。
+
+### 波特率与 MAVLink 验证
+
+- 之前项目启动配置仍是旧的 `/dev/ttyACM0:115200`，初次测试使用 921600；这些波特率与 TELEM2 的 500000 不匹配，因此能看到电信号却无法解析 MAVLink 心跳。
+- 改用 `/dev/ttyUSB0:500000` 后，MAVROS 立即报告 `Got HEARTBEAT, connected. FCU: PX4 Autopilot`，并识别 IMU、RC_CHANNELS 和 PX4 飞控版本。
+- 通过 MAVLink 只读查询确认 PX4 已正确配置：`MAV_1_CONFIG=102`（TELEM2）、`MAV_1_MODE=2`（Onboard）、`MAV_1_RATE=0`、`SER_TEL2_BAUD=500000`。因此当前不需要再修改 TELEM2 参数。
+- 实测 `/mavros/state.connected=true`，飞控处于 `ALTCTL`、未解锁；IMU 约 `44.2 Hz`，RC 输入约 `17.7 Hz`。
+- 45 秒持续检查中，47 次 MAVROS 状态采样全部为 connected，`/dev/ttyUSB0` 全程存在；累计接收增长到 `62016` 包，丢包 `0`、缓冲区溢出 `0`、解析错误 `0`。
+- 结论：当前 NUC → CH340 → TELEM2 → PX4 的 MAVLink 链路稳定。此前直连 PX4 USB 的 `error -71` 更可能来自 PX4 USB 接口、线缆或旧 Hub 链路，不能据此判定整台 NUC 的 USB 控制器故障；同一 NUC 当前可稳定运行 CH340 是直接反证。
+
+### 项目配置修正
+
+- `px4_serial.launch` 和 `real_uav_ground_station.launch` 默认设备改为 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`，默认波特率改为 `500000`。
+- README 已更新为当前 CH340/TELEM2 接法、参数和启动命令。
+- 不带覆盖参数重新启动验证通过：MAVROS 实际 FCU URL 为 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0:500000`，连接正常且错误计数均为 0。
