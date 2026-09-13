@@ -1249,6 +1249,25 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 雷达补丁改名为 `livox_ros_driver2_mid360s_reconnect.patch`，配置目标改为 `MID360s_config.json`；保留真实数据包驱动 Sampling 状态和 Fast-LIO2 断流重启保护。
 - 当前Livox Driver和Fast-LIO2保持运行。下一项硬件验收应是运行中单独给雷达断电再上电，验证自动恢复；该测试与PX4无关。
 
+## 第48轮：手动打开RViz查看实时点云
+
+用户关闭了自动打开的RViz，询问如何自行重新打开。
+
+### 打开命令
+
+新建终端后执行：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/nuc/fastlio2_ws/devel/setup.bash
+rviz -d /home/nuc/fastlio2_ws/src/FAST_LIO/rviz_cfg/loam_livox.rviz
+```
+
+该配置默认使用 `camera_init` 作为 Fixed Frame，并显示 `/cloud_registered`、`/Odometry` 等Fast-LIO2输出。关闭RViz不会停止雷达驱动或Fast-LIO2。
+
+若画面为空，在RViz左侧确认 `Global Options -> Fixed Frame` 为 `camera_init`，并确认PointCloud2显示项的Topic为 `/cloud_registered`、Enabled已勾选；按 `F` 可让视角聚焦当前点云。
+
+
 ## 第47轮：确认雷达数据内容及其是否到达自主决策器
 
 用户询问如何查看雷达传来的数据，以及如何确认数据已经送达自主决策器。
