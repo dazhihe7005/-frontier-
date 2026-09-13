@@ -1,0 +1,83 @@
+cmake_minimum_required(VERSION 3.0.2)
+project(mine_uav_control)
+
+add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
+
+find_package(catkin REQUIRED COMPONENTS
+  geometry_msgs
+  message_filters
+  mavros_msgs
+  nav_msgs
+  pcl_conversions
+  roscpp
+  sensor_msgs
+  std_msgs
+  std_srvs
+  visualization_msgs
+)
+
+catkin_package(
+  INCLUDE_DIRS include
+  LIBRARIES arc_trajectory
+  CATKIN_DEPENDS geometry_msgs message_filters mavros_msgs nav_msgs
+                 pcl_conversions roscpp sensor_msgs std_msgs std_srvs
+                 visualization_msgs
+)
+
+include_directories(
+  include
+  ${catkin_INCLUDE_DIRS}
+)
+
+add_library(arc_trajectory
+  src/arc_trajectory.cpp
+)
+target_link_libraries(arc_trajectory ${catkin_LIBRARIES})
+
+add_executable(arc_trajectory_node
+  src/arc_trajectory_node.cpp
+)
+target_link_libraries(arc_trajectory_node arc_trajectory ${catkin_LIBRARIES})
+
+add_executable(offboard_bridge
+  src/offboard_bridge.cpp
+)
+target_link_libraries(offboard_bridge ${catkin_LIBRARIES})
+
+add_executable(super_exploration_decider
+  src/super_exploration_decider.cpp
+)
+target_link_libraries(super_exploration_decider ${catkin_LIBRARIES})
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_arc_trajectory
+    test/test_arc_trajectory.cpp
+  )
+  if(TARGET test_arc_trajectory)
+    target_link_libraries(test_arc_trajectory arc_trajectory ${catkin_LIBRARIES})
+  endif()
+endif()
+
+install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
+                super_exploration_decider
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+)
+
+catkin_install_python(PROGRAMS
+  scripts/ground_station.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY launch/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
+)
+
+install(DIRECTORY config/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
+)

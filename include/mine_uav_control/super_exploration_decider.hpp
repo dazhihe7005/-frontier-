@@ -1,0 +1,178 @@
+#pragma once
+
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <geometry_msgs/PoseStamped.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <nav_msgs/Odometry.h>
+#include <ros/ros.h>
+#include <sensor_msgs/BatteryState.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <std_msgs/Bool.h>
+#include <std_msgs/String.h>
+#include <std_srvs/SetBool.h>
+#include <std_srvs/Trigger.h>
+#include <visualization_msgs/MarkerArray.h>
+
+namespace mine_uav_control {
+
+struct VoxelKey {
+  int x{0};
+  int y{0};
+  int z{0};
+
+  bool operator==(const VoxelKey& other) const {
+    return x == other.x && y == other.y && z == other.z;
+  }
+};
+
+struct VoxelKeyHash {
+  std::size_t operator()(const VoxelKey& key) const {
+    const std::size_t hx = std::hash<int>{}(key.x);
+    const std::size_t hy = std::hash<int>{}(key.y);
+    const std::size_t hz = std::hash<int>{}(key.z);
+    return hx ^ (hy + static_cast<std::size_t>(0x9e3779b9) + (hx << 6) +
+                 (hx >> 2)) ^
+           (hz + static_cast<std::size_t>(0x9e3779b9) + (hy << 6) +
+            (hy >> 2));
+  }
+};
+
+class SuperExplorationDecider {
+ public:
+  SuperExplorationDecider(const ros::NodeHandle& nh,
+                          const ros::NodeHandle& private_nh);
+
+ private:
+  using Cloud = sensor_msgs::PointCloud2;
+  using Odom = nav_msgs::Odometry;
+  using SyncPolicy =
+      message_filters::sync_policies::ApproximateTime<Cloud, Odom>;
+  using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
+
+  enum CellState : uint8_t { FREE = 1, OCCUPIED = 2 };
+
+  struct FrontierCandidate {
+    VoxelKey key;
+    geometry_msgs::PoseStamped goal;
+    double score{0.0};
+    int unknown_neighbors{0};
+  };
+
+  void synchronizedCallback(const Cloud::ConstPtr& cloud,
+                            const Odom::ConstPtr& odom);
+  void decisionTimerCallback(const ros::TimerEvent& event);
+  void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
+  void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
+  bool enableCallback(std_srvs::SetBool::Request& request,
+                      std_srvs::SetBool::Response& response);
+  bool resetCallback(std_srvs::Trigger::Request& request,
+                     std_srvs::Trigger::Response& response);
+
+  bool loadParameters();
+  bool dataIsFresh() const;
+  void updateMap(const sensor_msgs::PointCloud2& cloud,
+                 const geometry_msgs::PoseStamped& pose);
+  void pruneMap();
+  void markFree(const VoxelKey& key);
+  void markOccupied(const VoxelKey& key);
+  VoxelKey positionToKey(double x, double y, double z) const;
+  geometry_msgs::Point keyToPoint(const VoxelKey& key) const;
+  bool isOccupied(const VoxelKey& key) const;
+  bool isClearForVehicle(const VoxelKey& key) const;
+  std::vector<FrontierCandidate> findFrontiers() const;
+  bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
+  bool selectAndPublishFrontier();
+  void publishGoal(const geometry_msgs::PoseStamped& goal,
+                   const std::string& reason);
+  void beginReturnHome(const std::string& reason);
+  void publishStatus(const std::string& state,
+                     const std::string& detail = std::string());
+  void publishVisualization(const std::vector<FrontierCandidate>& candidates);
+  void clearMissionState();
+
+  ros::NodeHandle nh_;
+  ros::NodeHandle private_nh_;
+
+  message_filters::Subscriber<Cloud> cloud_subscriber_;
+  message_filters::Subscriber<Odom> odom_subscriber_;
+  std::unique_ptr<Synchronizer> synchronizer_;
+
+  ros::Subscriber return_request_subscriber_;
+  ros::Subscriber battery_subscriber_;
+  ros::Publisher goal_publisher_;
+  ros::Publisher status_publisher_;
+  ros::Publisher finished_publisher_;
+  ros::Publisher returning_publisher_;
+  ros::Publisher visualization_publisher_;
+  ros::ServiceServer enable_service_;
+  ros::ServiceServer reset_service_;
+  ros::Timer decision_timer_;
+
+  std::unordered_map<VoxelKey, uint8_t, VoxelKeyHash> voxels_;
+  std::vector<geometry_msgs::Point> covered_goals_;
+
+  geometry_msgs::PoseStamped current_pose_;
+  geometry_msgs::PoseStamped home_pose_;
+  geometry_msgs::PoseStamped current_goal_;
+  ros::Time last_sync_time_;
+  ros::Time first_data_time_;
+  ros::Time last_frontier_time_;
+  ros::Time goal_sent_time_;
+
+  bool have_data_{false};
+  bool have_home_{false};
+  bool have_active_goal_{false};
+  bool exploration_started_{false};
+  bool returning_home_{false};
+  bool mission_finished_{false};
+  bool enabled_{true};
+  bool return_requested_{false};
+  bool have_battery_{false};
+  double battery_percentage_{-1.0};
+  int reached_goal_count_{0};
+
+  std::string cloud_topic_;
+  std::string odom_topic_;
+  std::string goal_topic_;
+  std::string world_frame_;
+  std::string return_request_topic_;
+  std::string battery_topic_;
+  std::string status_topic_;
+  std::string finished_topic_;
+  std::string returning_topic_;
+  std::string visualization_topic_;
+
+  double voxel_resolution_{0.5};
+  double max_map_radius_{40.0};
+  double raycast_max_range_{40.0};
+  double frontier_search_radius_{30.0};
+  double min_goal_distance_{2.0};
+  double goal_reached_distance_{1.0};
+  double goal_timeout_{30.0};
+  double no_frontier_timeout_{15.0};
+  double min_data_duration_{5.0};
+  double candidate_spacing_{3.0};
+  double vehicle_radius_{0.35};
+  double data_timeout_{1.0};
+  double decision_rate_{2.0};
+  double sync_slop_{0.08};
+  double battery_return_threshold_{0.20};
+  double distance_weight_{0.35};
+  double information_weight_{1.0};
+  int sync_queue_size_{20};
+  int max_points_per_cloud_{5000};
+  int min_unknown_neighbors_{1};
+  int min_goals_before_complete_{1};
+  bool raycast_enable_{true};
+  bool strict_cloud_frame_{false};
+};
+
+}  // namespace mine_uav_control

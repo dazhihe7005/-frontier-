@@ -1,0 +1,10 @@
+<launch>
+  <arg name="config" default="$(find mine_uav_control)/config/super_exploration_decider.yaml" />
+
+  <node pkg="mine_uav_control"
+        type="super_exploration_decider"
+        name="super_exploration_decider"
+        output="screen">
+    <rosparam command="load" file="$(arg config)" />
+  </node>
+</launch>

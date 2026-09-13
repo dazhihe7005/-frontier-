@@ -1,0 +1,13 @@
+<launch>
+  <arg name="device" default="/dev/ttyACM0" />
+  <arg name="baud" default="115200" />
+  <arg name="gcs_url" default="" />
+
+  <include file="$(find mine_uav_control)/launch/px4_serial.launch">
+    <arg name="device" value="$(arg device)" />
+    <arg name="baud" value="$(arg baud)" />
+    <arg name="gcs_url" value="$(arg gcs_url)" />
+  </include>
+
+  <include file="$(find mine_uav_control)/launch/ground_station.launch" />
+</launch>

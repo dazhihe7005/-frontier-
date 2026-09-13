@@ -1,0 +1,14 @@
+<launch>
+  <arg name="device" default="/dev/ttyACM0" />
+  <arg name="baud" default="115200" />
+  <arg name="gcs_url" default="" />
+  <arg name="fcu_protocol" default="v2.0" />
+  <arg name="respawn_mavros" default="false" />
+
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="$(arg device):$(arg baud)" />
+    <arg name="gcs_url" value="$(arg gcs_url)" />
+    <arg name="fcu_protocol" value="$(arg fcu_protocol)" />
+    <arg name="respawn_mavros" value="$(arg respawn_mavros)" />
+  </include>
+</launch>

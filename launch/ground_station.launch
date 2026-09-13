@@ -1,0 +1,4 @@
+<launch>
+  <node pkg="mine_uav_control" type="ground_station.py"
+        name="px4_ground_station" output="screen" />
+</launch>

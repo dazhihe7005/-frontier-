@@ -1,0 +1,18 @@
+# ROS/catkin build products
+build/
+devel/
+install/
+log/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# ROS runtime data
+*.bag
+*.bag.active
+
+# IDE and local files
+.vscode/
+.idea/
+*.swp

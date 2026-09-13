@@ -1,0 +1,48 @@
+# Fast-LIO2 的常见 ROS1 输出接口。
+cloud_topic: "/cloud_registered"
+odom_topic: "/Odometry"
+
+# SUPER FsmRos1 默认订阅的目标话题。
+goal_topic: "/goal"
+world_frame: "world"
+
+# 输入点云不能依赖 TF 自动转换；false 表示仅告警并假设坐标已经是 world。
+# 验证完坐标系后建议改为 true。
+strict_cloud_frame: false
+
+# 轻量 frontier 地图参数。SUPER 自己仍使用其 ROG-Map。
+voxel_resolution: 0.5
+max_map_radius: 40.0
+raycast_max_range: 40.0
+raycast_enable: true
+max_points_per_cloud: 5000
+vehicle_radius: 0.35
+
+# 观察点选择与覆盖策略。
+frontier_search_radius: 30.0
+min_goal_distance: 2.0
+candidate_spacing: 3.0
+min_unknown_neighbors: 1
+information_weight: 1.0
+distance_weight: 0.35
+goal_reached_distance: 1.0
+goal_timeout: 30.0
+
+# 建模完成：至少到达一个观察点，并且连续一段时间没有新 frontier。
+min_goals_before_complete: 1
+min_data_duration: 5.0
+no_frontier_timeout: 15.0
+
+# 健康检查和任务事件。
+decision_rate: 2.0
+data_timeout: 1.0
+sync_queue_size: 20
+sync_slop: 0.08
+battery_return_threshold: 0.20
+battery_topic: "/mavros/battery"
+return_request_topic: "/mine_uav/exploration/return_home"
+
+status_topic: "/mine_uav/exploration/status"
+finished_topic: "/mine_uav/exploration/finished"
+returning_topic: "/mine_uav/exploration/returning"
+visualization_topic: "/mine_uav/exploration/frontiers"
