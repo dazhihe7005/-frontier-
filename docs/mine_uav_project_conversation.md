@@ -1118,3 +1118,9 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 标定 MID360/IMU 到无人机 PX4 FRD 机体系的安装旋转和平移。目前 Fast-LIO2 内部的雷达到 IMU 外参不等于整机安装外参。
 - 根据高度源方案决定是否启用 EV z/速度；完成拆桨 OFFBOARD 跟踪、失联/定位故障保护和系留低空测试后，才能进行带桨自主探索。
 - 当前任务一的“建模完成”仍是 frontier 超时启发式，连续三面墙覆盖率判据尚未实现；这不影响控制链打通，但影响最终采空区完整建模验收。
+
+### 本轮收尾状态
+
+- 本轮新增源码、配置、README 和对话记录已推送 GitHub `main`，提交为 `97b5edc feat: connect task-one SUPER loop to PX4`。
+- 收尾复查仍只有 Livox 发现端口 `56000` 被驱动绑定，`/livox/lidar` 无新消息；PX4 同时保持 `connected=true`、`ALTCTL`、`armed=false`，任务一 `command_ready=false`，没有向 PX4 发送设定值。
+- 下一步需要用户保持当前 Livox 驱动运行，将 MID360 单独断电再上电一次，然后立即复查 `56201/56301/56401` 端口、点云、IMU、Fast-LIO2 位姿和注册点云。
