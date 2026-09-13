@@ -1,0 +1,46 @@
+--- a/config/MID360_config.json
++++ b/config/MID360_config.json
+@@ -10,22 +10,21 @@
+       "imu_data_port": 56400,
+       "log_data_port": 56500
+     },
+-    "host_net_info" : {
+-      "cmd_data_ip" : "192.168.1.10",
+-      "cmd_data_port": 56101,
+-      "push_msg_ip": "192.168.1.10",
+-      "push_msg_port": 56201,
+-      "point_data_ip": "192.168.1.10",
+-      "point_data_port": 56301,
+-      "imu_data_ip" : "192.168.1.10",
+-      "imu_data_port": 56401,
+-      "log_data_ip" : "",
+-      "log_data_port": 56501
+-    }
++    "host_net_info" : [
++      {
++        "lidar_ip"       : ["192.168.1.157"],
++        "host_ip"        : "192.168.1.10",
++        "cmd_data_port"  : 56101,
++        "push_msg_port"  : 56201,
++        "point_data_port": 56301,
++        "imu_data_port"  : 56401,
++        "log_data_port"  : 56501
++      }
++    ]
+   },
+   "lidar_configs" : [
+     {
+-      "ip" : "192.168.1.5",
++      "ip" : "192.168.1.157",
+       "pcl_data_type" : 1,
+       "pattern_mode" : 0,
+       "extrinsic_parameter" : {
+--- a/src/lds_lidar.cpp
++++ b/src/lds_lidar.cpp
+@@ -158,0 +159,6 @@
++    // A statically configured MID360 can already be streaming to the host
++    // before SDK2 finishes its work-mode/configuration callback sequence.
++    // Accept packets from this explicitly whitelisted handle immediately;
++    // otherwise valid point-cloud and IMU packets remain queued but ROS never
++    // publishes them when that callback is missed by some firmware versions.
++    p_lidar->connect_state = kConnectStateSampling;

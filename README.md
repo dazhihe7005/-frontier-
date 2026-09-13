@@ -88,8 +88,18 @@ rosservice call /super_px4_command_bridge/enable "data: false"
 ```
 
 当前 MID360 的实际地址是 `192.168.1.157`，NUC 雷达网口是
-`192.168.1.10/24`。若雷达正在向 `56301/56401` 发包但 Livox 驱动只监听
-`56000`，应保持驱动运行并重启一次雷达，让 SDK 重新收到设备发现广播。
+`192.168.1.10/24`。本机 Livox SDK2 的旧版 `host_net_info` 对象格式只会先监听
+发现端口 `56000`，若配置回调没有完成，已经到达 `56301/56401` 的数据也不会发布。
+当前已将 `MID360_config.json` 改成带显式 `lidar_ip` 的数组格式，并在
+`livox_ros_driver2/src/lds_lidar.cpp` 中允许明确配置的单台雷达立即进入接收状态。
+对应可复用补丁保存在仓库
+`patches/livox_ros_driver2_mid360_static_ip.patch`。
+
+在未修改的 `livox_ros_driver2` 目录中应用时使用：
+
+```bash
+git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid360_static_ip.patch
+```
 
 注意：在正式飞行前仍必须通过移动机体验证 PX4 确实融合外部视觉、标定
 雷达 IMU 坐标与飞行器 FRD 机体系安装关系，并确认 `EKF2_EV_CTRL` 的高度源选择。

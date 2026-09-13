@@ -1128,3 +1128,28 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 ## 第42轮：再次确认 MID360 当前状态
 
 用户询问雷达是否仍未调通。实时复查确认：`192.168.1.157` 仍处于 `REACHABLE`，说明雷达网络在线；但 Livox 驱动仍只绑定 UDP 发现端口 `56000`，未绑定 `56201/56301/56401`，且 `/livox/lidar` 连续检查无新消息。因此目前是“雷达硬件与 NUC 网络已通，Livox ROS 驱动尚未完成重连握手”，还不能称为 ROS 雷达链路已调通。下一步仍是保持驱动运行并将 MID360 单独断电再上电。
+
+## 第43轮：MID360 重新上电后修复 SDK2 接收状态并恢复 Fast-LIO2
+
+用户说明雷达此前已经打通过，并已重新给雷达上电，询问这次具体出了什么问题。
+
+### 原因定位
+
+- 此前确实完成过全链路实测；本次不是首次配置失败，而是 Livox 驱动被重启后，旧 Fast-LIO2/雷达会话状态没有一起重建。
+- 雷达重新上电后，`.157` 可达且持续向 NUC 的 `56301/56401/56201` 发送数据；旧版 SDK2 配置只监听发现端口 `56000`，没有预先接管数据端口。
+- 把配置改为显式单雷达 IP 后，SDK2 能识别序列号 `ARMCP7Q0030457`、收到发现响应和命令 ACK，也能绑定 `56101/56201/56301/56401`；但该固件/SDK 组合卡在“更新配置回调完成后才将设备标记为 Sampling”的状态，导致已有数据仍不发布到 ROS。
+
+### 修复内容
+
+- 将 `MID360_config.json` 的 `host_net_info` 改为 SDK2 新数组格式，并写入 `lidar_ip: [192.168.1.157]` 和 `host_ip: 192.168.1.10`，同时把 `lidar_configs.ip` 从错误的 `.5` 改为 `.157`。
+- 在 `livox_ros_driver2/src/lds_lidar.cpp` 中，对配置文件明确指定的雷达 handle 在初始化时设为 `kConnectStateSampling`；该处理只作用于显式列出的设备，使已在正确端口持续采样的 MID360 不再因为遗漏配置回调而阻塞 ROS 发布。
+- `livox_ros_driver2` 重新编译成功。为便于恢复环境，仓库增加 `patches/livox_ros_driver2_mid360_static_ip.patch`。
+
+### 恢复验证
+
+- `/livox/lidar` 恢复到约 `10.00 Hz`，`/livox/imu` 恢复到约 `200 Hz`。
+- `/Odometry` 恢复到约 `10.00 Hz`，`/cloud_registered` 恢复到约 `10.01 Hz`。
+- 因旧 Fast-LIO2 在长时间断流后恢复时已发散到约十万米，位姿桥正确触发 `INPUT_JUMP` 并停止向 PX4 发送错误外部视觉。
+- 停止发散的 `/laserMapping`，在稳定雷达数据上重新启动 Fast-LIO2；初始化后位姿恢复到起点附近，5 次位置抽样约在 `(0.017~-0.020, -0.015~-0.010, -0.061~-0.059) m`，没有继续发散。
+- 在 PX4 `armed=false` 状态调用位姿桥重置服务，重新捕获对齐。最终 `/mine_uav/task1/vision_status=STREAMING`、`vision_healthy=true`，`/mavros/vision_pose/pose_cov` 稳定为 `30 Hz`。
+- PX4 仍为 `connected=true`、`ALTCTL`、`armed=false`；RC CH6 当前约 `1499`，调度器保持 `hold`；`command_ready=false`，`/mavros/setpoint_raw/local` 没有输出。恢复过程没有控制无人机。
