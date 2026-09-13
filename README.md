@@ -87,12 +87,15 @@ rosservice call /super_px4_command_bridge/enable "data: true"
 rosservice call /super_px4_command_bridge/enable "data: false"
 ```
 
-当前 MID360 的实际地址是 `192.168.1.157`，NUC 雷达网口是
-`192.168.1.10/24`。`MID360_config.json` 使用 SDK2 1.4.3 的数组式
+当前雷达发现应答报告的设备类型是 `35`，即 `Mid360s`，不是类型 `9` 的
+`MID360`；实际地址是 `192.168.1.157`，NUC 雷达网口是
+`192.168.1.10/24`。正式启动必须使用 `msg_MID360s.launch` 和
+`MID360s_config.json`，否则 SDK 虽能收到发现应答，也会因设备类型不匹配而忽略。
+`MID360s_config.json` 使用 SDK2 1.4.3 的数组式
 `host_net_info`。驱动不再在初始化时静态强制 Sampling；只有真正收到该设备的
 点云或 IMU 包时才进入 Sampling，因此能从漏掉的异步配置回调中恢复，又不会在
 雷达离线时伪报正常。对应补丁为
-`patches/livox_ros_driver2_mid360_reconnect.patch`。
+`patches/livox_ros_driver2_mid360s_reconnect.patch`。
 
 Fast-LIO2 不应跨越雷达断电继续使用旧 EKF 和地图。点云或 IMU 时间戳回跳、或
 数据间隔超过 1 秒时，`laserMapping` 会主动退出；`mapping_mid360.launch` 在 1 秒后
@@ -103,7 +106,7 @@ Fast-LIO2 不应跨越雷达断电继续使用旧 EKF 和地图。点云或 IMU 
 在未修改的 `livox_ros_driver2` 目录中应用时使用：
 
 ```bash
-git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid360_reconnect.patch
+git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid360s_reconnect.patch
 git apply --unidiff-zero /path/to/frontier-upload/patches/fast_lio2_sensor_restart.patch
 ```
 

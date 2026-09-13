@@ -1,0 +1,29 @@
+--- a/config/MID360s_config.json
++++ b/config/MID360s_config.json
+@@ -13,6 +13,6 @@
+     "host_net_info" : [
+       {
+-        "host_ip"        : "192.168.1.5",
++        "host_ip"        : "192.168.1.10",
+         "cmd_data_port"  : 56101,
+         "push_msg_port"  : 56201,
+         "point_data_port": 56301,
+@@ -25,6 +25,6 @@
+   "lidar_configs" : [
+     {
+-      "ip" : "192.168.1.12",
++      "ip" : "192.168.1.157",
+       "pcl_data_type" : 1,
+       "pattern_mode" : 0,
+       "extrinsic_parameter" : {
+--- a/src/lds.cpp
++++ b/src/lds.cpp
+@@ -115,0 +116,4 @@
++  // Receiving a valid packet is stronger evidence of an active stream than the
++  // asynchronous configuration callback. This also restores publication after
++  // a MID360-family power cycle when the SDK misses an info-change callback.
++  p_lidar->connect_state = kConnectStateSampling;
+@@ -165,0 +170,3 @@
++    if (lidar_point.points_num > 0) {
++      lidars_[index].connect_state = kConnectStateSampling;
++    }

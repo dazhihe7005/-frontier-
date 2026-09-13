@@ -1224,3 +1224,27 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 为便于定位，下一次可以先只接通 MID360，确认 `/livox/lidar≈10 Hz`、`/livox/imu≈200 Hz`、`/Odometry≈10 Hz` 且位姿稳定，再给 PX4 上电并确认 MAVROS；这只是分段验收方法，不是永久启动顺序要求。
 - 后续还要做一次真实的“运行中断开 MID360 → 等待数秒 → 重新上电”测试，验证驱动恢复、Fast-LIO PID 自动变化、位姿桥在未解锁时重新对齐，以及全程不向 PX4 输出任务控制。
 - 对 TELEM2 航插/杜邦连接，最安全做法仍是断电接线后再上电；但 MAVLink 软件链路本身应能重连。PX4 Type-C 的旧 `error -71` 属于另一条物理 USB 问题，与 MID360 重连无关。
+
+## 第46轮：确认实物为 Mid360s 并打通雷达至 Fast-LIO2 全链路
+
+用户确认 PX4 与 NUC 链路已经通过，要求本轮只调试已重新接入的雷达与 NUC。
+
+### 分层诊断结果
+
+- NUC 有线网口 `enp89s0` 为 `UP/LOWER_UP`，地址为 `192.168.1.10/24`；雷达 `192.168.1.157` 连续 3 次 ping 均成功，丢包率为 0%，平均时延约 1.61 ms。
+- 使用原 `msg_MID360.launch` 时，驱动只打开发现端口 `56000`，没有打开 `56101/56201/56301/56401`，`/livox/lidar` 与 `/livox/imu` 均无数据。
+- 对 SDK 网络系统调用进行跟踪后确认：NUC 每秒向 `255.255.255.255:56000` 发出 24 字节发现请求；雷达 `192.168.1.157` 每次均返回 48 字节有效应答，序列号为 `ARMCP7Q0030457`。因此供电、网线、IP和雷达网口均正常。
+- 发现应答中的设备类型为十进制 `35`。本地 Livox-SDK2 定义 `35 = kLivoxLidarTypeMid360s`，而原启动文件使用的 `MID360` 类型为 `9`。SDK收到应答后因型号与配置不匹配而静默忽略，这就是“能 ping 通但没有点云”的直接根因。
+
+### 修正与实机结果
+
+- 改用 `msg_MID360s.launch` 和 `MID360s_config.json`，其中NUC地址为 `192.168.1.10`、雷达地址为 `192.168.1.157`。
+- 驱动随即建立全部数据通道，实测 `/livox/lidar ≈ 10.00 Hz`、`/livox/imu ≈ 200.0 Hz`。
+- 启动 Fast-LIO2 后完成 IMU 初始化；`/cloud_registered ≈ 10.00 Hz`、`/Odometry ≈ 10.00 Hz`，里程计位置处于起点附近且数值正常。
+- ROS连接关系显示 `/laserMapping` 正在订阅 `/livox/lidar` 和 `/livox/imu`，同时 `/super_exploration_decider` 已订阅 `/cloud_registered` 与 `/Odometry`，`/mission_scheduler` 已订阅 `/Odometry`。因此“雷达 → Livox Driver → Fast-LIO2 → 决策器/调度器”的数据链路已实机打通。
+
+### 持久修正
+
+- `task1_real.launch` 的默认雷达启动项改为 `msg_MID360s.launch`，避免后续重新启动时再次选错型号。
+- 雷达补丁改名为 `livox_ros_driver2_mid360s_reconnect.patch`，配置目标改为 `MID360s_config.json`；保留真实数据包驱动 Sampling 状态和 Fast-LIO2 断流重启保护。
+- 当前Livox Driver和Fast-LIO2保持运行。下一项硬件验收应是运行中单独给雷达断电再上电，验证自动恢复；该测试与PX4无关。
