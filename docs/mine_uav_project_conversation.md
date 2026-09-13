@@ -744,6 +744,25 @@ git -C /home/nuc/frontier-upload push origin main
 - 随后实时检查时 `/dev/ttyACM0` 已不在，ROS master 也未运行，因此本轮尚未读取真实 PX4 坐标话题。
 - 待串口稳定后，先启动 MAVROS 并读取 `/mavros/local_position/odom`、TF 和 `/mavros/state`，再实现 Fast-LIO2/SUPER world 到 PX4 local ENU 的对齐变换。
 
+## 第30轮：确认 `/dev/ttyACM0` 当前存在与任务一主方向策略
+
+用户反馈 `watch -n 0.2 'test -e /dev/ttyACM0 && ls -l /dev/ttyACM0 || echo absent'` 显示：
+
+```text
+crw-rw----+ 1 root dialout 166, 0 /dev/ttyACM0
+```
+
+### 串口判断
+
+- 该输出证明 `/dev/ttyACM0` 在当前采样时刻存在，是字符设备，属主为 `root`，属组为 `dialout`。
+- 如果 `watch` 持续运行期间一直显示该行、从未出现 `absent`，可认为它在观察窗口内持续存在；单次输出不能证明长期稳定。
+- 还需要通过 `dmesg -w` 或 `udevadm monitor --kernel --udev --subsystem-match=tty` 观察是否发生断开/重新枚举。
+- 后续优先使用 `/dev/serial/by-id/` 下的稳定设备链接；如果没有该链接，再使用 `/dev/ttyACM0`。
+
+### 任务一策略补充
+
+用户明确任务一应以无人机当前机头/进入方向作为主方向，优先沿主方向探索；只有连续探测不到左右墙体或主方向信息不足时，才转入侧向 frontier/其他方向探索。当前代码还未实现这个主方向优先状态机，现有版本仍是通用 frontier 选择器。
+
 ## 第27轮：任务一当前能力边界
 
 用户要求继续回答任务一目前能做到的程度。
