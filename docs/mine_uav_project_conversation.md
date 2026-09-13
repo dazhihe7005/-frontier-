@@ -583,3 +583,26 @@ SUPER 的真实点云输入适配和任务二的真实雷达输入，等调度�
 ### 当前结论
 
 可以上传，但需要用户提供自己的 GitHub 仓库地址，例如 `https://github.com/<用户名>/<仓库名>.git`；如果仓库尚未创建，需要先在 GitHub 创建一个空仓库。拿到明确远程地址后，只提交本轮 `mine_uav_control` 新增/修改的源码、配置和说明文件，不提交 SUPER 上游仓库及其无关改动。
+
+## 第16轮：整理并尝试推送到用户 GitHub 仓库
+
+用户提供了 GitHub 仓库：`https://github.com/dazhihe7005/-frontier-.git`。
+
+### 本轮完成
+
+- 已确认远程仓库可访问，目标分支为 `main`，远程原先只有一个初始 README 提交。
+- 在独立临时工作副本中整理了 `mine_uav_control` ROS1 包，包含源码、头文件、配置、launch、测试、脚本、README 和 `.gitignore`。
+- 将本对话记录与 SUPER 技术导读保存到仓库的 `docs/` 目录。
+- 删除了 Python 缓存等不应上传的文件。
+- 创建本地提交：`14d2aa5 feat: add frontier exploration decider`。
+- 已将完整提交副本保存到 `/home/nuc/frontier-upload`。
+
+### 推送结果
+
+推送尚未成功。GitHub 返回 `could not read Username for 'https://github.com'`，说明当前 NUC 没有可用的 GitHub HTTPS 凭据；本机也没有发现 SSH key。代码和本地提交均未丢失，待在 NUC 上配置 GitHub PAT/凭据或 SSH key 后，再执行：
+
+```bash
+git -C /home/nuc/frontier-upload push origin main
+```
+
+不要在对话中发送 GitHub 密码或 PAT。
