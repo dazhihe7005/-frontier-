@@ -1153,3 +1153,42 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch
 - 停止发散的 `/laserMapping`，在稳定雷达数据上重新启动 Fast-LIO2；初始化后位姿恢复到起点附近，5 次位置抽样约在 `(0.017~-0.020, -0.015~-0.010, -0.061~-0.059) m`，没有继续发散。
 - 在 PX4 `armed=false` 状态调用位姿桥重置服务，重新捕获对齐。最终 `/mine_uav/task1/vision_status=STREAMING`、`vision_healthy=true`，`/mavros/vision_pose/pose_cov` 稳定为 `30 Hz`。
 - PX4 仍为 `connected=true`、`ALTCTL`、`armed=false`；RC CH6 当前约 `1499`，调度器保持 `hold`；`command_ready=false`，`/mavros/setpoint_raw/local` 没有输出。恢复过程没有控制无人机。
+
+## 第44轮：手动飞行与自动任务选择的遥控器分层方案
+
+用户提出：原来的二段开关只能选择任务一或任务二，但系统还需要手动飞行，询问是否应把三种状态放进一个三段开关，或另外使用一个通道切换自动/手动。
+
+### 结论
+
+- 不建议把“手动、任务一、任务二”合并到同一个三段开关。这样会把 PX4 飞行控制权切换和 NUC 任务切换耦合在一起，容易在任务一与任务二之间直接误切，也不利于故障时快速回到人工控制。
+- 推荐采用两个彼此独立的逻辑：PX4 原生飞行模式负责“人工控制还是 OFFBOARD 自动控制”，NUC 任务调度器只负责“任务一还是任务二”。
+- 当前任务二尚未实现，因此即使任务选择开关落在任务二，也必须保持 `HOLD/disabled`，不能输出任务二飞行指令。
+
+### 当前实机只读检查
+
+- PX4 在线、未解锁，当前为 `ALTCTL`。
+- `RC_MAP_FLTMODE=5`：物理 CH5 已是 PX4 原生飞行模式通道；当前三档分别配置为 `STABILIZED / ALTCTL / POSCTL`，还没有 OFFBOARD 档。
+- 现有 NUC 调度器使用物理 CH6 选择任务一/任务二；当前 CH6 约为 `1499`，仍位于中间无效区。
+- `RC_MAP_OFFB_SW=0`：目前没有分配独立的 OFFBOARD 开关；因此可以从空闲通道中选择一个二段开关专门映射 OFFBOARD，而不占用 CH6。
+- `RC_MAP_KILL_SW=15`：物理 CH15 已映射为电机紧急停止，不能拿来做自动/手动选择。
+- `COM_RC_OVERRIDE=3`、`COM_RC_STICK_OV=30%`：当前 PX4 v1.17 配置允许在自动和 OFFBOARD 模式下通过较大摇杆动作切回位置控制（位置不可用时退回高度控制），但仍需在拆桨测试中实际验证。
+- `COM_OF_LOSS_T=1.0 s`、`COM_OBL_RC_ACT=0`：OFFBOARD 设定值丢失 1 秒后，PX4 在遥控可用时切到 Position；`NAV_RCL_ACT=3`、`COM_RCL_EXCEPT=0` 表示 RC 丢失保护没有在 OFFBOARD 中被豁免。参数含义和实际动作仍需拆桨及系留测试确认。
+
+### 推荐通道布局
+
+- CH5：保留 PX4 手动/辅助飞行模式选择，作为人工飞行和回退通道。
+- CH6：只做 NUC 任务选择，低档任务一，高档预留任务二；任务切换本身不自动解锁、不自动进入 OFFBOARD。
+- 另选一个未占用二段通道（候选 CH7 或 CH8，必须通过拨动遥控器实测确认）：低档为人工控制/禁止自动，高档为允许并请求 OFFBOARD。
+- CH15：保留紧急停止，不改动。
+
+### 后续软件状态机
+
+1. `MANUAL_DISABLED`：自动开关低，NUC 不允许任务轨迹控制；PX4 由 CH5 对应的人工模式控制。
+2. `AUTO_PRESTREAM`：自动开关高且定位、通信、规划器均健康，NUC 先以高于 2 Hz 持续发送“当前位置悬停”设定值，满足 PX4 进入 OFFBOARD 前必须已有设定值流的要求。
+3. `AUTO_ACTIVE`：PX4 已确认进入 OFFBOARD 后，才把所选任务的轨迹送入 PX4；绝不由 NUC 自动解锁。
+4. `FAULT/HOLD`：规划器短暂停顿时发送当前位置悬停；定位、RC 或通信等关键健康条件失败时停止任务轨迹并锁断，由 PX4 原生失效保护接管。
+
+### 下一步
+
+- 用户需要指定遥控器上准备作为“自动/手动”开关的物理开关，并依次拨到低、高档；通过 `/mavros/rc/in` 找出对应的空闲物理通道。
+- 通道确认后，再修改任务调度器和指令桥，使其接入独立 `auto_enable`，并在不装桨状态验证“预发送悬停 → OFFBOARD → 任务一 → 人工接管”的完整状态转换。
