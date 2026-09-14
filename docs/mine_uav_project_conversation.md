@@ -1486,3 +1486,16 @@ rostopic echo /mine_uav/mission/goaf_enable
 - PX4处于OFFBOARD或尚未取得MAVROS状态时，缺失/陈旧指令仍会告警并停止转发，保留真实飞行中的断流保护。
 - PX4已经切换到 `AUTO.LOITER`、`POSCTL` 等非OFFBOARD模式时，陈旧上游指令属于正常收尾，节点静默停止转发。
 - `mine_uav_control`重新编译通过。隔离ROS Master最小测试中，模拟OFFBOARD后旧指令持续触发告警；切换为AUTO.LOITER后立即无新增告警，证明没有掩盖OFFBOARD飞行中的真实断流。
+
+## 第56轮：用户首次手动启动完整采空区SITL并确认结果
+
+用户按说明重新启动采空区仿真。检查独立ROS Master `11312` 后，PX4 SITL、Gazebo、MAVROS、任务调度器、SUPER、决策器和两级PX4指令桥等关键节点均正常在线。
+
+本次运行已经自动完成整个任务一闭环：
+
+- PX4连接、解锁并在任务阶段进入OFFBOARD，任务结束后切换为 `AUTO.LOITER`。
+- 三面墙覆盖状态为：尽头深度 `22.50 m`、最大纵向进度 `17.89 m`、左右墙覆盖率 `1.00/1.00`、最大缺口 `0/0`、尽头跨度 `9.00 m`、确认周期 `4/4`。
+- `/mine_uav/exploration/model_complete=true`，`/mine_uav/exploration/finished=true`，指令桥状态为 `TASK1_COMPLETE`。
+- 最终PX4局部位置约为 `(-0.30, 0.09, 0.97) m`，已回到入口附近并保持悬停。
+
+用户若要观察完整运动过程，需要保留端口11312的roscore，停止当前launch后重新运行 `task1_px4_sitl.launch gui:=true rviz:=true`；在RViz中重点显示当前点云、累计点云、frontier标记和PX4轨迹。
