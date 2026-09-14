@@ -1538,3 +1538,11 @@ rostopic echo /mine_uav/mission/goaf_enable
 ## 第60轮：重新启动带MID360雷达的采空区仿真步骤
 
 用户询问关闭旧仿真后的下一步。重新启动时应先在终端一运行独立ROS Master `roscore -p 11312`，再在终端二加载ROS、SUPER、PX4 Gazebo环境并执行 `roslaunch mine_uav_control task1_px4_sitl.launch gui:=true rviz:=true`。新启动文件会加载 `iris_mid360.sdf`、Gazebo雷达原始话题、点云注册适配器和 `task1_mid360.rviz`；终端三可检查原始雷达点云、注册后的 `/cloud_registered`、PX4状态和三面墙完成状态。
+
+## 第61轮：明确MID360风格雷达与Fast-LIO2的仿真边界
+
+用户询问当前仿真雷达是否为MID360S以及是否使用Fast-LIO2。明确如下：
+
+- 当前是Gazebo Ray传感器的MID360风格近似模型，不是实体Livox MID-360/MID360S、Livox SDK或真实UDP数据流；配置了360度水平扫描、32条垂直采样、10 Hz、30 m量程和高斯噪声。
+- 当前没有运行Fast-LIO2。`gazebo_mid360_fastlio_adapter.py`只是把Gazebo `sensor_msgs/PointCloud`原始点云依据 `/Odometry` 和安装偏移刚性变换到 `camera_init`，重新发布为 `PointCloud2`；这不是Fast-LIO2的IMU预积分、特征处理、扫描配准或状态估计。
+- 当前仿真验证的是“雷达几何数据→坐标注册→决策器→SUPER→PX4”接口和任务逻辑。要验证真实Fast-LIO2，后续应接入Livox驱动、IMU和Fast-LIO2节点，再让其原生输出 `/Odometry`、`/cloud_registered`，并关闭该仿真注册适配器以避免重复发布。
