@@ -89,6 +89,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
 
 catkin_install_python(PROGRAMS
   scripts/ground_station.py
+  scripts/gazebo_mid360_fastlio_adapter.py
   scripts/task1_sitl_adapter.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
@@ -103,4 +104,12 @@ install(DIRECTORY config/
 
 install(DIRECTORY worlds/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/worlds
+)
+
+install(DIRECTORY models/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/models
+)
+
+install(DIRECTORY rviz/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/rviz
 )

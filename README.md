@@ -222,10 +222,12 @@ roslaunch mine_uav_control mission_scheduler.launch
 
 #### 任务一 PX4/Gazebo 完整动态闭环
 
-`task1_px4_sitl.launch` 已将采空区世界、PX4 SITL、Gazebo、MAVROS、任务调度器、
-模拟 Fast-LIO2 接口、自主决策器、SUPER 和 PX4 指令桥合并为一条动态闭环。模拟适配器
-发布与真机一致的 `/Odometry` 和 `/cloud_registered`，因此决策器及 SUPER 不需要改
-输入接口；它模拟的是 Fast-LIO2 的输出，而不是 Livox UDP 原始包和真实 Fast-LIO2 EKF。
+`task1_px4_sitl.launch` 已将采空区世界、带 MID360 风格三维雷达的 Iris、PX4 SITL、
+Gazebo、MAVROS、任务调度器、自主决策器、SUPER 和 PX4 指令桥合并为一条动态闭环。
+Gazebo Ray 传感器输出机体系 `/mine_uav/sitl/mid360/points`，注册适配器根据PX4实时姿态
+转换为 `camera_init` 下的 `/cloud_registered`；决策器及SUPER沿用真机接口，不再使用
+预先枚举的解析墙面点云。该模块模拟三维测距、视场、遮挡、量程和高斯噪声，但不是
+Livox UDP数据包、MID360非重复扫描时序或真实Fast-LIO2 EKF。
 
 必须使用独立 ROS Master，避免向默认 `11311` 上的真实 MAVROS 发送任何仿真控制：
 
@@ -257,7 +259,9 @@ rostopic echo /mine_uav/exploration/model_coverage
 rostopic echo /mine_uav/exploration/model_complete
 rostopic echo /mine_uav/task1/command_status
 rostopic echo /goal
+rostopic hz /mine_uav/sitl/mid360/points
 rostopic hz /cloud_registered
+rostopic hz /mine_uav/sitl/global_cloud
 rostopic hz /Odometry
 rostopic hz /mavros/setpoint_raw/local
 ```
@@ -279,6 +283,14 @@ home返航点，最终位置约 `(-0.35, 0.17, 1.05) m`，`model_complete=true`�
 `/mavros/state`：如果 PX4 仍处于 `OFFBOARD`，陈旧或缺失指令仍会触发安全告警并停止
 转发；如果 PX4 已切换到 `AUTO.LOITER`、`POSCTL` 等非 OFFBOARD 模式，则静默停止，
 不会把正常的任务收尾重复报告为 `Setpoint command is ... old`。
+
+专用RViz配置 `rviz/task1_mid360.rviz` 使用 `camera_init` 作为Fixed Frame，并默认显示
+`/cloud_registered`、累计点云和PX4轨迹。此前使用SUPER的 `top_down.rviz` 时Fixed
+Frame为 `world`，而仿真没有发布 `world -> camera_init` TF，因此话题虽为10 Hz也可能
+完全不可见。传感器级隔离测试中，Gazebo原始点云稳定为10 Hz、每帧11520个射线采样；
+去掉最小量程和最大量程无效点后，注册点云约为每帧6540个有效点，frame为
+`camera_init`。修改启动文件后必须完整停止并重新启动旧仿真，运行中的Gazebo不会热加载
+新机体模型。
 
 #### 任务一算法闭环仿真（建议先运行）
 

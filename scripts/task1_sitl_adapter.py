@@ -35,6 +35,9 @@ class Task1SitlAdapter:
             2.0, float(rospy.get_param("~auto_enable_delay", 8.0))
         )
         self.allow_auto_arm = bool(rospy.get_param("~allow_auto_arm", True))
+        self.publish_analytic_cloud = bool(
+            rospy.get_param("~publish_analytic_cloud", True)
+        )
         self.arm_delay = max(1.0, float(rospy.get_param("~arm_delay", 4.0)))
         self.task_channel_index = int(rospy.get_param("~task_channel_index", 5))
         self.auto_channel_index = int(rospy.get_param("~auto_channel_index", 6))
@@ -44,17 +47,22 @@ class Task1SitlAdapter:
         self._state = State()
         self._start_time = rospy.Time.now()
         self._last_arm_request = rospy.Time(0)
-        self._environment = self._build_environment()
+        self._environment = (
+            self._build_environment() if self.publish_analytic_cloud else []
+        )
         self._path = Path()
         self._path.header.frame_id = self.world_frame
 
         self.odom_pub = rospy.Publisher("/Odometry", Odometry, queue_size=10)
-        self.cloud_pub = rospy.Publisher(
-            "/cloud_registered", PointCloud2, queue_size=2
-        )
-        self.global_cloud_pub = rospy.Publisher(
-            "/mine_uav/sitl/global_cloud", PointCloud2, queue_size=1, latch=True
-        )
+        self.cloud_pub = None
+        self.global_cloud_pub = None
+        if self.publish_analytic_cloud:
+            self.cloud_pub = rospy.Publisher(
+                "/cloud_registered", PointCloud2, queue_size=2
+            )
+            self.global_cloud_pub = rospy.Publisher(
+                "/mine_uav/sitl/global_cloud", PointCloud2, queue_size=1, latch=True
+            )
         self.path_pub = rospy.Publisher(
             "/mine_uav/sitl/px4_path", Path, queue_size=1, latch=True
         )
@@ -137,20 +145,20 @@ class Task1SitlAdapter:
         px = odom.pose.pose.position.x
         py = odom.pose.pose.position.y
         pz = odom.pose.pose.position.z
-        range_squared = self.sensor_range * self.sensor_range
-        visible = [
-            point
-            for point in self._environment
-            if (point[0] - px) ** 2
-            + (point[1] - py) ** 2
-            + (point[2] - pz) ** 2
-            <= range_squared
-        ]
-
         header = odom.header
-        cloud = point_cloud2.create_cloud_xyz32(header, visible)
         self.odom_pub.publish(odom)
-        self.cloud_pub.publish(cloud)
+        if self.publish_analytic_cloud:
+            range_squared = self.sensor_range * self.sensor_range
+            visible = [
+                point
+                for point in self._environment
+                if (point[0] - px) ** 2
+                + (point[1] - py) ** 2
+                + (point[2] - pz) ** 2
+                <= range_squared
+            ]
+            cloud = point_cloud2.create_cloud_xyz32(header, visible)
+            self.cloud_pub.publish(cloud)
 
         pose = odom.pose.pose
         if not self._path.poses or self._path_distance_from_last(pose) >= 0.15:
@@ -224,9 +232,10 @@ class Task1SitlAdapter:
         header = Odometry().header
         header.stamp = stamp
         header.frame_id = self.world_frame
-        self.global_cloud_pub.publish(
-            point_cloud2.create_cloud_xyz32(header, self._environment)
-        )
+        if self.publish_analytic_cloud:
+            self.global_cloud_pub.publish(
+                point_cloud2.create_cloud_xyz32(header, self._environment)
+            )
 
 
 if __name__ == "__main__":

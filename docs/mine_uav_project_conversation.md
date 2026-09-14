@@ -1499,3 +1499,28 @@ rostopic echo /mine_uav/mission/goaf_enable
 - 最终PX4局部位置约为 `(-0.30, 0.09, 0.97) m`，已回到入口附近并保持悬停。
 
 用户若要观察完整运动过程，需要保留端口11312的roscore，停止当前launch后重新运行 `task1_px4_sitl.launch gui:=true rviz:=true`；在RViz中重点显示当前点云、累计点云、frontier标记和PX4轨迹。
+
+## 第57轮：加入随无人机运动的Gazebo MID360风格三维雷达
+
+用户反馈RViz没有看到点云，并要求把雷达模块加入仿真。检查确认旧 `/cloud_registered` 实际稳定为10 Hz且frame为 `camera_init`，但旧RViz配置的Fixed Frame为 `world`，不存在对应TF，所以点云可能完全不可见；同时旧闭环点云是解析环境生成，并非Gazebo机载传感器。
+
+### 新增传感器与数据链
+
+- 新增 `models/iris_mid360/iris_mid360.sdf`：在PX4 Iris顶部通过固定关节安装MID360风格Gazebo Ray传感器，水平360线、垂直32线、10 Hz、30 m量程、2 cm高斯噪声。
+- 原始雷达输出 `/mine_uav/sitl/mid360/points`，类型为Gazebo block laser使用的 `sensor_msgs/PointCloud`，frame为 `mid360_link`。
+- 新增 `gazebo_mid360_fastlio_adapter.py`，根据 `/Odometry` 的PX4位置和姿态以及0.14 m安装偏移，把机体系原始点云注册到 `camera_init`，输出Fast-LIO2兼容的 `/cloud_registered`（`PointCloud2`）。
+- 适配器按0.2 m体素累计 `/mine_uav/sitl/global_cloud`，过滤0.3 m以内近场点和29.5 m以外无回波/最大量程点。
+- 旧 `task1_sitl_adapter.py` 在完整SITL中关闭解析点云，只保留Fast-LIO2风格里程计、轨迹、RC开关模拟和SITL自动解锁功能，避免同一话题存在两个有效点云源。
+
+### RViz与启动文件
+
+- `task1_px4_sitl.launch` 默认加载新的Iris MID360 SDF、注册适配节点和专用 `rviz/task1_mid360.rviz`。
+- 专用RViz的Fixed Frame为 `camera_init`，默认显示注册当前帧点云、累计点云、PX4路径和frontier，修复旧 `world` 固定帧造成的不可见问题。
+- 该雷达层模拟真实几何遮挡、视场、量程和噪声，但不模拟Livox UDP包、MID360非重复扫描时序，也没有运行真实Fast-LIO2 EKF。
+
+### 隔离验证
+
+- 模型通过SDF解析检查，`mine_uav_control`编译通过。
+- 在独立ROS Master 11314和Gazebo Master 11346中成功生成带雷达Iris；原始点云稳定10 Hz，每帧11520个射线点。
+- 修正Gazebo block laser原始消息为 `sensor_msgs/PointCloud` 后，注册点云稳定约10 Hz，frame=`camera_init`；量程过滤后单帧约6540个有效点，累计地图正常增长。
+- 用户当前11312仍运行旧Gazebo实例；机体传感器不能热加载，需要停止旧launch并重新启动后才能进行新的完整PX4闭环回归。

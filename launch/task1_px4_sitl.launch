@@ -5,11 +5,14 @@
   <arg name="rviz" default="false"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
+  <arg name="vehicle_sdf"
+       default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
 
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="interactive" value="false"/>
     <arg name="vehicle" value="iris"/>
+    <arg name="sdf" value="$(arg vehicle_sdf)"/>
     <arg name="world" value="$(arg world)"/>
     <arg name="x" value="0"/>
     <arg name="y" value="0"/>
@@ -22,7 +25,20 @@
         name="task1_sitl_adapter" output="screen" required="true">
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <param name="sensor_range" value="10.0"/>
+    <param name="publish_analytic_cloud" value="false"/>
     <param name="auto_enable_delay" value="8.0"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
+        name="gazebo_mid360_fastlio_adapter" output="screen" required="true">
+    <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
+    <param name="odom_topic" value="/Odometry"/>
+    <param name="output_topic" value="/cloud_registered"/>
+    <param name="world_frame" value="camera_init"/>
+    <rosparam param="sensor_offset">[0.0, 0.0, 0.14]</rosparam>
+    <param name="min_range" value="0.30"/>
+    <param name="max_range" value="29.5"/>
+    <param name="voxel_size" value="0.20"/>
   </node>
 
   <node pkg="mine_uav_control" type="mission_scheduler"
@@ -58,6 +74,6 @@
 
   <group if="$(arg rviz)">
     <node pkg="rviz" type="rviz" name="task1_sitl_rviz"
-          args="-d $(find perfect_drone_sim)/rviz/top_down.rviz" output="log"/>
+          args="-d $(find mine_uav_control)/rviz/task1_mid360.rviz" output="log"/>
   </group>
 </launch>
