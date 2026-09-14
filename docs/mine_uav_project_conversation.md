@@ -1672,3 +1672,23 @@ Gazebo世界和SITL启动参数。
 优于逐frontier到点停顿模式。日志中仍存在SUPER备份轨迹/指数轨迹优化失败后快速重规划
 的警告，虽然本轮未造成停飞，后续仍需量化重规划失败率并联合调整地图膨胀、优化器和
 PX4跟踪参数。真机必须从较低速度和更大安全裕量开始逐级验证，不能直接照搬SITL速度。
+
+## 第67轮：复杂采空区完整仿真操作步骤
+
+用户要求给出当前任务一仿真的具体启动步骤。推荐使用独立ROS Master端口11312，避免
+仿真MAVROS与默认11311端口上可能存在的真机节点串线。操作分为三个终端：终端一运行
+`roscore -p 11312`；终端二设置相同的`ROS_MASTER_URI`，加载ROS、SUPER工作空间和
+PX4 Gazebo Classic环境脚本，然后启动`task1_px4_sitl.launch`并选择
+`goaf_complex.world`、34 m探索半径、Gazebo GUI和RViz；终端三加载相同环境后查看
+PX4状态、决策器状态、三面墙覆盖率、目标、点云频率和桥接状态。
+
+必须source具体文件
+`/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash`，不能source
+`gazebo-classic/`目录，也不能把`setup_gazebo.bash`当作已安装的全局命令直接执行。
+启动文件会自动运行PX4 SITL、Gazebo MID360风格传感器、点云注册适配器、任务调度器、
+自主决策器、SUPER、MAVROS和PX4指令桥。仿真RC适配器会自动允许任务一、解锁并请求
+OFFBOARD，不需要手工发送目标或模式命令。
+
+成功现象依次为点云出现、`WAIT_DATA`、`EXPLORING`、PX4进入`OFFBOARD`、前向连续飞行、
+`APPROACHING_END_WALL`、`MODEL_COMPLETE`、`RETURNING`、`COMPLETE`，最后PX4进入
+`AUTO.LOITER`。结束时先在主launch终端按Ctrl+C，等待PX4和Gazebo退出，再停止roscore。
