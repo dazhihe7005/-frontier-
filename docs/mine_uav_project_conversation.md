@@ -1524,3 +1524,9 @@ rostopic echo /mine_uav/mission/goaf_enable
 - 在独立ROS Master 11314和Gazebo Master 11346中成功生成带雷达Iris；原始点云稳定10 Hz，每帧11520个射线点。
 - 修正Gazebo block laser原始消息为 `sensor_msgs/PointCloud` 后，注册点云稳定约10 Hz，frame=`camera_init`；量程过滤后单帧约6540个有效点，累计地图正常增长。
 - 用户当前11312仍运行旧Gazebo实例；机体传感器不能热加载，需要停止旧launch并重新启动后才能进行新的完整PX4闭环回归。
+
+## 第58轮：按5h限额要求优先同步GitHub
+
+用户提醒：当5h token限额接近耗尽时，必须至少提前2%整理并上传尚未同步的项目内容。本轮立即暂停继续仿真操作，检查到GitHub本地仓库比远端领先1个提交，包含MID360 Gazebo模型、注册适配器、RViz配置、启动文件、README和前序对话记录。
+
+已通过SSH 443重试推送并确认 `origin/main` 与本地一致，最新提交为 `aa6bf94 feat: add Gazebo MID360 lidar to task1 SITL`。本轮后续工作在仓库安全同步完成的基础上继续。
