@@ -1692,3 +1692,13 @@ OFFBOARD，不需要手工发送目标或模式命令。
 成功现象依次为点云出现、`WAIT_DATA`、`EXPLORING`、PX4进入`OFFBOARD`、前向连续飞行、
 `APPROACHING_END_WALL`、`MODEL_COMPLETE`、`RETURNING`、`COMPLETE`，最后PX4进入
 `AUTO.LOITER`。结束时先在主launch终端按Ctrl+C，等待PX4和Gazebo退出，再停止roscore。
+
+## 第68轮：复用11312上的现有ROS Master
+
+用户执行`roscore -p 11312`时收到“another roscore/master is already running”。只读检查
+确认11312端口已有健康的`roscore`（PID 15490）和`rosmaster`（PID 15519）监听，因此
+不应重复启动第二个Master。Master中仅有`/gazebo_gui`和一个`/rostopic_*`旧注册，实际
+进程均已不存在且节点连接被拒绝；已使用`rosnode cleanup`只清理这两个失效注册，没有
+停止现有Master。用户可关闭本次报错终端，直接从仿真启动步骤的终端二继续，并统一设置
+`ROS_MASTER_URI=http://127.0.0.1:11312`。`.ros/log`超过1 GB只是磁盘占用警告，与本次
+Master冲突无关；本轮没有删除历史日志。
