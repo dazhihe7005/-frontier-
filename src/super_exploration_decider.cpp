@@ -1,7 +1,10 @@
 #include "mine_uav_control/super_exploration_decider.hpp"
 
 #include <algorithm>
+#include <iomanip>
 #include <limits>
+#include <map>
+#include <set>
 #include <sstream>
 
 #include <boost/bind/bind.hpp>
@@ -71,6 +74,10 @@ SuperExplorationDecider::SuperExplorationDecider(
   finished_publisher_ = nh_.advertise<std_msgs::Bool>(finished_topic_, 1, true);
   returning_publisher_ =
       nh_.advertise<std_msgs::Bool>(returning_topic_, 1, true);
+  model_complete_publisher_ =
+      nh_.advertise<std_msgs::Bool>(model_complete_topic_, 1, true);
+  coverage_status_publisher_ =
+      nh_.advertise<std_msgs::String>(coverage_status_topic_, 1, true);
   visualization_publisher_ =
       nh_.advertise<visualization_msgs::MarkerArray>(visualization_topic_, 1);
 
@@ -96,6 +103,7 @@ SuperExplorationDecider::SuperExplorationDecider(
   false_msg.data = false;
   finished_publisher_.publish(false_msg);
   returning_publisher_.publish(false_msg);
+  model_complete_publisher_.publish(false_msg);
   publishStatus("WAIT_DATA", "waiting for synchronized Fast-LIO2 data");
 }
 
@@ -116,6 +124,10 @@ bool SuperExplorationDecider::loadParameters() {
                     std::string("/mine_uav/exploration/finished"));
   private_nh_.param("returning_topic", returning_topic_,
                     std::string("/mine_uav/exploration/returning"));
+  private_nh_.param("model_complete_topic", model_complete_topic_,
+                    std::string("/mine_uav/exploration/model_complete"));
+  private_nh_.param("coverage_status_topic", coverage_status_topic_,
+                    std::string("/mine_uav/exploration/model_coverage"));
   private_nh_.param("visualization_topic", visualization_topic_,
                     std::string("/mine_uav/exploration/frontiers"));
 
@@ -174,12 +186,45 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("directional_floor_exclusion",
                     directional_floor_exclusion_,
                     directional_floor_exclusion_);
+  private_nh_.param("wall_coverage_bin_size", wall_coverage_bin_size_,
+                    wall_coverage_bin_size_);
+  private_nh_.param("wall_coverage_min_depth", wall_coverage_min_depth_,
+                    wall_coverage_min_depth_);
+  private_nh_.param("wall_coverage_min_ratio", wall_coverage_min_ratio_,
+                    wall_coverage_min_ratio_);
+  private_nh_.param("wall_coverage_side_min_distance",
+                    wall_coverage_side_min_distance_,
+                    wall_coverage_side_min_distance_);
+  private_nh_.param("wall_coverage_side_max_distance",
+                    wall_coverage_side_max_distance_,
+                    wall_coverage_side_max_distance_);
+  private_nh_.param("wall_coverage_min_height", wall_coverage_min_height_,
+                    wall_coverage_min_height_);
+  private_nh_.param("wall_coverage_max_height", wall_coverage_max_height_,
+                    wall_coverage_max_height_);
+  private_nh_.param("wall_coverage_end_min_span",
+                    wall_coverage_end_min_span_,
+                    wall_coverage_end_min_span_);
+  private_nh_.param("wall_coverage_end_center_half_width",
+                    wall_coverage_end_center_half_width_,
+                    wall_coverage_end_center_half_width_);
+  private_nh_.param("wall_coverage_end_approach_distance",
+                    wall_coverage_end_approach_distance_,
+                    wall_coverage_end_approach_distance_);
+  private_nh_.param("wall_coverage_end_standoff_distance",
+                    wall_coverage_end_standoff_distance_,
+                    wall_coverage_end_standoff_distance_);
   private_nh_.param("side_wall_missing_confirm_frames",
                     side_wall_missing_confirm_frames_,
                     side_wall_missing_confirm_frames_);
   private_nh_.param("front_obstacle_confirm_frames",
                     front_obstacle_confirm_frames_,
                     front_obstacle_confirm_frames_);
+  private_nh_.param("wall_coverage_max_gap_bins",
+                    wall_coverage_max_gap_bins_,
+                    wall_coverage_max_gap_bins_);
+  private_nh_.param("three_wall_confirm_cycles", three_wall_confirm_cycles_,
+                    three_wall_confirm_cycles_);
   private_nh_.param("sync_queue_size", sync_queue_size_, sync_queue_size_);
   private_nh_.param("max_points_per_cloud", max_points_per_cloud_,
                     max_points_per_cloud_);
@@ -190,6 +235,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("raycast_enable", raycast_enable_, raycast_enable_);
   private_nh_.param("strict_cloud_frame", strict_cloud_frame_,
                     strict_cloud_frame_);
+  private_nh_.param("require_three_wall_completion",
+                    require_three_wall_completion_,
+                    require_three_wall_completion_);
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
@@ -214,6 +262,30 @@ bool SuperExplorationDecider::loadParameters() {
       directional_vertical_tolerance_ <= 0.0 ||
       !std::isfinite(directional_floor_exclusion_) ||
       directional_floor_exclusion_ < 0.0 ||
+      !std::isfinite(wall_coverage_bin_size_) ||
+      wall_coverage_bin_size_ <= 0.0 ||
+      !std::isfinite(wall_coverage_min_depth_) ||
+      wall_coverage_min_depth_ <= wall_coverage_bin_size_ ||
+      !std::isfinite(wall_coverage_min_ratio_) ||
+      wall_coverage_min_ratio_ <= 0.0 || wall_coverage_min_ratio_ > 1.0 ||
+      !std::isfinite(wall_coverage_side_min_distance_) ||
+      wall_coverage_side_min_distance_ <= 0.0 ||
+      !std::isfinite(wall_coverage_side_max_distance_) ||
+      wall_coverage_side_max_distance_ <=
+          wall_coverage_side_min_distance_ ||
+      !std::isfinite(wall_coverage_min_height_) ||
+      wall_coverage_min_height_ < 0.0 ||
+      !std::isfinite(wall_coverage_max_height_) ||
+      wall_coverage_max_height_ <= wall_coverage_min_height_ ||
+      !std::isfinite(wall_coverage_end_min_span_) ||
+      wall_coverage_end_min_span_ <= wall_coverage_bin_size_ ||
+      !std::isfinite(wall_coverage_end_center_half_width_) ||
+      wall_coverage_end_center_half_width_ <= 0.0 ||
+      !std::isfinite(wall_coverage_end_approach_distance_) ||
+      wall_coverage_end_approach_distance_ <= 0.0 ||
+      !std::isfinite(wall_coverage_end_standoff_distance_) ||
+      wall_coverage_end_standoff_distance_ <= vehicle_radius_ ||
+      wall_coverage_end_standoff_distance_ >= wall_coverage_min_depth_ ||
       !std::isfinite(min_observation_height_above_home_) ||
       !std::isfinite(max_observation_height_above_home_) ||
       min_observation_height_above_home_ < 0.0 ||
@@ -221,6 +293,7 @@ bool SuperExplorationDecider::loadParameters() {
           min_observation_height_above_home_ ||
       side_wall_missing_confirm_frames_ < 1 ||
       front_obstacle_confirm_frames_ < 1 ||
+      wall_coverage_max_gap_bins_ < 0 || three_wall_confirm_cycles_ < 1 ||
       sync_queue_size_ < 2 || max_points_per_cloud_ < 1) {
     ROS_FATAL("Invalid exploration decider parameters");
     return false;
@@ -260,10 +333,12 @@ void SuperExplorationDecider::synchronizedCallback(
   if (!have_home_) {
     home_pose_ = current_pose_;
     home_pose_.header.frame_id = world_frame_;
+    mission_heading_yaw_ = poseYaw(home_pose_.pose);
     have_home_ = true;
-    ROS_INFO("Exploration home captured at %.2f %.2f %.2f",
+    ROS_INFO("Exploration home captured at %.2f %.2f %.2f, heading %.1f deg",
              home_pose_.pose.position.x, home_pose_.pose.position.y,
-             home_pose_.pose.position.z);
+             home_pose_.pose.position.z,
+             mission_heading_yaw_ * 180.0 / M_PI);
   }
   updateMap(*cloud, current_pose_);
   updateDirectionalEvidence(*cloud, current_pose_);
@@ -389,7 +464,10 @@ void SuperExplorationDecider::updateDirectionalEvidence(
     return;
   }
 
-  const double yaw = poseYaw(pose.pose);
+  // Directional mission semantics stay tied to the entry heading. SUPER is
+  // free to rotate the vehicle while tracking, but that must not rotate the
+  // definition of "deeper into the mine" or swap the three structural walls.
+  const double yaw = have_home_ ? mission_heading_yaw_ : poseYaw(pose.pose);
   const double side_half_angle = side_wall_sector_deg_ * M_PI / 360.0;
   // Obstacle evidence needs a much narrower cone than frontier selection.
   // Reusing the broad candidate cone makes oblique returns from the side
@@ -449,6 +527,153 @@ void SuperExplorationDecider::updateDirectionalEvidence(
   } else {
     front_obstacle_streak_ = 0;
   }
+}
+
+SuperExplorationDecider::ThreeWallCoverage
+SuperExplorationDecider::evaluateThreeWallCoverage() const {
+  ThreeWallCoverage result;
+  if (!have_home_) {
+    return result;
+  }
+
+  struct EndPlaneEvidence {
+    std::set<int> lateral_bins;
+    bool center_seen{false};
+  };
+
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+  std::set<int> left_bins;
+  std::set<int> right_bins;
+  std::map<int, EndPlaneEvidence> end_planes;
+
+  for (const auto& entry : voxels_) {
+    if (entry.second != kOccupied) {
+      continue;
+    }
+    const geometry_msgs::Point point = keyToPoint(entry.first);
+    const double dx = point.x - home_pose_.pose.position.x;
+    const double dy = point.y - home_pose_.pose.position.y;
+    const double forward = c * dx + s * dy;
+    const double lateral = -s * dx + c * dy;
+    const double height = point.z - home_pose_.pose.position.z;
+    if (forward < 0.0 || height < wall_coverage_min_height_ ||
+        height > wall_coverage_max_height_) {
+      continue;
+    }
+
+    const int forward_bin =
+        static_cast<int>(std::floor(forward / wall_coverage_bin_size_));
+    const double lateral_abs = std::abs(lateral);
+    if (lateral >= wall_coverage_side_min_distance_ &&
+        lateral <= wall_coverage_side_max_distance_) {
+      left_bins.insert(forward_bin);
+    } else if (lateral <= -wall_coverage_side_min_distance_ &&
+               lateral >= -wall_coverage_side_max_distance_) {
+      right_bins.insert(forward_bin);
+    }
+
+    if (forward < wall_coverage_min_depth_ ||
+        lateral_abs > wall_coverage_side_max_distance_) {
+      continue;
+    }
+    EndPlaneEvidence& plane = end_planes[forward_bin];
+    plane.lateral_bins.insert(
+        static_cast<int>(std::floor(lateral / wall_coverage_bin_size_)));
+    if (lateral_abs <= wall_coverage_end_center_half_width_) {
+      plane.center_seen = true;
+    }
+  }
+
+  int end_bin = -1;
+  for (const auto& candidate : end_planes) {
+    if (!candidate.second.center_seen ||
+        candidate.second.lateral_bins.empty()) {
+      continue;
+    }
+    const int first_lateral_bin = *candidate.second.lateral_bins.begin();
+    const int last_lateral_bin = *candidate.second.lateral_bins.rbegin();
+    const double span =
+        (last_lateral_bin - first_lateral_bin + 1) *
+        wall_coverage_bin_size_;
+    if (span < wall_coverage_end_min_span_) {
+      continue;
+    }
+    if (candidate.first > end_bin) {
+      end_bin = candidate.first;
+      result.end_lateral_span = span;
+    }
+  }
+
+  const double current_dx =
+      current_pose_.pose.position.x - home_pose_.pose.position.x;
+  const double current_dy =
+      current_pose_.pose.position.y - home_pose_.pose.position.y;
+  result.vehicle_progress = c * current_dx + s * current_dy;
+  if (end_bin < 1) {
+    return result;
+  }
+
+  result.end_wall_found = true;
+  result.end_depth = (static_cast<double>(end_bin) + 0.5) *
+                     wall_coverage_bin_size_;
+  result.expected_side_bins = end_bin;
+
+  int left_count = 0;
+  int right_count = 0;
+  int left_gap = 0;
+  int right_gap = 0;
+  int left_max_gap = 0;
+  int right_max_gap = 0;
+  for (int bin = 0; bin < end_bin; ++bin) {
+    if (left_bins.count(bin) > 0) {
+      ++left_count;
+      left_gap = 0;
+    } else {
+      left_max_gap = std::max(left_max_gap, ++left_gap);
+    }
+    if (right_bins.count(bin) > 0) {
+      ++right_count;
+      right_gap = 0;
+    } else {
+      right_max_gap = std::max(right_max_gap, ++right_gap);
+    }
+  }
+  result.left_ratio = static_cast<double>(left_count) / end_bin;
+  result.right_ratio = static_cast<double>(right_count) / end_bin;
+  result.left_max_gap_bins = left_max_gap;
+  result.right_max_gap_bins = right_max_gap;
+
+  const bool approached_end =
+      result.end_depth - result.vehicle_progress <=
+      wall_coverage_end_approach_distance_;
+  result.complete = result.end_depth >= wall_coverage_min_depth_ &&
+                    approached_end &&
+                    result.left_ratio >= wall_coverage_min_ratio_ &&
+                    result.right_ratio >= wall_coverage_min_ratio_ &&
+                    result.left_max_gap_bins <= wall_coverage_max_gap_bins_ &&
+                    result.right_max_gap_bins <= wall_coverage_max_gap_bins_;
+  return result;
+}
+
+void SuperExplorationDecider::publishCoverageStatus(
+    const ThreeWallCoverage& coverage) {
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(2)
+         << "three_wall=" << (coverage.complete ? "ready" : "incomplete")
+         << " end_seen=" << (coverage.end_wall_found ? "true" : "false")
+         << " end_depth=" << coverage.end_depth
+         << " progress=" << coverage.vehicle_progress
+         << " left=" << coverage.left_ratio
+         << " right=" << coverage.right_ratio
+         << " end_span=" << coverage.end_lateral_span
+         << " gaps=" << coverage.left_max_gap_bins << "/"
+         << coverage.right_max_gap_bins
+         << " confirm=" << three_wall_complete_streak_ << "/"
+         << three_wall_confirm_cycles_;
+  std_msgs::String message;
+  message.data = stream.str();
+  coverage_status_publisher_.publish(message);
 }
 
 void SuperExplorationDecider::pruneMap() {
@@ -588,7 +813,7 @@ bool SuperExplorationDecider::isForwardCandidate(
     return false;
   }
   const double relative_angle = normalizeAngle(
-      std::atan2(dy, dx) - poseYaw(current_pose_.pose));
+      std::atan2(dy, dx) - mission_heading_yaw_);
   return std::abs(relative_angle) <= forward_sector_deg_ * M_PI / 360.0 &&
          std::cos(relative_angle) > 0.0;
 }
@@ -604,7 +829,7 @@ double SuperExplorationDecider::candidateHeadingAlignment(
     return -1.0;
   }
   const double relative_angle = normalizeAngle(
-      std::atan2(dy, dx) - poseYaw(current_pose_.pose));
+      std::atan2(dy, dx) - mission_heading_yaw_);
   return std::cos(relative_angle);
 }
 
@@ -726,6 +951,45 @@ void SuperExplorationDecider::publishGoal(
            current_goal_.pose.position.z);
 }
 
+bool SuperExplorationDecider::publishEndApproachGoal(
+    const ThreeWallCoverage& coverage) {
+  const bool side_walls_continuous =
+      coverage.left_ratio >= wall_coverage_min_ratio_ &&
+      coverage.right_ratio >= wall_coverage_min_ratio_ &&
+      coverage.left_max_gap_bins <= wall_coverage_max_gap_bins_ &&
+      coverage.right_max_gap_bins <= wall_coverage_max_gap_bins_;
+  if (!coverage.end_wall_found || !side_walls_continuous) {
+    return false;
+  }
+
+  const double target_forward =
+      coverage.end_depth - wall_coverage_end_standoff_distance_;
+  if (target_forward - coverage.vehicle_progress < min_goal_distance_) {
+    return false;
+  }
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+  geometry_msgs::PoseStamped goal;
+  goal.header.frame_id = world_frame_;
+  goal.pose.position.x =
+      home_pose_.pose.position.x + c * target_forward;
+  goal.pose.position.y =
+      home_pose_.pose.position.y + s * target_forward;
+  goal.pose.position.z = home_pose_.pose.position.z +
+      0.5 * (min_observation_height_above_home_ +
+             max_observation_height_above_home_);
+  goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
+  if (!isClearForVehicle(positionToKey(goal.pose.position.x,
+                                       goal.pose.position.y,
+                                       goal.pose.position.z))) {
+    ROS_WARN_THROTTLE(2.0,
+                      "Three-wall end approach target is not collision-free");
+    return false;
+  }
+  publishGoal(goal, "three_wall_end_approach");
+  return true;
+}
+
 bool SuperExplorationDecider::selectAndPublishFrontier() {
   const auto candidates = findFrontiers();
   publishVisualization(candidates);
@@ -780,9 +1044,9 @@ bool SuperExplorationDecider::selectAndPublishFrontier() {
   last_frontier_time_ = ros::Time::now();
   geometry_msgs::PoseStamped selected_goal = selected->goal;
   if (exploration_phase_ == ExplorationPhase::kForwardPriority) {
-    // Keep the commanded yaw aligned with the current body heading. SUPER may
+    // Keep the commanded yaw aligned with the latched entry mission heading. SUPER may
     // apply its own yaw policy, but this preserves the task-level intent.
-    selected_goal.pose.orientation = yawQuaternion(poseYaw(current_pose_.pose));
+    selected_goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
   }
   publishGoal(selected_goal, reason);
   return true;
@@ -844,6 +1108,31 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
+  const ThreeWallCoverage coverage = evaluateThreeWallCoverage();
+  const bool completion_prerequisites =
+      exploration_started_ &&
+      reached_goal_count_ >= min_goals_before_complete_ &&
+      !first_data_time_.isZero() &&
+      (ros::Time::now() - first_data_time_).toSec() >= min_data_duration_;
+  if (require_three_wall_completion_ && coverage.complete &&
+      completion_prerequisites) {
+    three_wall_complete_streak_ = std::min(
+        three_wall_complete_streak_ + 1, three_wall_confirm_cycles_);
+  } else {
+    three_wall_complete_streak_ = 0;
+  }
+  publishCoverageStatus(coverage);
+  if (require_three_wall_completion_ &&
+      three_wall_complete_streak_ >= three_wall_confirm_cycles_) {
+    std_msgs::Bool message;
+    message.data = true;
+    model_complete_publisher_.publish(message);
+    publishStatus("MODEL_COMPLETE",
+                  "continuous left, right, and end walls confirmed");
+    beginReturnHome("three-wall model complete");
+    return;
+  }
+
   const auto candidates = findFrontiers();
   publishVisualization(candidates);
   if (!candidates.empty()) {
@@ -870,20 +1159,27 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     }
   }
 
+  if (!have_active_goal_ && require_three_wall_completion_ &&
+      publishEndApproachGoal(coverage)) {
+    publishStatus("APPROACHING_END_WALL",
+                  "three-wall map seen; moving to configured stand-off");
+    return;
+  }
+
   if (!have_active_goal_ && selectAndPublishFrontier()) {
     publishStatus("EXPLORING", "new frontier goal sent to SUPER");
     return;
   }
 
-  if (exploration_started_ &&
-      reached_goal_count_ >= min_goals_before_complete_ &&
-      !first_data_time_.isZero() &&
-      (ros::Time::now() - first_data_time_).toSec() >= min_data_duration_ &&
+  if (!require_three_wall_completion_ && completion_prerequisites &&
       !last_frontier_time_.isZero() &&
       (ros::Time::now() - last_frontier_time_).toSec() >=
           no_frontier_timeout_) {
     publishStatus("MODEL_COMPLETE", "no new frontier for configured timeout");
     beginReturnHome("exploration complete");
+  } else if (require_three_wall_completion_) {
+    publishStatus("WAIT_MODEL_COVERAGE",
+                  "three continuous walls are not confirmed yet");
   } else {
     publishStatus("WAIT_FRONTIER", "no usable frontier yet");
   }
@@ -941,6 +1237,8 @@ void SuperExplorationDecider::clearMissionState() {
   have_battery_ = false;
   battery_percentage_ = -1.0;
   reached_goal_count_ = 0;
+  three_wall_complete_streak_ = 0;
+  mission_heading_yaw_ = 0.0;
   exploration_phase_ = ExplorationPhase::kForwardPriority;
   left_wall_visible_ = false;
   right_wall_visible_ = false;
@@ -953,6 +1251,7 @@ void SuperExplorationDecider::clearMissionState() {
   false_message.data = false;
   finished_publisher_.publish(false_message);
   returning_publisher_.publish(false_message);
+  model_complete_publisher_.publish(false_message);
 }
 
 bool SuperExplorationDecider::enableCallback(

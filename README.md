@@ -147,7 +147,7 @@ git apply --unidiff-zero /path/to/frontier-upload/patches/fast_lio2_sensor_resta
 
 左右墙体和前方障碍使用当前 `/cloud_registered` 的点云证据，并通过连续帧确认抑制单帧误检。地面点会通过垂直方向过滤，避免把地面误判为前方墙体。相关参数在 `config/super_exploration_decider.yaml` 中，包括前方角度、墙体量程、障碍确认帧数和机头方向权重。
 
-该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。它目前仍不是完整的“尽头识别、三面墙完整建模、原路返航”判定器；完成判据仍需后续接入全局覆盖/建模质量信息。
+该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。当前已增加以进入时机头方向为纵轴的三面墙完成判据：把左右占据墙面按纵向分箱，检查覆盖比例和最大连续缺口；尽头墙必须同时具备中部回波和足够横向跨度，并要求飞机进入设定的尽头接近距离。普通 frontier 提前消失时，会主动生成尽头墙安全停距观察点。连续多周期满足条件后才发布模型完成并返航；无 frontier 超时不再单独代表建模完成。
 
 启动：
 
@@ -172,6 +172,8 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 ```bash
 rostopic echo /mine_uav/exploration/status
+rostopic echo /mine_uav/exploration/model_coverage
+rostopic echo /mine_uav/exploration/model_complete
 rostopic echo /mine_uav/exploration/finished
 rostopic echo /mine_uav/exploration/returning
 rostopic hz /cloud_registered
@@ -251,6 +253,8 @@ roslaunch mine_uav_control task1_px4_sitl.launch gui:=true rviz:=true
 ```bash
 rostopic echo /mavros/state
 rostopic echo /mine_uav/exploration/status
+rostopic echo /mine_uav/exploration/model_coverage
+rostopic echo /mine_uav/exploration/model_complete
 rostopic echo /mine_uav/task1/command_status
 rostopic echo /goal
 rostopic hz /cloud_registered
@@ -258,15 +262,18 @@ rostopic hz /Odometry
 rostopic hz /mavros/setpoint_raw/local
 ```
 
-本次自动验收结果：任务选择后 PX4 解锁并进入 OFFBOARD，无人机沿多个观察点推进至
-采空区深处，前障碍确认后切换 frontier fallback，随后发布约 `1 m` 高的 home 返航点；
-最终位置约 `(0.13, 0.05, 1.01) m`，`finished=true`、指令桥状态为
-`TASK1_COMPLETE`，PX4 切到 `AUTO.LOITER`，之后不再发布任务 setpoint。模拟点云和
-里程计均稳定为 `10 Hz`。
+本次自动验收结果：任务选择后 PX4 解锁并进入 OFFBOARD。普通 frontier 在远距离看到
+尽头后消失时，决策器主动发布 `(19.5, 0, 1.11) m` 的尽头接近观察点；飞机推进到
+纵向 `17.89 m` 后，判定尽头深度 `22.50 m`、左右墙覆盖率 `1.00/1.00`、最大连续
+缺口 `0/0`、尽头墙横向跨度 `9.00 m`，并连续确认 `4/4` 周期。随后发布约 `1 m` 高的
+home返航点，最终位置约 `(-0.35, 0.17, 1.05) m`，`model_complete=true`、
+`finished=true`、指令桥状态为 `TASK1_COMPLETE`，PX4切到 `AUTO.LOITER`，之后不再
+发布任务setpoint。模拟点云和里程计均稳定为 `10 Hz`。
 
-当前完成判据仍是“至少到达规定数量观察点后，连续一段时间无新 frontier”的启发式
-判据，并不是用户要求的“左右墙和尽头墙三面连续覆盖”语义验收。SITL 已验证控制闭环、
-返航和退出模式，但不能替代真机外部视觉融合、安装外参、碰撞裕量和三面墙覆盖率测试。
+当前已使用“左右墙纵向连续覆盖 + 尽头墙横向覆盖 + 接近尽头 + 多周期确认”触发返航，
+旧的无 frontier 超时判据默认关闭。本判据验证的是决策器占据体素中的几何连续性，不能
+替代雷达建模模块对点云密度、配准误差、孔洞和最终模型质量的验收，也不能替代真机外部
+视觉融合、安装外参和碰撞裕量测试。
 
 #### 任务一算法闭环仿真（建议先运行）
 

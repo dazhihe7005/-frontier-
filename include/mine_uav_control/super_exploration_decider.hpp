@@ -71,6 +71,19 @@ class SuperExplorationDecider {
     int unknown_neighbors{0};
   };
 
+  struct ThreeWallCoverage {
+    bool complete{false};
+    bool end_wall_found{false};
+    double end_depth{0.0};
+    double vehicle_progress{0.0};
+    double left_ratio{0.0};
+    double right_ratio{0.0};
+    double end_lateral_span{0.0};
+    int left_max_gap_bins{0};
+    int right_max_gap_bins{0};
+    int expected_side_bins{0};
+  };
+
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
   void decisionTimerCallback(const ros::TimerEvent& event);
@@ -88,6 +101,8 @@ class SuperExplorationDecider {
                  const geometry_msgs::PoseStamped& pose);
   void updateDirectionalEvidence(const sensor_msgs::PointCloud2& cloud,
                                  const geometry_msgs::PoseStamped& pose);
+  ThreeWallCoverage evaluateThreeWallCoverage() const;
+  void publishCoverageStatus(const ThreeWallCoverage& coverage);
   void pruneMap();
   void markFree(const VoxelKey& key);
   void markOccupied(const VoxelKey& key);
@@ -98,6 +113,7 @@ class SuperExplorationDecider {
   std::vector<FrontierCandidate> findFrontiers() const;
   bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
   bool selectAndPublishFrontier();
+  bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
   bool isForwardCandidate(const FrontierCandidate& candidate) const;
   double candidateHeadingAlignment(const FrontierCandidate& candidate) const;
   const FrontierCandidate* selectForwardCandidate(
@@ -127,6 +143,8 @@ class SuperExplorationDecider {
   ros::Publisher status_publisher_;
   ros::Publisher finished_publisher_;
   ros::Publisher returning_publisher_;
+  ros::Publisher model_complete_publisher_;
+  ros::Publisher coverage_status_publisher_;
   ros::Publisher visualization_publisher_;
   ros::ServiceServer enable_service_;
   ros::ServiceServer reset_service_;
@@ -154,6 +172,9 @@ class SuperExplorationDecider {
   bool have_battery_{false};
   double battery_percentage_{-1.0};
   int reached_goal_count_{0};
+  int three_wall_complete_streak_{0};
+
+  double mission_heading_yaw_{0.0};
 
   ExplorationPhase exploration_phase_{ExplorationPhase::kForwardPriority};
   bool left_wall_visible_{false};
@@ -172,6 +193,8 @@ class SuperExplorationDecider {
   std::string status_topic_;
   std::string finished_topic_;
   std::string returning_topic_;
+  std::string model_complete_topic_;
+  std::string coverage_status_topic_;
   std::string visualization_topic_;
 
   double voxel_resolution_{0.5};
@@ -205,14 +228,28 @@ class SuperExplorationDecider {
   double front_obstacle_sector_deg_{24.0};
   double directional_vertical_tolerance_{4.0};
   double directional_floor_exclusion_{0.5};
+  double wall_coverage_bin_size_{1.0};
+  double wall_coverage_min_depth_{8.0};
+  double wall_coverage_min_ratio_{0.80};
+  double wall_coverage_side_min_distance_{2.0};
+  double wall_coverage_side_max_distance_{8.0};
+  double wall_coverage_min_height_{0.3};
+  double wall_coverage_max_height_{3.2};
+  double wall_coverage_end_min_span_{4.0};
+  double wall_coverage_end_center_half_width_{1.0};
+  double wall_coverage_end_approach_distance_{6.0};
+  double wall_coverage_end_standoff_distance_{3.0};
   int side_wall_missing_confirm_frames_{8};
   int front_obstacle_confirm_frames_{3};
+  int wall_coverage_max_gap_bins_{2};
+  int three_wall_confirm_cycles_{4};
   int sync_queue_size_{20};
   int max_points_per_cloud_{5000};
   int min_unknown_neighbors_{1};
   int min_goals_before_complete_{1};
   bool raycast_enable_{true};
   bool strict_cloud_frame_{false};
+  bool require_three_wall_completion_{true};
 };
 
 }  // namespace mine_uav_control

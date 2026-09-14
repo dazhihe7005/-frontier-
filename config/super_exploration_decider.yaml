@@ -58,10 +58,32 @@ directional_floor_exclusion: 0.5
 side_wall_missing_confirm_frames: 8
 front_obstacle_confirm_frames: 3
 
+# 采空区语义完成判据。以任务开始时的机头方向建立纵向/横向坐标，只有左右
+# 侧墙从入口到尽头连续覆盖、尽头墙横向覆盖足够且飞机已接近尽头时才允许返航。
+require_three_wall_completion: true
+wall_coverage_bin_size: 1.0
+wall_coverage_min_depth: 8.0
+wall_coverage_min_ratio: 0.80
+wall_coverage_max_gap_bins: 2
+wall_coverage_side_min_distance: 1.5
+wall_coverage_side_max_distance: 8.0
+# 排除地面和顶板，只用中间高度的占据体素判断墙面连续性。
+wall_coverage_min_height: 0.3
+wall_coverage_max_height: 3.0
+# 尽头墙必须包含中部回波并具备足够横向跨度，避免把两条侧墙误判为尽头墙。
+wall_coverage_end_min_span: 4.0
+wall_coverage_end_center_half_width: 1.0
+wall_coverage_end_approach_distance: 6.0
+# 当雷达已经看见完整尽头、普通frontier消失但飞机仍太远时，主动生成一个
+# 距尽头墙该距离的观察点，保证任务真正推进到采空区深处。
+wall_coverage_end_standoff_distance: 3.0
+three_wall_confirm_cycles: 4
+
 goal_reached_distance: 1.0
 goal_timeout: 30.0
 
-# 建模完成：至少到达一个观察点，并且连续一段时间没有新 frontier。
+# 完成前至少到达一个观察点。启用三面墙判据后，无 frontier 超时只用于状态
+# 观察，不再独立触发“建模完成”；关闭 require_three_wall_completion 才回退到旧判据。
 min_goals_before_complete: 1
 min_data_duration: 5.0
 no_frontier_timeout: 15.0
@@ -81,4 +103,6 @@ return_request_topic: "/mine_uav/exploration/return_home"
 status_topic: "/mine_uav/exploration/status"
 finished_topic: "/mine_uav/exploration/finished"
 returning_topic: "/mine_uav/exploration/returning"
+model_complete_topic: "/mine_uav/exploration/model_complete"
+coverage_status_topic: "/mine_uav/exploration/model_coverage"
 visualization_topic: "/mine_uav/exploration/frontiers"
