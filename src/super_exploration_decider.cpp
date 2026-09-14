@@ -180,6 +180,32 @@ bool SuperExplorationDecider::loadParameters() {
                     front_obstacle_range_);
   private_nh_.param("front_obstacle_sector_deg", front_obstacle_sector_deg_,
                     front_obstacle_sector_deg_);
+  private_nh_.param("front_obstacle_min_points", front_obstacle_min_points_,
+                    front_obstacle_min_points_);
+  private_nh_.param("front_obstacle_min_lateral_span",
+                    front_obstacle_min_lateral_span_,
+                    front_obstacle_min_lateral_span_);
+  private_nh_.param("front_obstacle_min_vertical_span",
+                    front_obstacle_min_vertical_span_,
+                    front_obstacle_min_vertical_span_);
+  private_nh_.param("forward_corridor_half_width",
+                    forward_corridor_half_width_,
+                    forward_corridor_half_width_);
+  private_nh_.param("forward_progress_weight", forward_progress_weight_,
+                    forward_progress_weight_);
+  private_nh_.param("forward_lateral_penalty", forward_lateral_penalty_,
+                    forward_lateral_penalty_);
+  private_nh_.param("forward_height_penalty", forward_height_penalty_,
+                    forward_height_penalty_);
+  private_nh_.param("forward_goal_handover_distance",
+                    forward_goal_handover_distance_,
+                    forward_goal_handover_distance_);
+  private_nh_.param("forward_lookahead_distance", forward_lookahead_distance_,
+                    forward_lookahead_distance_);
+  private_nh_.param("forward_lookahead_step", forward_lookahead_step_,
+                    forward_lookahead_step_);
+  private_nh_.param("cruise_height_above_home", cruise_height_above_home_,
+                    cruise_height_above_home_);
   private_nh_.param("directional_vertical_tolerance",
                     directional_vertical_tolerance_,
                     directional_vertical_tolerance_);
@@ -258,6 +284,28 @@ bool SuperExplorationDecider::loadParameters() {
       !std::isfinite(front_obstacle_sector_deg_) ||
       front_obstacle_sector_deg_ <= 0.0 ||
       front_obstacle_sector_deg_ >= 180.0 ||
+      front_obstacle_min_points_ < 1 ||
+      !std::isfinite(front_obstacle_min_lateral_span_) ||
+      front_obstacle_min_lateral_span_ <= 0.0 ||
+      !std::isfinite(front_obstacle_min_vertical_span_) ||
+      front_obstacle_min_vertical_span_ <= 0.0 ||
+      !std::isfinite(forward_corridor_half_width_) ||
+      forward_corridor_half_width_ <= vehicle_radius_ ||
+      !std::isfinite(forward_progress_weight_) ||
+      forward_progress_weight_ <= 0.0 ||
+      !std::isfinite(forward_lateral_penalty_) ||
+      forward_lateral_penalty_ < 0.0 ||
+      !std::isfinite(forward_height_penalty_) ||
+      forward_height_penalty_ < 0.0 ||
+      !std::isfinite(forward_goal_handover_distance_) ||
+      forward_goal_handover_distance_ <= goal_reached_distance_ ||
+      !std::isfinite(forward_lookahead_distance_) ||
+      forward_lookahead_distance_ <= forward_goal_handover_distance_ ||
+      !std::isfinite(forward_lookahead_step_) ||
+      forward_lookahead_step_ <= 0.0 ||
+      !std::isfinite(cruise_height_above_home_) ||
+      cruise_height_above_home_ < min_observation_height_above_home_ ||
+      cruise_height_above_home_ > max_observation_height_above_home_ ||
       !std::isfinite(directional_vertical_tolerance_) ||
       directional_vertical_tolerance_ <= 0.0 ||
       !std::isfinite(directional_floor_exclusion_) ||
@@ -385,6 +433,11 @@ bool SuperExplorationDecider::isOccupied(const VoxelKey& key) const {
   return it != voxels_.end() && it->second == kOccupied;
 }
 
+bool SuperExplorationDecider::isKnownFree(const VoxelKey& key) const {
+  const auto it = voxels_.find(key);
+  return it != voxels_.end() && it->second == kFree;
+}
+
 void SuperExplorationDecider::updateMap(
     const sensor_msgs::PointCloud2& cloud,
     const geometry_msgs::PoseStamped& pose) {
@@ -476,7 +529,11 @@ void SuperExplorationDecider::updateDirectionalEvidence(
       front_obstacle_sector_deg_ * M_PI / 360.0;
   bool left_seen = false;
   bool right_seen = false;
-  bool front_seen = false;
+  int front_point_count = 0;
+  double front_min_lateral = std::numeric_limits<double>::infinity();
+  double front_max_lateral = -std::numeric_limits<double>::infinity();
+  double front_min_z = std::numeric_limits<double>::infinity();
+  double front_max_z = -std::numeric_limits<double>::infinity();
 
   for (const auto& point : input) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
@@ -505,11 +562,29 @@ void SuperExplorationDecider::updateDirectionalEvidence(
     }
     if (horizontal_range <= front_obstacle_range_ &&
         std::abs(relative_angle) <= front_half_angle) {
-      front_seen = true;
+      const double lateral = -std::sin(yaw) * dx + std::cos(yaw) * dy;
+      ++front_point_count;
+      front_min_lateral = std::min(front_min_lateral, lateral);
+      front_max_lateral = std::max(front_max_lateral, lateral);
+      front_min_z = std::min(front_min_z, static_cast<double>(point.z));
+      front_max_z = std::max(front_max_z, static_cast<double>(point.z));
     }
-    if (left_seen && right_seen && front_seen) {
-      break;
-    }
+  }
+
+  const double front_lateral_span =
+      front_point_count > 0 ? front_max_lateral - front_min_lateral : 0.0;
+  const double front_vertical_span =
+      front_point_count > 0 ? front_max_z - front_min_z : 0.0;
+  const bool front_seen =
+      front_point_count >= front_obstacle_min_points_ &&
+      front_lateral_span >= front_obstacle_min_lateral_span_ &&
+      front_vertical_span >= front_obstacle_min_vertical_span_;
+  if (front_point_count > 0 && !front_seen) {
+    ROS_DEBUG_THROTTLE(
+        1.0,
+        "Front returns rejected as a wall: points=%d lateral_span=%.2f "
+        "vertical_span=%.2f",
+        front_point_count, front_lateral_span, front_vertical_span);
   }
 
   left_wall_visible_ = left_seen;
@@ -833,18 +908,58 @@ double SuperExplorationDecider::candidateHeadingAlignment(
   return std::cos(relative_angle);
 }
 
+double SuperExplorationDecider::candidateMissionProgress(
+    const FrontierCandidate& candidate) const {
+  const double dx = candidate.goal.pose.position.x - home_pose_.pose.position.x;
+  const double dy = candidate.goal.pose.position.y - home_pose_.pose.position.y;
+  return std::cos(mission_heading_yaw_) * dx +
+         std::sin(mission_heading_yaw_) * dy;
+}
+
+double SuperExplorationDecider::candidateMissionLateral(
+    const FrontierCandidate& candidate) const {
+  const double dx = candidate.goal.pose.position.x - home_pose_.pose.position.x;
+  const double dy = candidate.goal.pose.position.y - home_pose_.pose.position.y;
+  return -std::sin(mission_heading_yaw_) * dx +
+         std::cos(mission_heading_yaw_) * dy;
+}
+
 const SuperExplorationDecider::FrontierCandidate*
 SuperExplorationDecider::selectForwardCandidate(
     const std::vector<FrontierCandidate>& candidates) const {
   const FrontierCandidate* best = nullptr;
   double best_score = -std::numeric_limits<double>::infinity();
+  const double current_dx =
+      current_pose_.pose.position.x - home_pose_.pose.position.x;
+  const double current_dy =
+      current_pose_.pose.position.y - home_pose_.pose.position.y;
+  const double current_progress = std::cos(mission_heading_yaw_) * current_dx +
+                                  std::sin(mission_heading_yaw_) * current_dy;
+  const double preferred_height =
+      home_pose_.pose.position.z +
+      0.5 * (min_observation_height_above_home_ +
+             max_observation_height_above_home_);
+  const bool side_structure_visible =
+      left_wall_visible_ || right_wall_visible_;
   for (const auto& candidate : candidates) {
     if (!isForwardCandidate(candidate)) {
       continue;
     }
-    const double score = candidate.score +
-                         heading_priority_weight_ *
-                             candidateHeadingAlignment(candidate);
+    const double progress = candidateMissionProgress(candidate);
+    const double progress_ahead = progress - current_progress;
+    const double lateral = std::abs(candidateMissionLateral(candidate));
+    if (progress_ahead < min_goal_distance_ ||
+        (side_structure_visible && lateral > forward_corridor_half_width_)) {
+      continue;
+    }
+    const double height_error =
+        std::abs(candidate.goal.pose.position.z - preferred_height);
+    const double score =
+        forward_progress_weight_ * progress_ahead -
+        forward_lateral_penalty_ * lateral -
+        forward_height_penalty_ * height_error +
+        heading_priority_weight_ * candidateHeadingAlignment(candidate) +
+        0.05 * static_cast<double>(candidate.unknown_neighbors);
     if (score > best_score) {
       best_score = score;
       best = &candidate;
@@ -939,6 +1054,7 @@ void SuperExplorationDecider::publishVisualization(
 
 void SuperExplorationDecider::publishGoal(
     const geometry_msgs::PoseStamped& goal, const std::string& reason) {
+  active_goal_is_end_approach_ = false;
   current_goal_ = goal;
   current_goal_.header.frame_id = world_frame_;
   current_goal_.header.stamp = ros::Time::now();
@@ -987,7 +1103,92 @@ bool SuperExplorationDecider::publishEndApproachGoal(
     return false;
   }
   publishGoal(goal, "three_wall_end_approach");
+  active_goal_is_end_approach_ = true;
   return true;
+}
+
+bool SuperExplorationDecider::publishForwardLookaheadGoal() {
+  if (!have_home_ || exploration_phase_ != ExplorationPhase::kForwardPriority ||
+      front_obstacle_streak_ >= front_obstacle_confirm_frames_) {
+    return false;
+  }
+
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+  const double current_dx =
+      current_pose_.pose.position.x - home_pose_.pose.position.x;
+  const double current_dy =
+      current_pose_.pose.position.y - home_pose_.pose.position.y;
+  const double current_progress = c * current_dx + s * current_dy;
+  const double remaining_radius =
+      max_exploration_radius_from_home_ - current_progress;
+  const double maximum_lookahead =
+      std::min(forward_lookahead_distance_, remaining_radius);
+  if (maximum_lookahead < min_goal_distance_) {
+    return false;
+  }
+
+  std::vector<double> lateral_offsets{0.0};
+  for (double offset = voxel_resolution_;
+       offset <= forward_corridor_half_width_ + 1e-6;
+       offset += voxel_resolution_) {
+    lateral_offsets.push_back(offset);
+    lateral_offsets.push_back(-offset);
+  }
+  std::vector<double> height_offsets{0.0};
+  for (double offset = voxel_resolution_;
+       cruise_height_above_home_ - offset >=
+               min_observation_height_above_home_ - 1e-6 ||
+           cruise_height_above_home_ + offset <=
+               max_observation_height_above_home_ + 1e-6;
+       offset += voxel_resolution_) {
+    if (cruise_height_above_home_ - offset >=
+        min_observation_height_above_home_ - 1e-6) {
+      height_offsets.push_back(-offset);
+    }
+    if (cruise_height_above_home_ + offset <=
+        max_observation_height_above_home_ + 1e-6) {
+      height_offsets.push_back(offset);
+    }
+  }
+
+  // Search all centerline distances before considering any side offset. This
+  // avoids turning sideways merely because the farthest centerline voxel has
+  // one noisy/occupied endpoint; a slightly shorter straight target is the
+  // smoother and more faithful task-level choice.
+  for (const double lateral : lateral_offsets) {
+    for (double lookahead = maximum_lookahead;
+         lookahead >= min_goal_distance_ - 1e-6;
+         lookahead -= forward_lookahead_step_) {
+      const double target_progress = current_progress + lookahead;
+      for (const double height_offset : height_offsets) {
+        geometry_msgs::Point target;
+        target.x = home_pose_.pose.position.x + c * target_progress -
+                   s * lateral;
+        target.y = home_pose_.pose.position.y + s * target_progress +
+                   c * lateral;
+        target.z = home_pose_.pose.position.z + cruise_height_above_home_ +
+                   height_offset;
+        const VoxelKey target_key = positionToKey(target.x, target.y, target.z);
+        // Exploration must intentionally advance toward unknown space. The
+        // exact centerline voxel is therefore allowed when it is not marked
+        // occupied; offset alternatives still require positive free-space
+        // evidence. SUPER performs the live local collision check/replan.
+        const bool centerline_target = std::abs(lateral) < 1e-6;
+        if ((!centerline_target && !isKnownFree(target_key)) ||
+            !isClearForVehicle(target_key)) {
+          continue;
+        }
+        geometry_msgs::PoseStamped goal;
+        goal.header.frame_id = world_frame_;
+        goal.pose.position = target;
+        goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
+        publishGoal(goal, "forward_lookahead");
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 bool SuperExplorationDecider::selectAndPublishFrontier() {
@@ -1138,16 +1339,36 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   if (!candidates.empty()) {
     last_frontier_time_ = ros::Time::now();
   }
+  updateExplorationPhase(candidates);
 
   if (have_active_goal_) {
     const double distance = std::sqrt(squaredDistance(
         current_pose_.pose.position, current_goal_.pose.position));
     const double goal_age = (ros::Time::now() - goal_sent_time_).toSec();
-    if (distance <= goal_reached_distance_) {
+    const bool front_obstacle_confirmed =
+        front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+    const bool forward_goal_handover =
+        exploration_phase_ == ExplorationPhase::kForwardPriority &&
+        !front_obstacle_confirmed && !active_goal_is_end_approach_ &&
+        distance <= forward_goal_handover_distance_;
+    const bool preempt_blocked_forward_goal =
+        exploration_phase_ == ExplorationPhase::kFrontierFallback &&
+        front_obstacle_confirmed && !active_goal_is_end_approach_ &&
+        isForwardCandidate(
+            FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
+    if (distance <= goal_reached_distance_ || forward_goal_handover) {
       covered_goals_.push_back(current_goal_.pose.position);
       ++reached_goal_count_;
       have_active_goal_ = false;
-      publishStatus("GOAL_REACHED", "selecting next frontier");
+      publishStatus(forward_goal_handover ? "GOAL_HANDOVER" : "GOAL_REACHED",
+                    forward_goal_handover
+                        ? "selecting the next look-ahead goal without stopping"
+                        : "selecting next frontier");
+    } else if (preempt_blocked_forward_goal) {
+      covered_goals_.push_back(current_goal_.pose.position);
+      have_active_goal_ = false;
+      publishStatus("GOAL_PREEMPTED",
+                    "confirmed front wall blocks the forward goal");
     } else if (goal_age > goal_timeout_) {
       covered_goals_.push_back(current_goal_.pose.position);
       have_active_goal_ = false;
@@ -1163,6 +1384,12 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       publishEndApproachGoal(coverage)) {
     publishStatus("APPROACHING_END_WALL",
                   "three-wall map seen; moving to configured stand-off");
+    return;
+  }
+
+  if (!have_active_goal_ && publishForwardLookaheadGoal()) {
+    publishStatus("EXPLORING",
+                  "continuous forward look-ahead goal sent to SUPER");
     return;
   }
 
@@ -1230,6 +1457,7 @@ void SuperExplorationDecider::clearMissionState() {
   have_data_ = false;
   have_home_ = false;
   have_active_goal_ = false;
+  active_goal_is_end_approach_ = false;
   exploration_started_ = false;
   returning_home_ = false;
   mission_finished_ = false;

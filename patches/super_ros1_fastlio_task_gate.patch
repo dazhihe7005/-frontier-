@@ -166,9 +166,9 @@ index c7972e9..ec7375c 100755
 -    max_vel: 5.0
 -    max_acc: 5.0
 -    max_jerk: 120.0
-+    # Conservative limits for the first real task-one closed-loop tests.
-+    # These stay below the command bridge limits (2.0 m/s, 3.0 m/s^2).
-+    max_vel: 1.0
++    # Task-one target: approach a 2.0 m/s cruise on clear straight segments.
++    # Moderate acceleration and jerk favor continuous, trackable motion.
++    max_vel: 2.0
 +    max_acc: 1.5
 +    max_jerk: 20.0
      max_omg: 2.5

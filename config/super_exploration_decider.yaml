@@ -50,6 +50,24 @@ front_obstacle_range: 6.0
 # Narrow center cone used only for confirming the closed end wall. Frontier
 # selection continues to use forward_sector_deg above.
 front_obstacle_sector_deg: 24.0
+# A closed wall must be a surface, not a single return. Requiring population
+# and 2-D extent rejects ground slices, dust speckles and isolated supports.
+front_obstacle_min_points: 20
+front_obstacle_min_lateral_span: 1.0
+front_obstacle_min_vertical_span: 0.8
+# While either side wall is visible, keep task-level goals in the entry-axis
+# corridor. SUPER may still deviate locally around an obstacle.
+forward_corridor_half_width: 2.0
+forward_progress_weight: 2.0
+forward_lateral_penalty: 2.0
+forward_height_penalty: 1.0
+# Hand the next look-ahead goal to SUPER before reaching a full stop.
+forward_goal_handover_distance: 3.0
+# Forward mode samples a known-free task-level target this far ahead. The
+# planner remains responsible for collision-free local deviations.
+forward_lookahead_distance: 8.0
+forward_lookahead_step: 0.5
+cruise_height_above_home: 0.8
 # Only points near the vehicle height count as wall-direction evidence. This
 # prevents a low-flying vehicle from classifying the mine ceiling as a frontal
 # obstacle while preserving side-wall returns around the lidar horizon.

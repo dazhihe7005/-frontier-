@@ -7,9 +7,11 @@ command_timeout: 0.25
 local_pose_timeout: 0.5
 output_rate: 50.0
 
-# Conservative indoor commissioning limits; tune only after log review.
-max_speed: 2.0
-max_acceleration: 3.0
+# Hard validation guards. SUPER is configured for 2.0 m/s and 1.5 m/s^2;
+# these guards include a small optimizer/numerical overshoot margin while
+# still rejecting materially unsafe commands.
+max_speed: 2.2
+max_acceleration: 2.0
 max_horizontal_radius: 40.0
 min_height: -0.5
 max_height: 3.0

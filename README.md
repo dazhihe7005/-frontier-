@@ -162,7 +162,7 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 当前真机链路统一使用 Fast-LIO2 的 `camera_init`：`/Odometry`、`/cloud_registered`、决策器 `/goal`、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。该节点不做 TF 变换，`strict_cloud_frame: true` 会拒绝其他坐标系的点云。
 
-观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标的水平位置使用原始 home，垂直位置由 `return_home_height_offset` 控制。真机默认偏移为 `0 m`；PX4 SITL 验证中覆盖为 `1 m`，避免返航完成时触地。
+观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标的水平位置使用原始 home，垂直位置由 `return_home_height_offset` 控制。真机默认偏移为 `0 m`；复杂场景PX4 SITL验证中覆盖为 `1.8 m`，返航阶段保持安全巡航高度，降落应由独立状态处理。
 
 `max_exploration_radius_from_home` 是相对任务起点的水平安全围栏，避免目标随着滚动点云不断向外漂移。真机默认值为 `35 m`，应按实际采空区长度和通信/续航能力调整；算法演示因 SUPER 示例地图较窄而覆盖为 `6 m`。
 
@@ -322,6 +322,24 @@ return_home_height_offset=1.8，不在任务返航阶段下降穿过已建模地
 (-0.27, 0.09, 1.78) m；决策器状态为 COMPLETE，指令桥为 TASK1_COMPLETE，
 PX4切换到 AUTO.LOITER。这证明当前仿真任务一闭环已通过；真实系统仍需单独设计起飞、
 降落和返航失联保护状态机。
+
+第66轮把“以2 m/s探索”落实为流畅性目标，而不是要求飞行器始终精确保持2 m/s。SUPER
+的轨迹约束设置为 `max_vel=2.0 m/s`、`max_acc=1.5 m/s²`、`max_jerk=20 m/s³`；
+决策器使用8 m前视目标，并在距当前目标3 m时提前交接下一个目标。目标选择先尝试全部
+机头中心线距离，再考虑侧向候选；前方墙体需要至少20个点且具备1.0 m横向跨度和0.8 m
+垂直跨度，避免单点、地面切片或支护构件导致误返航。SUPER仍负责局部避障，因此上述
+逻辑是任务层主方向约束，不是强制直线穿越障碍。
+
+复杂场景最终rosbag回归中，首个目标为 `(7.49, 0.00, 0.77) m`，尽头安全接近目标为
+`(26.50, 0.00, 0.77) m`，三面墙确认后发布入口返航目标。有效航段实际速度中位数
+`1.94 m/s`、90分位 `2.04 m/s`，低于 `0.2 m/s` 的最长连续时间为 `0.30 s`；
+横向范围为 `-0.43–0.36 m`，全程无指令桥限幅故障。飞机最终回到入口并退出OFFBOARD、
+进入AUTO.LOITER。实际速度瞬时最大值约 `2.48 m/s`，说明2 m/s是规划巡航上限而不是
+真实速度刚性钳位；真机应通过PX4速度环参数和逐级试飞继续检查跟踪超调。
+
+本轮仍观察到SUPER的备份轨迹/指数轨迹优化偶发失败并触发快速重规划，未造成停飞或
+闭环失败，但不应视为已消除。后续需结合轨迹日志调整膨胀半径、局部地图、优化器和
+PX4跟踪参数，并增加“单位时间位移、低速持续时间、重规划失败率”作为正式验收指标。
 
 专用RViz配置 `rviz/task1_mid360.rviz` 使用 `camera_init` 作为Fixed Frame，并默认显示
 `/cloud_registered`、累计点云和PX4轨迹。此前使用SUPER的 `top_down.rviz` 时Fixed

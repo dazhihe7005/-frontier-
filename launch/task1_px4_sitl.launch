@@ -60,8 +60,11 @@
     <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
     <param name="frontier_search_radius" value="10.0"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
-    <param name="min_observation_height_above_home" value="0.5"/>
-    <param name="max_observation_height_above_home" value="1.8"/>
+    <!-- Keep the mine traversal almost level. Vertical exploration frontiers
+         caused large climbs and repeated SUPER feasibility failures. -->
+    <param name="min_observation_height_above_home" value="0.4"/>
+    <param name="max_observation_height_above_home" value="1.2"/>
+    <param name="cruise_height_above_home" value="0.8"/>
     <param name="directional_vertical_tolerance" value="1.5"/>
     <!-- Keep the return leg at a safe cruise height; do not descend through
          the mapped floor until a separate landing phase is implemented. -->

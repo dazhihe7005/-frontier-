@@ -110,12 +110,16 @@ class SuperExplorationDecider {
   geometry_msgs::Point keyToPoint(const VoxelKey& key) const;
   bool isOccupied(const VoxelKey& key) const;
   bool isClearForVehicle(const VoxelKey& key) const;
+  bool isKnownFree(const VoxelKey& key) const;
   std::vector<FrontierCandidate> findFrontiers() const;
   bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
   bool selectAndPublishFrontier();
+  bool publishForwardLookaheadGoal();
   bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
   bool isForwardCandidate(const FrontierCandidate& candidate) const;
   double candidateHeadingAlignment(const FrontierCandidate& candidate) const;
+  double candidateMissionProgress(const FrontierCandidate& candidate) const;
+  double candidateMissionLateral(const FrontierCandidate& candidate) const;
   const FrontierCandidate* selectForwardCandidate(
       const std::vector<FrontierCandidate>& candidates) const;
   void updateExplorationPhase(
@@ -164,6 +168,7 @@ class SuperExplorationDecider {
   bool have_data_{false};
   bool have_home_{false};
   bool have_active_goal_{false};
+  bool active_goal_is_end_approach_{false};
   bool exploration_started_{false};
   bool returning_home_{false};
   bool mission_finished_{false};
@@ -226,6 +231,16 @@ class SuperExplorationDecider {
   double side_wall_max_range_{12.0};
   double front_obstacle_range_{6.0};
   double front_obstacle_sector_deg_{24.0};
+  double front_obstacle_min_lateral_span_{1.0};
+  double front_obstacle_min_vertical_span_{0.8};
+  double forward_corridor_half_width_{2.0};
+  double forward_progress_weight_{2.0};
+  double forward_lateral_penalty_{2.0};
+  double forward_height_penalty_{1.0};
+  double forward_goal_handover_distance_{3.0};
+  double forward_lookahead_distance_{8.0};
+  double forward_lookahead_step_{0.5};
+  double cruise_height_above_home_{0.8};
   double directional_vertical_tolerance_{4.0};
   double directional_floor_exclusion_{0.5};
   double wall_coverage_bin_size_{1.0};
@@ -241,6 +256,7 @@ class SuperExplorationDecider {
   double wall_coverage_end_standoff_distance_{3.0};
   int side_wall_missing_confirm_frames_{8};
   int front_obstacle_confirm_frames_{3};
+  int front_obstacle_min_points_{20};
   int wall_coverage_max_gap_bins_{2};
   int three_wall_confirm_cycles_{4};
   int sync_queue_size_{20};
