@@ -1534,3 +1534,7 @@ rostopic echo /mine_uav/mission/goaf_enable
 ## 第59轮：关闭旧采空区仿真进程
 
 用户说明没有其他终端，希望关闭仿真进程。检查确认当前已不存在 `px4`、`gzserver`、`gzclient`、RViz 或 `task1_px4_sitl.launch` 进程，旧仿真已经退出，没有执行范围外的强制杀进程操作。后续可直接使用新启动文件加载MID360模型和专用RViz配置。
+
+## 第60轮：重新启动带MID360雷达的采空区仿真步骤
+
+用户询问关闭旧仿真后的下一步。重新启动时应先在终端一运行独立ROS Master `roscore -p 11312`，再在终端二加载ROS、SUPER、PX4 Gazebo环境并执行 `roslaunch mine_uav_control task1_px4_sitl.launch gui:=true rviz:=true`。新启动文件会加载 `iris_mid360.sdf`、Gazebo雷达原始话题、点云注册适配器和 `task1_mid360.rviz`；终端三可检查原始雷达点云、注册后的 `/cloud_registered`、PX4状态和三面墙完成状态。
