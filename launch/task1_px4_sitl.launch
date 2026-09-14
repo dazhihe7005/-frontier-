@@ -1,0 +1,63 @@
+<launch>
+  <!-- Complete task-one dynamic loop on PX4 SITL. Run this on an isolated ROS
+       master; task1_sitl_adapter may arm the simulated vehicle. -->
+  <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="allow_auto_arm" default="true"/>
+  <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
+
+  <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="interactive" value="false"/>
+    <arg name="vehicle" value="iris"/>
+    <arg name="world" value="$(arg world)"/>
+    <arg name="x" value="0"/>
+    <arg name="y" value="0"/>
+    <arg name="z" value="0.15"/>
+    <arg name="Y" value="0"/>
+    <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
+  </include>
+
+  <node pkg="mine_uav_control" type="task1_sitl_adapter.py"
+        name="task1_sitl_adapter" output="screen" required="true">
+    <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
+    <param name="sensor_range" value="10.0"/>
+    <param name="auto_enable_delay" value="8.0"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="mission_scheduler"
+        name="mission_scheduler" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/mission_scheduler.yaml"/>
+    <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
+    <param name="require_auto_enable_low_before_enable" value="true"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="super_exploration_decider"
+        name="super_exploration_decider" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
+    <param name="frontier_search_radius" value="10.0"/>
+    <param name="max_exploration_radius_from_home" value="24.0"/>
+    <param name="min_observation_height_above_home" value="0.5"/>
+    <param name="max_observation_height_above_home" value="1.8"/>
+    <param name="directional_vertical_tolerance" value="1.5"/>
+    <param name="return_home_height_offset" value="1.0"/>
+    <param name="no_frontier_timeout" value="8.0"/>
+  </node>
+
+  <node pkg="super_planner" type="fsm_node" name="fsm_node"
+        output="screen" required="true">
+    <param name="config_path"
+           value="$(find super_planner)/config/click_smooth_ros1.yaml"/>
+  </node>
+
+  <!-- POSCTL requires live RC/manual-control input. AUTO.LOITER provides a
+       headless-SITL hold after task completion; the real launch keeps POSCTL. -->
+  <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
+    <arg name="fallback_mode" value="AUTO.LOITER"/>
+  </include>
+
+  <group if="$(arg rviz)">
+    <node pkg="rviz" type="rviz" name="task1_sitl_rviz"
+          args="-d $(find perfect_drone_sim)/rviz/top_down.rviz" output="log"/>
+  </group>
+</launch>

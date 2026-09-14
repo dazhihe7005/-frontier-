@@ -50,6 +50,7 @@ class MissionScheduler {
   ros::Subscriber mavros_state_subscriber_;
 
   ros::Publisher active_task_publisher_;
+  ros::Publisher auto_enable_publisher_;
   ros::Publisher goaf_enable_publisher_;
   ros::Publisher shaft_enable_publisher_;
   ros::Publisher return_home_publisher_;
@@ -62,6 +63,7 @@ class MissionScheduler {
   std::string odometry_topic_;
   std::string mavros_state_topic_;
   std::string active_task_topic_;
+  std::string auto_enable_topic_;
   std::string goaf_enable_topic_;
   std::string shaft_enable_topic_;
   std::string return_home_topic_;
@@ -69,14 +71,19 @@ class MissionScheduler {
   std::string status_topic_;
 
   int rc_switch_channel_{5};
+  int auto_enable_channel_{6};
   int low_threshold_{1300};
   int high_threshold_{1700};
+  int auto_enable_threshold_{1700};
   double switch_stable_time_{0.5};
+  double auto_enable_stable_time_{0.5};
   double rc_timeout_{1.0};
   double odometry_timeout_{1.0};
   double decision_rate_{10.0};
   bool require_odometry_{true};
   bool require_mavros_connection_{false};
+  bool require_auto_enable_low_before_enable_{true};
+  bool shaft_task_available_{false};
 
   bool have_rc_{false};
   bool have_odometry_{false};
@@ -85,6 +92,11 @@ class MissionScheduler {
   bool mavros_armed_{false};
 
   uint16_t rc_value_{0};
+  uint16_t auto_enable_value_{0};
+  bool auto_channel_available_{false};
+  bool auto_enable_requested_{false};
+  bool auto_enable_low_seen_{false};
+  bool auto_enabled_{false};
   RcSelection rc_selection_{RcSelection::kInvalid};
   RcSelection pending_selection_{RcSelection::kInvalid};
   Task active_task_{Task::kHold};
@@ -94,6 +106,7 @@ class MissionScheduler {
   ros::Time last_rc_time_;
   ros::Time last_odometry_time_;
   ros::Time pending_since_;
+  ros::Time auto_enable_pending_since_;
 };
 
 }  // namespace mine_uav_control

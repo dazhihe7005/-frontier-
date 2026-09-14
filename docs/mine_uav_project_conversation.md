@@ -1385,3 +1385,42 @@ rostopic echo /mine_uav/mission/goaf_enable
 - SUPER轨迹连续且速度/加速度不超过当前限制。
 - 目标点、轨迹、里程计和点云形成持续反馈，而不是台架测试中的开环状态。
 - 任务切换、定位失效或轨迹超时时能够回到HOLD，且不会继续发送失控目标。
+
+## 第53轮：完成任务一PX4/Gazebo动态闭环并建立强制同步约束
+
+用户要求继续之前的工作，并增加固定前提：如果本次5小时token额度即将耗尽，必须先整理此前尚未更新的项目内容并上传到GitHub，不能让未同步工作因会话额度结束而丢失。
+
+### 固定工作约束
+
+- 后续工作应持续维护本对话记录；出现额度临近、长时间测试或其他可能中断会话的情况时，优先停止扩展开发，整理工作区源码、README和对话记录并提交、推送到 `dazhihe7005/-frontier-`。
+- 本轮不等待额度临界点，任务一动态闭环验收完成后立即同步当前全部未上传内容。
+
+### 新增完整SITL链路
+
+- 新增 `scripts/task1_sitl_adapter.py`，把PX4 SITL的 `/mavros/local_position/odom` 转换成与Fast-LIO2一致的 `/Odometry`，并以 `camera_init` 为统一坐标系。
+- 适配器按无人机实时位置生成 `/cloud_registered`，模拟入口开放、左右墙、尽头墙和顶板；同时发布全局模拟点云和飞行路径，供RViz观察。
+- 适配器模拟物理CH6选择任务一、CH7先低后高允许自动任务。它只在 `/use_sim_time=true` 时允许自动解锁PX4，并明确禁止连接真实飞控。
+- 新增 `worlds/goaf_mine.world` 和 `launch/task1_px4_sitl.launch`，一次启动Gazebo采空区、PX4 SITL、MAVROS、调度器、模拟Fast-LIO2接口、决策器、SUPER、坐标安全指令桥和最终MAVROS转发。
+
+### 方向证据和返航安全修复
+
+- 将点云方向判断的垂直容差收紧为 `1.5 m`，避免把顶板当成侧墙或前墙。
+- 新增独立 `front_obstacle_sector_deg=24°`，不再复用较宽的 `forward_sector_deg=70°`；实测消除了左右墙过早触发“前方障碍”的主要问题。
+- 新增 `return_home_height_offset`。SITL使用 `1 m` 安全返航高度，返航完成距离也改为相对该抬高后的目标计算，避免返回地面原点时触地。
+- 指令桥订阅 `/mine_uav/exploration/finished`；任务完成后锁止新任务指令并退出受管OFFBOARD。故障和退出日志也改为只在状态首次变化时输出，避免重复刷屏。
+- 真机默认退出模式仍为 `POSCTL`，用于遥控接管；无遥控输入的SITL中，PX4虽然会接受POSCTL请求但不会实际切换，因此SITL专门覆盖为 `AUTO.LOITER`。
+
+### 动态闭环验收结果
+
+- PX4成功解锁、进入OFFBOARD并跟踪SUPER轨迹；决策器依次发布机头优先观察点，在前障碍确认后切换frontier fallback，再发布返航目标。
+- 本轮第二次完整运行的观察点包括约 `(3.25,-0.25,1.25)`、`(6.75,-0.75,1.75)`、`(10.75,-2.25,0.75)`、`(14.75,1.25,1.75)` 和 `(16.75,-0.75,0.75) m`，随后返回约 `(0,0,0.99) m`。
+- 最终飞机稳定在约 `(0.13,0.05,1.01) m`；`/mine_uav/exploration/finished=true`，指令桥状态为 `TASK1_COMPLETE`，`command_ready=false`，PX4实际模式为 `AUTO.LOITER`。
+- 完成后 `/mavros/setpoint_raw/local` 不再有新消息；模拟 `/cloud_registered` 和 `/Odometry` 均稳定为 `10 Hz`。
+- `catkin_make --pkg mine_uav_control`、Python语法检查、launch/world XML检查全部通过；测试使用独立ROS Master `11312`，结束后PX4 SITL、Gazebo和该ROS Master均已停止，没有接触默认 `11311` 的真机链路。
+
+### 当前能力边界
+
+- 本轮证明“任务调度→点云/位姿→自主决策→SUPER→PX4动态执行→安全高度返航→退出OFFBOARD”的仿真控制闭环成立。
+- 仿真适配器模拟的是Fast-LIO2输出，不是Livox原始UDP和Fast-LIO2 EKF本体，因此不能替代真机外部视觉融合及雷达安装外参验收。
+- 当前建模完成条件仍是“至少完成观察点后，持续无新frontier”的启发式判据；用户要求的左右墙加尽头墙三面连续覆盖判定尚未实现，是任务一下一项核心算法工作。
+- SUPER在部分转弯和重规划过程中仍会出现偶发优化/角速度告警，应通过仿真日志统计和参数整定继续降低，暂不能据此宣称可以直接带桨下井飞行。

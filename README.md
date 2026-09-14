@@ -52,10 +52,11 @@ Fast-LIO2 ─────────→ 外部视觉位姿桥 ─────�
 Fast-LIO2 跳变、超时或 MAVROS 断开都会停止外部视觉输出。
 
 `super_px4_command_bridge` 使用同一对齐关系，将 SUPER 的
-`/planning/pos_cmd` 转成 MAVROS 本地位置目标。输出受任务一选择、视觉定位健康、
-MAVROS 连接和人工使能四重门控；默认人工门关闭，且节点绝不自动解锁或切换
-OFFBOARD。SUPER 短暂重规划时会发送当前位置悬停目标；任务切走、定位失效、
-通信断开或指令越界时会立即停止并锁回关闭。
+`/planning/pos_cmd` 转成 MAVROS 本地位置目标。输出受独立自动允许开关、任务一选择、
+视觉定位健康、MAVROS 连接和软件抑制门控。满足条件并已由操作者解锁后，节点先预发送
+悬停点，再自动请求 OFFBOARD；节点本身永不解锁 PX4。SUPER 短暂重规划时会发送
+当前位置悬停目标；任务切走、定位失效、通信断开、指令越界或任务完成时会退出受控
+OFFBOARD。真机默认退出到 `POSCTL`，必须保证遥控器和 PX4 失效保护配置可用。
 
 统一启动文件（首次实机必须拆桨）：
 
@@ -75,7 +76,8 @@ rostopic echo /mine_uav/mission/status
 rostopic echo /mine_uav/task1/command_status
 ```
 
-只有上述状态正常、SUPER 已产生新轨迹且 PX4 仍未解锁时，才打开最终指令门：
+软件服务现在是可选的总抑制开关，默认允许；真正的自动任务授权来自独立遥控通道
+（默认物理 CH7）。需要在调试时重新打开软件门可使用：
 
 ```bash
 rosservice call /super_px4_command_bridge/enable "data: true"
@@ -160,7 +162,7 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 当前真机链路统一使用 Fast-LIO2 的 `camera_init`：`/Odometry`、`/cloud_registered`、决策器 `/goal`、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。该节点不做 TF 变换，`strict_cloud_frame: true` 会拒绝其他坐标系的点云。
 
-观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标仍使用原始 home 高度，不受观察点高度限制。
+观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标的水平位置使用原始 home，垂直位置由 `return_home_height_offset` 控制。真机默认偏移为 `0 m`；PX4 SITL 验证中覆盖为 `1 m`，避免返航完成时触地。
 
 `max_exploration_radius_from_home` 是相对任务起点的水平安全围栏，避免目标随着滚动点云不断向外漂移。真机默认值为 `35 m`，应按实际采空区长度和通信/续航能力调整；算法演示因 SUPER 示例地图较窄而覆盖为 `6 m`。
 
@@ -215,6 +217,56 @@ roslaunch mine_uav_control mission_scheduler.launch
 该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。两个任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免两个任务同时控制飞行器。当前任务一的 `super_exploration_decider` 已订阅 `goaf_enable`；任务二实现后接入 `shaft_enable`。
 
 ### SITL 联调
+
+#### 任务一 PX4/Gazebo 完整动态闭环
+
+`task1_px4_sitl.launch` 已将采空区世界、PX4 SITL、Gazebo、MAVROS、任务调度器、
+模拟 Fast-LIO2 接口、自主决策器、SUPER 和 PX4 指令桥合并为一条动态闭环。模拟适配器
+发布与真机一致的 `/Odometry` 和 `/cloud_registered`，因此决策器及 SUPER 不需要改
+输入接口；它模拟的是 Fast-LIO2 的输出，而不是 Livox UDP 原始包和真实 Fast-LIO2 EKF。
+
+必须使用独立 ROS Master，避免向默认 `11311` 上的真实 MAVROS 发送任何仿真控制：
+
+```bash
+# 终端 1
+roscore -p 11312
+
+# 终端 2
+export ROS_MASTER_URI=http://127.0.0.1:11312
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
+  /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic:$ROS_PACKAGE_PATH
+roslaunch mine_uav_control task1_px4_sitl.launch gui:=true rviz:=true
+```
+
+无界面验收使用 `gui:=false rviz:=false`。仿真适配器只在 `/use_sim_time=true` 时允许
+自动解锁，并在日志中明确警告不可连接真机。它模拟 CH6 选择任务一、CH7 从低位切到
+自动允许。SITL 没有真实遥控输入，`POSCTL` 无法可靠接管，因此任务完成后专门退出到
+`AUTO.LOITER`；真机启动文件仍保持 `POSCTL`。
+
+可观察的话题：
+
+```bash
+rostopic echo /mavros/state
+rostopic echo /mine_uav/exploration/status
+rostopic echo /mine_uav/task1/command_status
+rostopic echo /goal
+rostopic hz /cloud_registered
+rostopic hz /Odometry
+rostopic hz /mavros/setpoint_raw/local
+```
+
+本次自动验收结果：任务选择后 PX4 解锁并进入 OFFBOARD，无人机沿多个观察点推进至
+采空区深处，前障碍确认后切换 frontier fallback，随后发布约 `1 m` 高的 home 返航点；
+最终位置约 `(0.13, 0.05, 1.01) m`，`finished=true`、指令桥状态为
+`TASK1_COMPLETE`，PX4 切到 `AUTO.LOITER`，之后不再发布任务 setpoint。模拟点云和
+里程计均稳定为 `10 Hz`。
+
+当前完成判据仍是“至少到达规定数量观察点后，连续一段时间无新 frontier”的启发式
+判据，并不是用户要求的“左右墙和尽头墙三面连续覆盖”语义验收。SITL 已验证控制闭环、
+返航和退出模式，但不能替代真机外部视觉融合、安装外参、碰撞裕量和三面墙覆盖率测试。
 
 #### 任务一算法闭环仿真（建议先运行）
 

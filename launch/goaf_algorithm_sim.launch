@@ -1,0 +1,55 @@
+<launch>
+  <!--
+    Closed-loop task-one algorithm simulation.
+
+    This uses SUPER's perfect_drone_sim to publish world-frame registered
+    point clouds and ideal odometry. It validates the exploration decider and
+    SUPER together, but it is not PX4 SITL and it intentionally bypasses
+    Fast-LIO2 estimation.
+  -->
+  <arg name="rviz" default="true" />
+  <arg name="simulator_config" default="click.yaml" />
+  <arg name="super_config"
+       default="$(find super_planner)/config/static_dense.yaml" />
+  <arg name="decider_config"
+       default="$(find mine_uav_control)/config/super_exploration_decider.yaml" />
+
+  <node pkg="perfect_drone_sim"
+        type="perfect_drone"
+        name="perfect_drone"
+        output="log">
+    <param name="config_name" value="$(arg simulator_config)" />
+  </node>
+
+  <node pkg="super_planner"
+        type="fsm_node"
+        name="fsm_node"
+        output="log">
+    <param name="config_path" value="$(arg super_config)" />
+  </node>
+
+  <node pkg="mine_uav_control"
+        type="super_exploration_decider"
+        name="super_exploration_decider"
+        output="screen">
+    <rosparam command="load" file="$(arg decider_config)" />
+    <param name="odom_topic" value="/lidar_slam/odom" />
+    <param name="goal_topic" value="/planning/click_goal" />
+    <param name="world_frame" value="world" />
+    <param name="strict_cloud_frame" value="true" />
+    <!-- static_dense has a narrow 15 m x-axis map; keep goals inside it. -->
+    <param name="frontier_search_radius" value="6.0" />
+    <param name="max_exploration_radius_from_home" value="6.0" />
+    <!-- perfect_drone starts at z=1.5; static_dense keeps flight at z=1.5. -->
+    <param name="min_observation_height_above_home" value="0.0" />
+    <param name="max_observation_height_above_home" value="1.0" />
+  </node>
+
+  <group if="$(arg rviz)">
+    <node pkg="rviz"
+          type="rviz"
+          name="goaf_algorithm_rviz"
+          args="-d $(find perfect_drone_sim)/rviz/top_down.rviz"
+          output="log" />
+  </group>
+</launch>

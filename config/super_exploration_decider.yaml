@@ -47,7 +47,13 @@ side_wall_sector_deg: 50.0
 side_wall_min_range: 1.0
 side_wall_max_range: 12.0
 front_obstacle_range: 6.0
-directional_vertical_tolerance: 4.0
+# Narrow center cone used only for confirming the closed end wall. Frontier
+# selection continues to use forward_sector_deg above.
+front_obstacle_sector_deg: 24.0
+# Only points near the vehicle height count as wall-direction evidence. This
+# prevents a low-flying vehicle from classifying the mine ceiling as a frontal
+# obstacle while preserving side-wall returns around the lidar horizon.
+directional_vertical_tolerance: 1.5
 directional_floor_exclusion: 0.5
 side_wall_missing_confirm_frames: 8
 front_obstacle_confirm_frames: 3
@@ -66,6 +72,9 @@ data_timeout: 1.0
 sync_queue_size: 20
 sync_slop: 0.08
 battery_return_threshold: 0.20
+# Real missions normally capture home while already airborne, so this remains
+# zero by default. Ground-started SITL overrides it to a safe hover height.
+return_home_height_offset: 0.0
 battery_topic: "/mavros/battery"
 return_request_topic: "/mine_uav/exploration/return_home"
 

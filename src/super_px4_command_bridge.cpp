@@ -5,6 +5,7 @@
 #include <geometry_msgs/TransformStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <mavros_msgs/PositionTarget.h>
+#include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <ros/ros.h>
@@ -66,6 +67,18 @@ class SuperPx4CommandBridge {
     private_nh_.param("min_height", min_height_, -0.5);
     private_nh_.param("max_height", max_height_, 3.0);
     private_nh_.param("use_acceleration", use_acceleration_, true);
+    private_nh_.param("auto_enable_topic", auto_enable_topic_,
+                      std::string("/mine_uav/mission/auto_enable"));
+    private_nh_.param("automatic_mode_switch", automatic_mode_switch_, true);
+    private_nh_.param("require_armed_for_offboard",
+                      require_armed_for_offboard_, true);
+    private_nh_.param("prestream_duration", prestream_duration_, 1.0);
+    private_nh_.param("mode_request_interval", mode_request_interval_, 1.0);
+    private_nh_.param("offboard_mode", offboard_mode_,
+                      std::string("OFFBOARD"));
+    private_nh_.param("fallback_mode", fallback_mode_,
+                      std::string("POSCTL"));
+    private_nh_.param("software_enable_default", software_enabled_, true);
 
     command_timeout_ = std::max(0.05, command_timeout_);
     local_pose_timeout_ = std::max(0.1, local_pose_timeout_);
@@ -73,6 +86,8 @@ class SuperPx4CommandBridge {
     max_speed_ = std::max(0.1, max_speed_);
     max_acceleration_ = std::max(0.1, max_acceleration_);
     max_horizontal_radius_ = std::max(1.0, max_horizontal_radius_);
+    prestream_duration_ = std::max(1.0, prestream_duration_);
+    mode_request_interval_ = std::max(0.5, mode_request_interval_);
     if (min_height_ > max_height_) {
       std::swap(min_height_, max_height_);
     }
@@ -85,9 +100,15 @@ class SuperPx4CommandBridge {
     mission_subscriber_ = nh_.subscribe(
         "/mine_uav/mission/goaf_enable", 1,
         &SuperPx4CommandBridge::missionCallback, this);
+    auto_enable_subscriber_ = nh_.subscribe(
+        auto_enable_topic_, 1,
+        &SuperPx4CommandBridge::autoEnableCallback, this);
     vision_subscriber_ = nh_.subscribe(
         "/mine_uav/task1/vision_healthy", 1,
         &SuperPx4CommandBridge::visionCallback, this);
+    finished_subscriber_ = nh_.subscribe(
+        "/mine_uav/exploration/finished", 1,
+        &SuperPx4CommandBridge::finishedCallback, this);
     state_subscriber_ = nh_.subscribe(
         "/mavros/state", 10, &SuperPx4CommandBridge::stateCallback, this);
     local_pose_subscriber_ = nh_.subscribe(
@@ -102,14 +123,16 @@ class SuperPx4CommandBridge {
         "/mine_uav/task1/command_status", 1, true);
     enable_service_ = private_nh_.advertiseService(
         "enable", &SuperPx4CommandBridge::enableCallback, this);
+    set_mode_client_ =
+        nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
     output_timer_ = nh_.createTimer(
         ros::Duration(1.0 / output_rate_),
         &SuperPx4CommandBridge::outputTimerCallback, this);
 
     publishReady(false);
     publishStatus("WAIT_ALIGNMENT");
-    ROS_WARN("SUPER-to-PX4 command output starts disabled; enable it explicitly "
-             "with the private SetBool service after all health gates pass");
+    ROS_WARN("SUPER-to-PX4 bridge ready: RC auto-enable and task selection are "
+             "required; the bridge may request OFFBOARD but never arms PX4");
   }
 
  private:
@@ -120,7 +143,7 @@ class SuperPx4CommandBridge {
     if (!finite(t.x) || !finite(t.y) || !finite(t.z) || !finite(q.x) ||
         !finite(q.y) || !finite(q.z) || !finite(q.w)) {
       alignment_ready_ = false;
-      disableOutput("INVALID_ALIGNMENT");
+      latchFault("INVALID_ALIGNMENT");
       return;
     }
     alignment_x_ = t.x;
@@ -132,26 +155,53 @@ class SuperPx4CommandBridge {
   }
 
   void missionCallback(const std_msgs::Bool::ConstPtr& enabled) {
-    if (mission_enabled_ && !enabled->data) {
-      disableOutput("TASK1_DESELECTED");
-    }
     mission_enabled_ = enabled->data;
+    if (!mission_enabled_) {
+      beginOffboardExit("TASK1_DESELECTED");
+      resetPrestream();
+    }
+    updateStatus();
+  }
+
+  void autoEnableCallback(const std_msgs::Bool::ConstPtr& enabled) {
+    const bool was_enabled = auto_enabled_;
+    auto_enabled_ = enabled->data;
+    if (was_enabled && !auto_enabled_) {
+      beginOffboardExit("AUTO_DISABLED");
+      fault_latched_ = false;
+      resetPrestream();
+    }
     updateStatus();
   }
 
   void visionCallback(const std_msgs::Bool::ConstPtr& healthy) {
-    if (vision_healthy_ && !healthy->data) {
-      disableOutput("VISION_UNHEALTHY");
+    if (vision_healthy_ && !healthy->data && auto_enabled_) {
+      latchFault("VISION_UNHEALTHY");
     }
     vision_healthy_ = healthy->data;
     updateStatus();
   }
 
+  void finishedCallback(const std_msgs::Bool::ConstPtr& finished) {
+    mission_complete_ = finished->data;
+    if (mission_complete_) {
+      beginOffboardExit("TASK1_COMPLETE");
+      resetPrestream();
+    }
+    updateStatus();
+  }
+
   void stateCallback(const mavros_msgs::State::ConstPtr& state) {
     if (mavros_connected_ && !state->connected) {
-      disableOutput("MAVROS_DISCONNECTED");
+      latchFault("MAVROS_DISCONNECTED");
     }
     mavros_connected_ = state->connected;
+    mavros_armed_ = state->armed;
+    px4_mode_ = state->mode;
+    if (px4_mode_ != offboard_mode_ && exit_requested_) {
+      exit_requested_ = false;
+      offboard_owned_ = false;
+    }
     updateStatus();
   }
 
@@ -168,8 +218,10 @@ class SuperPx4CommandBridge {
   }
 
   bool gatesReady() const {
-    return alignment_ready_ && mission_enabled_ && vision_healthy_ &&
-           mavros_connected_;
+    return software_enabled_ && auto_enabled_ && mission_enabled_ &&
+           !mission_complete_ &&
+           alignment_ready_ && vision_healthy_ && mavros_connected_ &&
+           !fault_latched_;
   }
 
   bool localPoseFresh(const ros::Time& now) const {
@@ -180,27 +232,17 @@ class SuperPx4CommandBridge {
   bool enableCallback(std_srvs::SetBool::Request& request,
                       std_srvs::SetBool::Response& response) {
     if (!request.data) {
-      manual_enable_ = false;
+      software_enabled_ = false;
+      beginOffboardExit("SOFTWARE_INHIBIT");
       response.success = true;
-      response.message = "task-one PX4 command output disabled";
+      response.message = "task-one automatic control inhibited";
       updateStatus();
       return true;
     }
-    const ros::Time now = ros::Time::now();
-    if (!gatesReady() || !valid_command_ ||
-        !localPoseFresh(now) ||
-        (now - last_command_time_).toSec() > command_timeout_) {
-      manual_enable_ = false;
-      response.success = false;
-      response.message =
-          "refused: health gates, local pose, or fresh SUPER command is not ready";
-      updateStatus();
-      return true;
-    }
-    manual_enable_ = true;
+    software_enabled_ = true;
     response.success = true;
     response.message =
-        "task-one command output enabled; this does not arm or enter OFFBOARD";
+        "software inhibit cleared; RC auto-enable still controls execution";
     updateStatus();
     return true;
   }
@@ -298,14 +340,14 @@ class SuperPx4CommandBridge {
       if (reason == "TRAJECTORY_NOT_ACTIVE") {
         publishStatus(reason);
       } else {
-        disableOutput(reason);
+        latchFault(reason);
       }
       return;
     }
     const auto output = convert(*command);
     if (!insideFlightVolume(output, &reason)) {
       valid_command_ = false;
-      disableOutput(reason);
+      latchFault(reason);
       return;
     }
     valid_command_ = true;
@@ -332,18 +374,49 @@ class SuperPx4CommandBridge {
 
   void outputTimerCallback(const ros::TimerEvent&) {
     const ros::Time now = ros::Time::now();
-    if (!manual_enable_ || !gatesReady()) {
+    if (exit_requested_ ||
+        (offboard_owned_ && px4_mode_ == offboard_mode_ && !gatesReady())) {
+      handleOffboardExit(now);
+      return;
+    }
+    if (!gatesReady()) {
+      resetPrestream();
+      publishReady(false);
       updateStatus();
       return;
     }
     if (!localPoseFresh(now)) {
-      disableOutput("LOCAL_POSE_TIMEOUT");
+      latchFault("LOCAL_POSE_TIMEOUT");
+      handleOffboardExit(now);
       return;
     }
 
     const bool command_fresh =
         valid_command_ && !last_command_time_.isZero() &&
         (now - last_command_time_).toSec() <= command_timeout_;
+    if (prestream_started_.isZero()) {
+      prestream_started_ = now;
+    }
+
+    if (px4_mode_ != offboard_mode_) {
+      command_publisher_.publish(makeHoldTarget(now));
+      publishReady(false);
+      if (require_armed_for_offboard_ && !mavros_armed_) {
+        publishStatus("PRESTREAM_WAIT_ARMED");
+      } else if (!command_fresh) {
+        publishStatus("PRESTREAM_WAIT_SUPER_COMMAND");
+      } else if ((now - prestream_started_).toSec() < prestream_duration_) {
+        publishStatus("PRESTREAM_HOLD");
+      } else if (!automatic_mode_switch_) {
+        publishStatus("PRESTREAM_WAIT_MANUAL_OFFBOARD");
+      } else {
+        requestMode(offboard_mode_, now, true);
+        publishStatus("REQUESTING_OFFBOARD");
+      }
+      return;
+    }
+
+    offboard_owned_ = offboard_owned_ || automatic_mode_switch_;
     if (command_fresh) {
       latest_target_.header.stamp = now;
       command_publisher_.publish(latest_target_);
@@ -357,30 +430,87 @@ class SuperPx4CommandBridge {
     }
   }
 
-  void disableOutput(const std::string& reason) {
-    if (manual_enable_) {
-      ROS_ERROR("Task-one PX4 command output latched off: %s", reason.c_str());
+  void latchFault(const std::string& reason) {
+    if (auto_enabled_ && !fault_latched_) {
+      ROS_ERROR("Task-one automatic control fault latched: %s", reason.c_str());
+      fault_latched_ = true;
+      beginOffboardExit(reason);
     }
-    manual_enable_ = false;
     publishReady(false);
     publishStatus(reason);
   }
 
+  void beginOffboardExit(const std::string& reason) {
+    if (!exit_requested_ && offboard_owned_ && px4_mode_ == offboard_mode_) {
+      exit_requested_ = true;
+      ROS_WARN("Leaving managed OFFBOARD: %s", reason.c_str());
+    }
+  }
+
+  void handleOffboardExit(const ros::Time& now) {
+    publishReady(false);
+    if (px4_mode_ != offboard_mode_) {
+      exit_requested_ = false;
+      offboard_owned_ = false;
+      updateStatus();
+      return;
+    }
+    if (localPoseFresh(now)) {
+      command_publisher_.publish(makeHoldTarget(now));
+    }
+    requestMode(fallback_mode_, now, false);
+    publishStatus("EXITING_OFFBOARD_TO_" + fallback_mode_);
+  }
+
+  void requestMode(const std::string& mode, const ros::Time& now,
+                   bool entering_offboard) {
+    if (!last_mode_request_time_.isZero() &&
+        (now - last_mode_request_time_).toSec() < mode_request_interval_) {
+      return;
+    }
+    last_mode_request_time_ = now;
+    mavros_msgs::SetMode request;
+    request.request.base_mode = 0;
+    request.request.custom_mode = mode;
+    if (!set_mode_client_.call(request) || !request.response.mode_sent) {
+      ROS_WARN_THROTTLE(1.0, "PX4 rejected or did not answer mode request: %s",
+                        mode.c_str());
+      return;
+    }
+    if (entering_offboard) {
+      offboard_owned_ = true;
+    }
+    ROS_INFO("PX4 mode request accepted: %s", mode.c_str());
+  }
+
+  void resetPrestream() { prestream_started_ = ros::Time(); }
+
   void updateStatus() {
-    const bool ready = manual_enable_ && gatesReady() && valid_command_;
+    const bool ready = gatesReady() && valid_command_ &&
+                       px4_mode_ == offboard_mode_;
     publishReady(ready);
     if (!alignment_ready_) {
       publishStatus("WAIT_ALIGNMENT");
+    } else if (!software_enabled_) {
+      publishStatus("SOFTWARE_INHIBIT");
+    } else if (!auto_enabled_) {
+      publishStatus("WAIT_AUTO_ENABLE");
     } else if (!mission_enabled_) {
       publishStatus("WAIT_TASK1_SELECTION");
+    } else if (mission_complete_) {
+      publishStatus("TASK1_COMPLETE");
     } else if (!vision_healthy_) {
       publishStatus("WAIT_VISION");
     } else if (!mavros_connected_) {
       publishStatus("WAIT_MAVROS");
     } else if (!localPoseFresh(ros::Time::now())) {
       publishStatus("WAIT_LOCAL_POSE");
-    } else if (!manual_enable_) {
-      publishStatus("WAIT_OPERATOR_ENABLE");
+    } else if (fault_latched_) {
+      publishStatus("FAULT_LATCHED_TOGGLE_AUTO_LOW");
+    } else if (require_armed_for_offboard_ && !mavros_armed_) {
+      publishStatus("PRESTREAM_WAIT_ARMED");
+    } else if (px4_mode_ != offboard_mode_) {
+      publishStatus("PRESTREAM");
     } else if (!valid_command_) {
       publishStatus("WAIT_SUPER_COMMAND");
     } else {
@@ -414,13 +544,16 @@ class SuperPx4CommandBridge {
   ros::Subscriber command_subscriber_;
   ros::Subscriber alignment_subscriber_;
   ros::Subscriber mission_subscriber_;
+  ros::Subscriber auto_enable_subscriber_;
   ros::Subscriber vision_subscriber_;
+  ros::Subscriber finished_subscriber_;
   ros::Subscriber state_subscriber_;
   ros::Subscriber local_pose_subscriber_;
   ros::Publisher command_publisher_;
   ros::Publisher ready_publisher_;
   ros::Publisher status_publisher_;
   ros::ServiceServer enable_service_;
+  ros::ServiceClient set_mode_client_;
   ros::Timer output_timer_;
 
   geometry_msgs::PoseStamped latest_local_pose_;
@@ -428,9 +561,15 @@ class SuperPx4CommandBridge {
   std::string command_topic_;
   std::string output_topic_;
   std::string expected_frame_;
+  std::string auto_enable_topic_;
+  std::string offboard_mode_{"OFFBOARD"};
+  std::string fallback_mode_{"POSCTL"};
+  std::string px4_mode_;
   std::string last_status_;
   ros::Time last_command_time_;
   ros::Time last_local_pose_time_;
+  ros::Time prestream_started_;
+  ros::Time last_mode_request_time_;
   double command_timeout_{0.25};
   double local_pose_timeout_{0.5};
   double output_rate_{50.0};
@@ -443,12 +582,22 @@ class SuperPx4CommandBridge {
   double alignment_y_{0.0};
   double alignment_z_{0.0};
   double alignment_yaw_{0.0};
+  double prestream_duration_{1.0};
+  double mode_request_interval_{1.0};
   bool use_acceleration_{true};
+  bool automatic_mode_switch_{true};
+  bool require_armed_for_offboard_{true};
   bool alignment_ready_{false};
   bool mission_enabled_{false};
+  bool auto_enabled_{false};
   bool vision_healthy_{false};
+  bool mission_complete_{false};
   bool mavros_connected_{false};
-  bool manual_enable_{false};
+  bool mavros_armed_{false};
+  bool software_enabled_{true};
+  bool fault_latched_{false};
+  bool offboard_owned_{false};
+  bool exit_requested_{false};
   bool valid_command_{false};
   bool have_local_pose_{false};
   bool ready_published_{false};

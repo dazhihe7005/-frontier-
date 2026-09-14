@@ -178,6 +178,7 @@ class SuperExplorationDecider {
   double max_map_radius_{40.0};
   double raycast_max_range_{40.0};
   double frontier_search_radius_{30.0};
+  double max_exploration_radius_from_home_{35.0};
   double min_goal_distance_{2.0};
   double goal_reached_distance_{1.0};
   double goal_timeout_{30.0};
@@ -185,10 +186,13 @@ class SuperExplorationDecider {
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
   double vehicle_radius_{0.35};
+  double min_observation_height_above_home_{0.5};
+  double max_observation_height_above_home_{2.5};
   double data_timeout_{1.0};
   double decision_rate_{2.0};
   double sync_slop_{0.08};
   double battery_return_threshold_{0.20};
+  double return_home_height_offset_{0.0};
   double distance_weight_{0.35};
   double information_weight_{1.0};
   double heading_priority_weight_{4.0};
@@ -198,6 +202,7 @@ class SuperExplorationDecider {
   double side_wall_min_range_{1.0};
   double side_wall_max_range_{12.0};
   double front_obstacle_range_{6.0};
+  double front_obstacle_sector_deg_{24.0};
   double directional_vertical_tolerance_{4.0};
   double directional_floor_exclusion_{0.5};
   int side_wall_missing_confirm_frames_{8};

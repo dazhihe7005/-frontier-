@@ -124,6 +124,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("raycast_max_range", raycast_max_range_, raycast_max_range_);
   private_nh_.param("frontier_search_radius", frontier_search_radius_,
                     frontier_search_radius_);
+  private_nh_.param("max_exploration_radius_from_home",
+                    max_exploration_radius_from_home_,
+                    max_exploration_radius_from_home_);
   private_nh_.param("min_goal_distance", min_goal_distance_, min_goal_distance_);
   private_nh_.param("goal_reached_distance", goal_reached_distance_,
                     goal_reached_distance_);
@@ -133,11 +136,19 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("min_data_duration", min_data_duration_, min_data_duration_);
   private_nh_.param("candidate_spacing", candidate_spacing_, candidate_spacing_);
   private_nh_.param("vehicle_radius", vehicle_radius_, vehicle_radius_);
+  private_nh_.param("min_observation_height_above_home",
+                    min_observation_height_above_home_,
+                    min_observation_height_above_home_);
+  private_nh_.param("max_observation_height_above_home",
+                    max_observation_height_above_home_,
+                    max_observation_height_above_home_);
   private_nh_.param("data_timeout", data_timeout_, data_timeout_);
   private_nh_.param("decision_rate", decision_rate_, decision_rate_);
   private_nh_.param("sync_slop", sync_slop_, sync_slop_);
   private_nh_.param("battery_return_threshold", battery_return_threshold_,
                     battery_return_threshold_);
+  private_nh_.param("return_home_height_offset", return_home_height_offset_,
+                    return_home_height_offset_);
   private_nh_.param("distance_weight", distance_weight_, distance_weight_);
   private_nh_.param("information_weight", information_weight_,
                     information_weight_);
@@ -155,6 +166,8 @@ bool SuperExplorationDecider::loadParameters() {
                     side_wall_max_range_);
   private_nh_.param("front_obstacle_range", front_obstacle_range_,
                     front_obstacle_range_);
+  private_nh_.param("front_obstacle_sector_deg", front_obstacle_sector_deg_,
+                    front_obstacle_sector_deg_);
   private_nh_.param("directional_vertical_tolerance",
                     directional_vertical_tolerance_,
                     directional_vertical_tolerance_);
@@ -180,6 +193,10 @@ bool SuperExplorationDecider::loadParameters() {
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
+      !std::isfinite(max_exploration_radius_from_home_) ||
+      max_exploration_radius_from_home_ <= 0.0 ||
+      !std::isfinite(return_home_height_offset_) ||
+      return_home_height_offset_ < 0.0 ||
       !std::isfinite(heading_priority_weight_) ||
       !std::isfinite(fallback_heading_weight_) ||
       !std::isfinite(forward_sector_deg_) || forward_sector_deg_ <= 0.0 ||
@@ -190,10 +207,18 @@ bool SuperExplorationDecider::loadParameters() {
       !std::isfinite(side_wall_max_range_) ||
       side_wall_max_range_ <= side_wall_min_range_ ||
       !std::isfinite(front_obstacle_range_) || front_obstacle_range_ <= 0.0 ||
+      !std::isfinite(front_obstacle_sector_deg_) ||
+      front_obstacle_sector_deg_ <= 0.0 ||
+      front_obstacle_sector_deg_ >= 180.0 ||
       !std::isfinite(directional_vertical_tolerance_) ||
       directional_vertical_tolerance_ <= 0.0 ||
       !std::isfinite(directional_floor_exclusion_) ||
       directional_floor_exclusion_ < 0.0 ||
+      !std::isfinite(min_observation_height_above_home_) ||
+      !std::isfinite(max_observation_height_above_home_) ||
+      min_observation_height_above_home_ < 0.0 ||
+      max_observation_height_above_home_ <=
+          min_observation_height_above_home_ ||
       side_wall_missing_confirm_frames_ < 1 ||
       front_obstacle_confirm_frames_ < 1 ||
       sync_queue_size_ < 2 || max_points_per_cloud_ < 1) {
@@ -366,7 +391,11 @@ void SuperExplorationDecider::updateDirectionalEvidence(
 
   const double yaw = poseYaw(pose.pose);
   const double side_half_angle = side_wall_sector_deg_ * M_PI / 360.0;
-  const double front_half_angle = forward_sector_deg_ * M_PI / 360.0;
+  // Obstacle evidence needs a much narrower cone than frontier selection.
+  // Reusing the broad candidate cone makes oblique returns from the side
+  // walls look like a closed end wall.
+  const double front_half_angle =
+      front_obstacle_sector_deg_ * M_PI / 360.0;
   bool left_seen = false;
   bool right_seen = false;
   bool front_seen = false;
@@ -475,6 +504,24 @@ SuperExplorationDecider::findFrontiers() const {
       continue;
     }
     const geometry_msgs::Point point = keyToPoint(entry.first);
+    if (have_home_) {
+      const double home_dx = point.x - home_pose_.pose.position.x;
+      const double home_dy = point.y - home_pose_.pose.position.y;
+      const double max_home_distance_squared =
+          max_exploration_radius_from_home_ *
+          max_exploration_radius_from_home_;
+      if (home_dx * home_dx + home_dy * home_dy >
+          max_home_distance_squared) {
+        continue;
+      }
+      const double min_goal_z = home_pose_.pose.position.z +
+                                min_observation_height_above_home_;
+      const double max_goal_z = home_pose_.pose.position.z +
+                                max_observation_height_above_home_;
+      if (point.z < min_goal_z || point.z > max_goal_z) {
+        continue;
+      }
+    }
     const double distance_squared =
         squaredDistance(point, current_pose_.pose.position);
     if (distance_squared < min_distance_squared ||
@@ -747,7 +794,9 @@ void SuperExplorationDecider::beginReturnHome(const std::string& reason) {
   }
   returning_home_ = true;
   have_active_goal_ = false;
-  publishGoal(home_pose_, reason);
+  geometry_msgs::PoseStamped return_pose = home_pose_;
+  return_pose.pose.position.z += return_home_height_offset_;
+  publishGoal(return_pose, reason);
   std_msgs::Bool message;
   message.data = true;
   returning_publisher_.publish(message);
@@ -774,7 +823,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
 
   if (returning_home_) {
     if (squaredDistance(current_pose_.pose.position,
-                       home_pose_.pose.position) <=
+                       current_goal_.pose.position) <=
         goal_reached_distance_ * goal_reached_distance_) {
       returning_home_ = false;
       mission_finished_ = true;
@@ -815,7 +864,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       have_active_goal_ = false;
       publishStatus("GOAL_TIMEOUT", "discarding unreachable candidate");
     } else {
-      publishStatus("EXPLORING", "SUPER is following the active frontier goal");
+      publishStatus("EXPLORING",
+                    "active frontier goal published; awaiting odometry progress");
       return;
     }
   }

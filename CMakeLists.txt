@@ -89,6 +89,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
 
 catkin_install_python(PROGRAMS
   scripts/ground_station.py
+  scripts/task1_sitl_adapter.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -98,4 +99,8 @@ install(DIRECTORY launch/
 
 install(DIRECTORY config/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
+)
+
+install(DIRECTORY worlds/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/worlds
 )
