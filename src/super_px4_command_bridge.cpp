@@ -346,6 +346,12 @@ class SuperPx4CommandBridge {
     }
     const auto output = convert(*command);
     if (!insideFlightVolume(output, &reason)) {
+      ROS_ERROR_THROTTLE(
+          1.0,
+          "Rejecting SUPER command outside flight volume: xyz=(%.3f, %.3f, %.3f), "
+          "limits: radius<=%.3f, z=[%.3f, %.3f], alignment_z=%.3f",
+          output.position.x, output.position.y, output.position.z,
+          max_horizontal_radius_, min_height_, max_height_, alignment_z_);
       valid_command_ = false;
       latchFault(reason);
       return;

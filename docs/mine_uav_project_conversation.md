@@ -1546,3 +1546,33 @@ rostopic echo /mine_uav/mission/goaf_enable
 - 当前是Gazebo Ray传感器的MID360风格近似模型，不是实体Livox MID-360/MID360S、Livox SDK或真实UDP数据流；配置了360度水平扫描、32条垂直采样、10 Hz、30 m量程和高斯噪声。
 - 当前没有运行Fast-LIO2。`gazebo_mid360_fastlio_adapter.py`只是把Gazebo `sensor_msgs/PointCloud`原始点云依据 `/Odometry` 和安装偏移刚性变换到 `camera_init`，重新发布为 `PointCloud2`；这不是Fast-LIO2的IMU预积分、特征处理、扫描配准或状态估计。
 - 当前仿真验证的是“雷达几何数据→坐标注册→决策器→SUPER→PX4”接口和任务逻辑。要验证真实Fast-LIO2，后续应接入Livox驱动、IMU和Fast-LIO2节点，再让其原生输出 `/Odometry`、`/cloud_registered`，并关闭该仿真注册适配器以避免重复发布。
+
+## 第62轮：新增复杂地形采空区仿真场景
+
+用户希望在复杂地形中进行仿真测试。新增 `worlds/goaf_complex.world`，保留入口方向和连续三面墙拓扑，同时加入侧墙折线变化、支护柱、落石、低矮地面障碍和更长的30 m主巷道，用于测试真实雷达遮挡、frontier变化、绕障、机头方向优先和三面墙完成判据。
+
+复杂场景不覆盖原 `goaf_mine.world`，通过 `world:=.../goaf_complex.world` 选择。场景SDF解析通过，规则和数据链代码不变；由于复杂场景需要重新加载Gazebo机体和PX4，必须先退出旧仿真再启动，完整PX4动态回归待用户重新启动后继续验证。
+
+## 第63轮：完成复杂地形采空区任务一动态闭环验证
+
+用户希望在复杂地形中运行仿真测试。本轮先停止上一轮故障锁存的旧仿真，重新编译带诊断信息的 `super_px4_command_bridge`，再在独立 ROS Master `11312` 上启动 `goaf_complex.world`。
+
+### 仿真结果
+
+- Gazebo成功加载30 m级复杂采空区、折线侧墙、支护柱、落石和低矮障碍；带机载MID360风格Ray传感器的Iris成功生成。
+- 原始 `/mine_uav/sitl/mid360/points` 与注册后的 `/cloud_registered` 持续约10 Hz；适配器根据 `/Odometry` 和安装偏移完成 `camera_init` 坐标注册，累计地图最终约12万体素。
+- 任务调度器选择任务一后，PX4成功解锁并进入 `OFFBOARD`；决策器沿机头主方向生成端墙接近目标，目标推进到约26 m后生成返航目标。
+- 三面墙覆盖判据达到 `end_seen=true`、左右覆盖率 `1.00/1.00`、缺口 `0/0`、连续确认 `4/4`；随后发布 `model_complete=true` 和 `finished=true`。
+- 飞机返回入口附近，指令桥状态为 `TASK1_COMPLETE`，PX4切换为 `AUTO.LOITER`，仿真过程未出现高度围栏故障。
+
+### 对上一轮故障的结论
+
+上一轮的 `HEIGHT_GEOFENCE` 是任务启动/规划时序下的偶发保护触发，不能归因于雷达断链；本轮重启后桥接状态正常。复杂场景中仍可看到SUPER在局部障碍附近尝试重规划，但最终闭环完成，因此当前验证覆盖“仿真雷达几何数据→位姿注册→决策器→SUPER→PX4→返航”的接口和任务逻辑，不代表真实MID360、Fast-LIO2和雷达建模精度已经验收。
+
+本轮动态仿真启动命令：
+
+```bash
+roslaunch mine_uav_control task1_px4_sitl.launch \
+  world:=/home/nuc/super_ws/src/mine_uav_control/worlds/goaf_complex.world \
+  max_exploration_radius:=34.0 gui:=true rviz:=true
+```

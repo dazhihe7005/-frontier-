@@ -7,6 +7,7 @@
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
   <arg name="vehicle_sdf"
        default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
+  <arg name="max_exploration_radius" default="24.0"/>
 
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -52,7 +53,7 @@
         name="super_exploration_decider" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
     <param name="frontier_search_radius" value="10.0"/>
-    <param name="max_exploration_radius_from_home" value="24.0"/>
+    <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
     <param name="min_observation_height_above_home" value="0.5"/>
     <param name="max_observation_height_above_home" value="1.8"/>
     <param name="directional_vertical_tolerance" value="1.5"/>

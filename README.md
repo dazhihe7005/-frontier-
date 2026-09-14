@@ -284,6 +284,32 @@ home返航点，最终位置约 `(-0.35, 0.17, 1.05) m`，`model_complete=true`�
 转发；如果 PX4 已切换到 `AUTO.LOITER`、`POSCTL` 等非 OFFBOARD 模式，则静默停止，
 不会把正常的任务收尾重复报告为 `Setpoint command is ... old`。
 
+#### 复杂地形采空区场景
+
+新增 `worlds/goaf_complex.world`，包含连续折线侧墙、支护柱、落石、低矮地面障碍和更长
+的主巷道。使用原有雷达、决策器、SUPER和PX4闭环，只替换世界文件：
+
+```bash
+roslaunch mine_uav_control task1_px4_sitl.launch \
+  world:=/home/nuc/super_ws/src/mine_uav_control/worlds/goaf_complex.world \
+  gui:=true rviz:=true
+```
+
+复杂场景的尽头约为 `x=30 m`，启动时可增加 `max_exploration_radius:=34.0` 覆盖默认安全半径：
+
+```bash
+roslaunch mine_uav_control task1_px4_sitl.launch \
+  world:=/home/nuc/super_ws/src/mine_uav_control/worlds/goaf_complex.world \
+  max_exploration_radius:=34.0 gui:=true rviz:=true
+```
+
+本轮完整动态回归已通过：PX4在任务选择后进入OFFBOARD，飞机沿主方向前进到约26 m，
+点云注册与累计地图持续更新；决策器确认端墙、左右墙连续覆盖后发布返航目标，飞机返回
+入口附近，最终发布 `model_complete=true`、`finished=true`，指令桥状态为
+`TASK1_COMPLETE`，PX4切换到 `AUTO.LOITER`。本轮累计地图约12万体素，注册点云保持约
+10 Hz，未出现高度围栏故障。该结果证明复杂场景下任务一接口和闭环可运行，但仍不等价于
+真实MID360 + Fast-LIO2的建图精度验收。
+
 专用RViz配置 `rviz/task1_mid360.rviz` 使用 `camera_init` 作为Fixed Frame，并默认显示
 `/cloud_registered`、累计点云和PX4轨迹。此前使用SUPER的 `top_down.rviz` 时Fixed
 Frame为 `world`，而仿真没有发布 `world -> camera_init` TF，因此话题虽为10 Hz也可能

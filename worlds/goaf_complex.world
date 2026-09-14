@@ -1,0 +1,50 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="goaf_complex">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <!-- A long open-entrance goaf. The side walls remain continuous for the
+         semantic completion gate, but each segment has a small offset to
+         exercise registration, obstacle avoidance, and wall coverage. -->
+    <model name="left_wall_00"><static>true</static><pose>0.0 4.5 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_01"><static>true</static><pose>4.0 4.2 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_02"><static>true</static><pose>8.0 4.8 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_03"><static>true</static><pose>12.0 4.3 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_04"><static>true</static><pose>16.0 5.0 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_05"><static>true</static><pose>20.0 4.4 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_06"><static>true</static><pose>24.0 4.9 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="left_wall_07"><static>true</static><pose>28.0 4.5 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+
+    <model name="right_wall_00"><static>true</static><pose>0.0 -4.5 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_01"><static>true</static><pose>4.0 -4.2 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_02"><static>true</static><pose>8.0 -4.8 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_03"><static>true</static><pose>12.0 -4.3 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_04"><static>true</static><pose>16.0 -5.0 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_05"><static>true</static><pose>20.0 -4.4 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_06"><static>true</static><pose>24.0 -4.9 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+    <model name="right_wall_07"><static>true</static><pose>28.0 -4.5 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>4.0 0.25 5.0</size></box></geometry></visual></link></model>
+
+    <model name="far_wall"><static>true</static><pose>30.0 0 2.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.3 10.0 5.0</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.3 10.0 5.0</size></box></geometry></visual></link></model>
+    <model name="ceiling"><static>true</static><pose>15.0 0 5.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>30.0 10.0 0.25</size></box></geometry></collision><visual name="visual"><geometry><box><size>30.0 10.0 0.25</size></box></geometry></visual></link></model>
+
+    <!-- Support pillars and braces create partial occlusion without closing
+         the main flight corridor. -->
+    <model name="support_left_00"><static>true</static><pose>5.5 2.5 2.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.35</radius><length>4.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.35</radius><length>4.0</length></cylinder></geometry></visual></link></model>
+    <model name="support_right_00"><static>true</static><pose>5.5 -2.5 2.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.35</radius><length>4.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.35</radius><length>4.0</length></cylinder></geometry></visual></link></model>
+    <model name="support_left_01"><static>true</static><pose>15.0 2.8 2.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.4</radius><length>4.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.4</radius><length>4.0</length></cylinder></geometry></visual></link></model>
+    <model name="support_right_01"><static>true</static><pose>15.0 -2.8 2.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.4</radius><length>4.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.4</radius><length>4.0</length></cylinder></geometry></visual></link></model>
+    <model name="support_left_02"><static>true</static><pose>23.0 2.2 2.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.3</radius><length>4.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.3</radius><length>4.0</length></cylinder></geometry></visual></link></model>
+    <model name="support_right_02"><static>true</static><pose>23.0 -2.2 2.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.3</radius><length>4.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.3</radius><length>4.0</length></cylinder></geometry></visual></link></model>
+
+    <!-- Irregular rubble on the floor. -->
+    <model name="rock_00"><static>true</static><pose>9.0 -0.9 0.55 0.1 0.2 0.3</pose><link name="link"><collision name="collision"><geometry><sphere><radius>0.55</radius></sphere></geometry></collision><visual name="visual"><geometry><sphere><radius>0.55</radius></sphere></geometry></visual></link></model>
+    <model name="rock_01"><static>true</static><pose>11.0 1.0 0.35 0 0 0</pose><link name="link"><collision name="collision"><geometry><sphere><radius>0.35</radius></sphere></geometry></collision><visual name="visual"><geometry><sphere><radius>0.35</radius></sphere></geometry></visual></link></model>
+    <model name="rock_02"><static>true</static><pose>18.0 -1.2 0.45 0 0 0</pose><link name="link"><collision name="collision"><geometry><sphere><radius>0.45</radius></sphere></geometry></collision><visual name="visual"><geometry><sphere><radius>0.45</radius></sphere></geometry></visual></link></model>
+    <model name="rock_03"><static>true</static><pose>25.0 1.4 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><sphere><radius>0.5</radius></sphere></geometry></collision><visual name="visual"><geometry><sphere><radius>0.5</radius></sphere></geometry></visual></link></model>
+
+    <!-- Low floor shelves exercise vertical clearance and near-ground returns. -->
+    <model name="floor_shelf_00"><static>true</static><pose>13.0 -2.0 0.15 0 0 0.08</pose><link name="link"><collision name="collision"><geometry><box><size>3.0 1.2 0.3</size></box></geometry></collision><visual name="visual"><geometry><box><size>3.0 1.2 0.3</size></box></geometry></visual></link></model>
+    <model name="floor_shelf_01"><static>true</static><pose>21.0 2.0 0.2 0 0 -0.08</pose><link name="link"><collision name="collision"><geometry><box><size>2.5 1.4 0.4</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.5 1.4 0.4</size></box></geometry></visual></link></model>
+  </world>
+</sdf>
