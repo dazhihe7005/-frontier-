@@ -1530,3 +1530,7 @@ rostopic echo /mine_uav/mission/goaf_enable
 用户提醒：当5h token限额接近耗尽时，必须至少提前2%整理并上传尚未同步的项目内容。本轮立即暂停继续仿真操作，检查到GitHub本地仓库比远端领先1个提交，包含MID360 Gazebo模型、注册适配器、RViz配置、启动文件、README和前序对话记录。
 
 已通过SSH 443重试推送并确认 `origin/main` 与本地一致，最新提交为 `aa6bf94 feat: add Gazebo MID360 lidar to task1 SITL`。本轮后续工作在仓库安全同步完成的基础上继续。
+
+## 第59轮：关闭旧采空区仿真进程
+
+用户说明没有其他终端，希望关闭仿真进程。检查确认当前已不存在 `px4`、`gzserver`、`gzclient`、RViz 或 `task1_px4_sitl.launch` 进程，旧仿真已经退出，没有执行范围外的强制杀进程操作。后续可直接使用新启动文件加载MID360模型和专用RViz配置。
