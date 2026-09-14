@@ -63,7 +63,9 @@
     <param name="min_observation_height_above_home" value="0.5"/>
     <param name="max_observation_height_above_home" value="1.8"/>
     <param name="directional_vertical_tolerance" value="1.5"/>
-    <param name="return_home_height_offset" value="1.0"/>
+    <!-- Keep the return leg at a safe cruise height; do not descend through
+         the mapped floor until a separate landing phase is implemented. -->
+    <param name="return_home_height_offset" value="1.8"/>
     <param name="no_frontier_timeout" value="8.0"/>
   </node>
 

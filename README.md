@@ -316,6 +316,13 @@ Gazebo Iris 自体回波：机体回波最大横向半径约0.686 m，仿真适�
 只记为“探索完成、返航进行中”，不宣称返航闭环已验收。SITL启动文件另将出生高度设为
 1.15 m，表示真实机载系统应在任务一前独立完成起飞阶段。
 
+第65轮继续调整复杂场景：支护柱移到侧墙附近，返航高度改为保持安全巡航高度
+return_home_height_offset=1.8，不在任务返航阶段下降穿过已建模地面。最终测试中飞机
+前进约24.9 m，三面墙判定达到 confirm=4/4，返航到入口附近
+(-0.27, 0.09, 1.78) m；决策器状态为 COMPLETE，指令桥为 TASK1_COMPLETE，
+PX4切换到 AUTO.LOITER。这证明当前仿真任务一闭环已通过；真实系统仍需单独设计起飞、
+降落和返航失联保护状态机。
+
 专用RViz配置 `rviz/task1_mid360.rviz` 使用 `camera_init` 作为Fixed Frame，并默认显示
 `/cloud_registered`、累计点云和PX4轨迹。此前使用SUPER的 `top_down.rviz` 时Fixed
 Frame为 `world`，而仿真没有发布 `world -> camera_init` TF，因此话题虽为10 Hz也可能
