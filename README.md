@@ -275,6 +275,11 @@ home返航点，最终位置约 `(-0.35, 0.17, 1.05) m`，`model_complete=true`�
 替代雷达建模模块对点云密度、配准误差、孔洞和最终模型质量的验收，也不能替代真机外部
 视觉融合、安装外参和碰撞裕量测试。
 
+任务完成后，上游按设计停止 `/mine_uav/setpoint_cmd`。`offboard_bridge` 会读取
+`/mavros/state`：如果 PX4 仍处于 `OFFBOARD`，陈旧或缺失指令仍会触发安全告警并停止
+转发；如果 PX4 已切换到 `AUTO.LOITER`、`POSCTL` 等非 OFFBOARD 模式，则静默停止，
+不会把正常的任务收尾重复报告为 `Setpoint command is ... old`。
+
 #### 任务一算法闭环仿真（建议先运行）
 
 该模式使用 SUPER 自带的 `perfect_drone_sim` 产生 360° 模拟点云和理想里程计，闭环运行“模拟传感器 → 自主决策器 → SUPER → 模拟无人机”。它可以直接观察 frontier、目标、局部地图、规划轨迹和无人机运动，但不包含 PX4、MAVROS 和 Fast-LIO2 状态估计。

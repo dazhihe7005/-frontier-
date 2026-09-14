@@ -1469,3 +1469,20 @@ rostopic echo /mine_uav/mission/goaf_enable
 - 当前判据确认的是决策器占据体素中的三面墙几何连续性，不等于雷达开发者的最终模型已达到点云密度、配准误差、孔洞率或工程精度要求。
 - 本轮点云由SITL适配器直接模拟Fast-LIO2输出，未仿真Livox原始UDP、IMU噪声、Fast-LIO2漂移和真实粉尘/弱纹理环境；这些需要后续噪声场景和实机测试。
 - 部分轨迹转弯或返航初期仍存在SUPER优化告警，但最终轨迹执行、返航、模式退出和完成后停止规划均成功；下一步应针对告警做参数统计与整定，并增加缺墙、断墙和不规则墙面的负例仿真。
+
+## 第55轮：区分OFFBOARD断流故障与任务完成后的正常停流
+
+用户在采空区SITL完成后看到 `Setpoint command is ... old; stopping publication of old target` 每秒持续出现。定位确认该日志来自最末层 `offboard_bridge`，不是雷达、Fast-LIO2、SUPER或PX4自身故障。
+
+### 原因
+
+- 三面墙建模完成并返航后，指令桥按设计停止发布 `/mine_uav/setpoint_cmd`，并把PX4从OFFBOARD切换到SITL使用的 `AUTO.LOITER`。
+- 旧版 `offboard_bridge` 不订阅PX4模式，只知道最后一条指令持续变旧，因此即使PX4已经不依赖外部setpoint，仍每秒重复输出陈旧指令告警。
+- 日志中的“stopping publication”本身说明安全超时正在生效，没有继续向PX4转发旧目标；问题是任务完成后的重复告警语义不准确。
+
+### 修复与验证
+
+- `offboard_bridge` 新增 `/mavros/state` 订阅和可配置的 `offboard_mode`（默认 `OFFBOARD`）。
+- PX4处于OFFBOARD或尚未取得MAVROS状态时，缺失/陈旧指令仍会告警并停止转发，保留真实飞行中的断流保护。
+- PX4已经切换到 `AUTO.LOITER`、`POSCTL` 等非OFFBOARD模式时，陈旧上游指令属于正常收尾，节点静默停止转发。
+- `mine_uav_control`重新编译通过。隔离ROS Master最小测试中，模拟OFFBOARD后旧指令持续触发告警；切换为AUTO.LOITER后立即无新增告警，证明没有掩盖OFFBOARD飞行中的真实断流。
