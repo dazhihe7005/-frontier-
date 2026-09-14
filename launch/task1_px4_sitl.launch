@@ -17,7 +17,9 @@
     <arg name="world" value="$(arg world)"/>
     <arg name="x" value="0"/>
     <arg name="y" value="0"/>
-    <arg name="z" value="0.15"/>
+    <!-- Start above the ground for the exploration-loop SITL test. The real
+         vehicle should run a separate takeoff phase before enabling task one. -->
+    <arg name="z" value="1.15"/>
     <arg name="Y" value="0"/>
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
@@ -37,6 +39,10 @@
     <param name="output_topic" value="/cloud_registered"/>
     <param name="world_frame" value="camera_init"/>
     <rosparam param="sensor_offset">[0.0, 0.0, 0.14]</rosparam>
+    <param name="self_filter_enable" value="true"/>
+    <param name="self_filter_xy_radius" value="0.80"/>
+    <param name="self_filter_z_min" value="-0.65"/>
+    <param name="self_filter_z_max" value="0.25"/>
     <param name="min_range" value="0.30"/>
     <param name="max_range" value="29.5"/>
     <param name="voxel_size" value="0.20"/>

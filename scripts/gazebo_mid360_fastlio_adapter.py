@@ -39,6 +39,18 @@ class GazeboMid360FastlioAdapter:
         self.max_range = max(
             self.min_range + 0.1, float(rospy.get_param("~max_range", 29.5))
         )
+        self.self_filter_enable = bool(
+            rospy.get_param("~self_filter_enable", True)
+        )
+        self.self_filter_xy_radius = max(
+            0.0, float(rospy.get_param("~self_filter_xy_radius", 0.80))
+        )
+        self.self_filter_z_min = float(
+            rospy.get_param("~self_filter_z_min", -0.65)
+        )
+        self.self_filter_z_max = float(
+            rospy.get_param("~self_filter_z_max", 0.25)
+        )
         self.voxel_size = max(0.05, float(rospy.get_param("~voxel_size", 0.20)))
         self.max_global_points = max(
             1000, int(rospy.get_param("~max_global_points", 120000))
@@ -140,6 +152,7 @@ class GazeboMid360FastlioAdapter:
         )
 
         registered = []
+        filtered_self = 0
         for index, raw_point in enumerate(cloud.points):
             if index % self.point_stride:
                 continue
@@ -150,6 +163,20 @@ class GazeboMid360FastlioAdapter:
             if range_squared < self.min_range * self.min_range:
                 continue
             if range_squared > self.max_range * self.max_range:
+                continue
+            # Gazebo's generic ray sensor can see the Iris fuselage/landing
+            # gear because it has no Livox-style self-return suppression.  A
+            # self return becomes a false obstacle around the takeoff point
+            # and makes SUPER's CIRI corridor infeasible.  This filter is
+            # deliberately expressed in the sensor frame and is only for the
+            # simulation adapter; real Fast-LIO2 data must not use it.
+            if (
+                self.self_filter_enable
+                and point[0] * point[0] + point[1] * point[1]
+                <= self.self_filter_xy_radius * self.self_filter_xy_radius
+                and self.self_filter_z_min <= point[2] <= self.self_filter_z_max
+            ):
+                filtered_self += 1
                 continue
             rotated = self._rotate(rotation, point)
             registered.append(
@@ -176,6 +203,12 @@ class GazeboMid360FastlioAdapter:
             len(registered),
             len(self._global_voxels),
         )
+        if filtered_self:
+            rospy.loginfo_throttle(
+                5.0,
+                "Gazebo MID360 self-return filter removed %d raw points",
+                filtered_self,
+            )
 
     def _accumulate(self, points):
         inverse = 1.0 / self.voxel_size

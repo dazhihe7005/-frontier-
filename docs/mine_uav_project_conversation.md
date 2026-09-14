@@ -1576,3 +1576,33 @@ roslaunch mine_uav_control task1_px4_sitl.launch \
   world:=/home/nuc/super_ws/src/mine_uav_control/worlds/goaf_complex.world \
   max_exploration_radius:=34.0 gui:=true rviz:=true
 ```
+
+## 第64轮：修复复杂场景自体回波并复测任务一
+
+用户报告SUPER日志持续出现 `GeneratePolytopeFromLine failed`，无人机在起飞区原地不动。
+本轮通过当前SITL的原始和注册点云进行定位：
+
+- Gazebo Ray雷达原始点云每帧约11520点；起点附近有约3960个0.8 m内的近点，最近距离约
+  0.20 m，属于Gazebo Iris机体/起落架的自体回波，不是真实采空区障碍。
+- 之前适配器的过滤半径0.55 m不足，注册点云仍出现距离飞机约0.576 m的机体回波，CIRI
+  将其膨胀为不可行障碍，导致SUPER反复重规划。
+- `gazebo_mid360_fastlio_adapter.py` 的仿真专用 `self_filter_xy_radius` 默认值及SITL
+  启动参数改为0.80 m；真实Fast-LIO2数据不经过该过滤。
+- 复杂世界中的低矮货架和落石调整到侧墙附近，保留复杂地形和遮挡效果，为主方向探测及
+  返航留出中心通道；这只修改Gazebo测试世界，不改变真实任务算法。
+- SITL启动文件的出生高度改为1.15 m，并在注释中说明真实无人机需要单独起飞阶段后才能
+  开启任务一。注意PX4本地坐标会重新建立原点，出生高度不等于本地z坐标，因此它不能
+  替代真实起飞状态机。
+
+### 复测结果
+
+- 过滤参数已在启动输出中确认：`self_filter_enable=true`、半径0.80 m；雷达注册点云
+  约10 Hz，累计地图持续增长。
+- PX4成功连接、解锁并进入 `OFFBOARD`；飞机从入口前进到约25.9 m。
+- 三面墙判定达到 `end_seen=true`、左右覆盖率 `1.00/1.00`、缺口 `0/0`、确认
+  `4/4`，决策器发布 `RETURNING` 并进入返航。
+- 本轮对话被用户在返航等待阶段中断，返航尚未验证到起点，故不能把本轮记作完整
+  `TASK1_COMPLETE`；第63轮已有一次完整闭环记录。
+
+本轮暂未修改真实PX4串口、TELEM2、Fast-LIO2或SUPER源码，只修改仿真适配器参数、复杂
+Gazebo世界和SITL启动参数。

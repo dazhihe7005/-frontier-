@@ -303,12 +303,18 @@ roslaunch mine_uav_control task1_px4_sitl.launch \
   max_exploration_radius:=34.0 gui:=true rviz:=true
 ```
 
-本轮完整动态回归已通过：PX4在任务选择后进入OFFBOARD，飞机沿主方向前进到约26 m，
-点云注册与累计地图持续更新；决策器确认端墙、左右墙连续覆盖后发布返航目标，飞机返回
-入口附近，最终发布 `model_complete=true`、`finished=true`，指令桥状态为
-`TASK1_COMPLETE`，PX4切换到 `AUTO.LOITER`。本轮累计地图约12万体素，注册点云保持约
-10 Hz，未出现高度围栏故障。该结果证明复杂场景下任务一接口和闭环可运行，但仍不等价于
-真实MID360 + Fast-LIO2的建图精度验收。
+第63轮的基础复杂场景回归曾完整通过：PX4进入OFFBOARD，决策器完成三面墙判定并返航，
+最终发布 `model_complete=true`、`finished=true`，指令桥进入 `TASK1_COMPLETE`，
+PX4切换到 `AUTO.LOITER`。后续为复现用户报告的SUPER原地不动问题，又定位并修正了
+Gazebo Iris 自体回波：机体回波最大横向半径约0.686 m，仿真适配器的
+`self_filter_xy_radius` 已调整为0.80 m；该过滤只对仿真适配器生效，真实Fast-LIO2
+不使用它。
+
+第64轮使用两侧障碍版本重新测试时，PX4进入OFFBOARD，飞机前进至约25.9 m，三面墙
+判据达到 `end_seen=true`、左右覆盖率 `1.00/1.00`、缺口 `0/0`、确认
+`4/4`，决策器进入 `RETURNING`。本轮对话结束前返航尚未完全回到起点，因此该轮
+只记为“探索完成、返航进行中”，不宣称返航闭环已验收。SITL启动文件另将出生高度设为
+1.15 m，表示真实机载系统应在任务一前独立完成起飞阶段。
 
 专用RViz配置 `rviz/task1_mid360.rviz` 使用 `camera_init` 作为Fixed Frame，并默认显示
 `/cloud_registered`、累计点云和PX4轨迹。此前使用SUPER的 `top_down.rviz` 时Fixed
