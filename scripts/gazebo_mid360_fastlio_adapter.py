@@ -46,7 +46,7 @@ class GazeboMid360FastlioAdapter:
             rospy.get_param("~self_filter_enable", True)
         )
         self.self_filter_xy_radius = max(
-            0.0, float(rospy.get_param("~self_filter_xy_radius", 0.80))
+            0.0, float(rospy.get_param("~self_filter_xy_radius", 1.00))
         )
         self.self_filter_z_min = float(
             rospy.get_param("~self_filter_z_min", -0.65)

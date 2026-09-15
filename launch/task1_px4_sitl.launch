@@ -66,7 +66,7 @@
     <param name="world_frame" value="camera_init"/>
     <rosparam param="sensor_offset">[0.0, 0.0, 0.14]</rosparam>
     <param name="self_filter_enable" value="true"/>
-    <param name="self_filter_xy_radius" value="0.80"/>
+    <param name="self_filter_xy_radius" value="1.00"/>
     <param name="self_filter_z_min" value="-0.65"/>
     <param name="self_filter_z_max" value="0.25"/>
     <param name="min_range" value="0.30"/>
@@ -136,6 +136,10 @@
        headless-SITL hold after task completion; the real launch keeps POSCTL. -->
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
     <arg name="fallback_mode" value="AUTO.LOITER"/>
+    <!-- The planner remains limited to 1.0 m/s.  SITL needs a separate
+         anomaly threshold because PX4 tracking velocity is inherited by
+         online replans and can briefly exceed the nominal planner limit. -->
+    <arg name="max_speed" value="2.2"/>
     <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
     <arg name="min_height" value="$(arg bridge_min_height)"/>
     <arg name="max_height" value="$(arg bridge_max_height)"/>

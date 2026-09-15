@@ -132,8 +132,9 @@ rostopic echo /mine_uav/task1/command_status
 rostopic echo /goal
 ```
 
-首次带飞前仍应拆桨验证 CH7、定位中断保护和人工接管；当前任务一速度硬上限为
-`1.0 m/s`，相对任务 home 的高度硬上限为 `1.8 m`。
+首次带飞前仍应拆桨验证 CH7、定位中断保护和人工接管；当前任务一SUPER名义轨迹速度
+上限为 `1.0 m/s`，指令异常保护阈值为 `1.1 m/s`，相对任务 home 的高度硬上限为
+`1.8 m`。PX4实际速度仍可能存在短时跟踪误差，不能把规划上限当成实测速度保证。
 
 ### 实验室临时测试启动逻辑（手动起飞后 CH7 启动）
 
@@ -439,8 +440,8 @@ roslaunch mine_uav_control task1_px4_sitl.launch \
 第63轮的基础复杂场景回归曾完整通过：PX4进入OFFBOARD，决策器完成三面墙判定并返航，
 最终发布 `model_complete=true`、`finished=true`，指令桥进入 `TASK1_COMPLETE`，
 PX4切换到 `AUTO.LOITER`。后续为复现用户报告的SUPER原地不动问题，又定位并修正了
-Gazebo Iris 自体回波：机体回波最大横向半径约0.686 m，仿真适配器的
-`self_filter_xy_radius` 已调整为0.80 m；该过滤只对仿真适配器生效，真实Fast-LIO2
+Gazebo Iris 自体回波：当前长距模型实测仍有约0.803 m的旋翼/机体边界回波，仿真适配器的
+`self_filter_xy_radius` 已调整为1.00 m；该过滤只对仿真适配器生效，真实Fast-LIO2
 不使用它。
 
 第64轮使用两侧障碍版本重新测试时，PX4进入OFFBOARD，飞机前进至约25.9 m，三面墙
