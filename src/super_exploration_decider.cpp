@@ -216,6 +216,9 @@ bool SuperExplorationDecider::loadParameters() {
                     wall_coverage_bin_size_);
   private_nh_.param("wall_coverage_min_depth", wall_coverage_min_depth_,
                     wall_coverage_min_depth_);
+  private_nh_.param("wall_coverage_end_min_depth",
+                    wall_coverage_end_min_depth_,
+                    wall_coverage_end_min_depth_);
   private_nh_.param("wall_coverage_min_ratio", wall_coverage_min_ratio_,
                     wall_coverage_min_ratio_);
   private_nh_.param("wall_coverage_side_min_distance",
@@ -249,6 +252,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("wall_coverage_max_gap_bins",
                     wall_coverage_max_gap_bins_,
                     wall_coverage_max_gap_bins_);
+  private_nh_.param("wall_coverage_end_max_gap_bins",
+                    wall_coverage_end_max_gap_bins_,
+                    wall_coverage_end_max_gap_bins_);
   private_nh_.param("three_wall_confirm_cycles", three_wall_confirm_cycles_,
                     three_wall_confirm_cycles_);
   private_nh_.param("sync_queue_size", sync_queue_size_, sync_queue_size_);
@@ -314,6 +320,8 @@ bool SuperExplorationDecider::loadParameters() {
       wall_coverage_bin_size_ <= 0.0 ||
       !std::isfinite(wall_coverage_min_depth_) ||
       wall_coverage_min_depth_ <= wall_coverage_bin_size_ ||
+      !std::isfinite(wall_coverage_end_min_depth_) ||
+      wall_coverage_end_min_depth_ < wall_coverage_min_depth_ ||
       !std::isfinite(wall_coverage_min_ratio_) ||
       wall_coverage_min_ratio_ <= 0.0 || wall_coverage_min_ratio_ > 1.0 ||
       !std::isfinite(wall_coverage_side_min_distance_) ||
@@ -652,7 +660,7 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
       right_bins.insert(forward_bin);
     }
 
-    if (forward < wall_coverage_min_depth_ ||
+    if (forward < wall_coverage_end_min_depth_ ||
         lateral_abs > wall_coverage_side_max_distance_) {
       continue;
     }
@@ -693,7 +701,7 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
     };
     for (const int lateral_bin : candidate.second.lateral_bins) {
       if (first_bin ||
-          lateral_bin - previous_bin > wall_coverage_max_gap_bins_ + 1) {
+          lateral_bin - previous_bin > wall_coverage_end_max_gap_bins_ + 1) {
         finish_component();
         component_first = lateral_bin;
         component_has_center = false;

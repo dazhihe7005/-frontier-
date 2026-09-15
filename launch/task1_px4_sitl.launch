@@ -20,6 +20,8 @@
   <arg name="decider_max_points_per_cloud" default="5000"/>
   <arg name="side_wall_max_range" default="12.0"/>
   <arg name="wall_coverage_side_max_distance" default="8.0"/>
+  <arg name="wall_coverage_end_min_depth" default="12.0"/>
+  <arg name="wall_coverage_end_max_gap_bins" default="2"/>
   <arg name="wall_coverage_end_min_span" default="4.0"/>
   <arg name="lidar_max_range" default="29.5"/>
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
@@ -86,6 +88,10 @@
     <param name="side_wall_max_range" value="$(arg side_wall_max_range)"/>
     <param name="wall_coverage_side_max_distance"
            value="$(arg wall_coverage_side_max_distance)"/>
+    <param name="wall_coverage_end_min_depth"
+           value="$(arg wall_coverage_end_min_depth)"/>
+    <param name="wall_coverage_end_max_gap_bins"
+           value="$(arg wall_coverage_end_max_gap_bins)"/>
     <param name="wall_coverage_end_min_span"
            value="$(arg wall_coverage_end_min_span)"/>
     <!-- Keep the mine traversal almost level. Vertical exploration frontiers

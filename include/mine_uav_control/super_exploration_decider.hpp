@@ -245,6 +245,7 @@ class SuperExplorationDecider {
   double directional_floor_exclusion_{0.5};
   double wall_coverage_bin_size_{1.0};
   double wall_coverage_min_depth_{8.0};
+  double wall_coverage_end_min_depth_{12.0};
   double wall_coverage_min_ratio_{0.80};
   double wall_coverage_side_min_distance_{2.0};
   double wall_coverage_side_max_distance_{8.0};
@@ -258,6 +259,7 @@ class SuperExplorationDecider {
   int front_obstacle_confirm_frames_{3};
   int front_obstacle_min_points_{20};
   int wall_coverage_max_gap_bins_{2};
+  int wall_coverage_end_max_gap_bins_{2};
   int three_wall_confirm_cycles_{4};
   int sync_queue_size_{20};
   int max_points_per_cloud_{5000};

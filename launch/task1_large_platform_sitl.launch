@@ -29,6 +29,8 @@
     <arg name="decider_max_points_per_cloud" value="1600"/>
     <arg name="side_wall_max_range" value="60.0"/>
     <arg name="wall_coverage_side_max_distance" value="55.0"/>
+    <arg name="wall_coverage_end_min_depth" value="15.0"/>
+    <arg name="wall_coverage_end_max_gap_bins" value="15"/>
     <arg name="wall_coverage_end_min_span" value="80.0"/>
     <arg name="lidar_max_range" value="69.5"/>
 

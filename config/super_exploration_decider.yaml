@@ -81,8 +81,12 @@ front_obstacle_confirm_frames: 3
 require_three_wall_completion: true
 wall_coverage_bin_size: 1.0
 wall_coverage_min_depth: 8.0
+# 末端墙必须距任务入口至少12 m，过滤入口平台边缘等近场结构。
+wall_coverage_end_min_depth: 12.0
 wall_coverage_min_ratio: 0.80
 wall_coverage_max_gap_bins: 2
+# 末端墙横向点云允许的最大空洞；与左右墙纵向连续性分开调节。
+wall_coverage_end_max_gap_bins: 2
 wall_coverage_side_min_distance: 1.5
 wall_coverage_side_max_distance: 8.0
 # 排除地面和顶板，只用中间高度的占据体素判断墙面连续性。
