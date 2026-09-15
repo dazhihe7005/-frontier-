@@ -1875,6 +1875,27 @@ SUPER避障规划、向PX4输出轨迹、完成后返航并安全退出自动控
 用户询问任务一启动条件、悬停启动、人工切回手动时的高度/姿态安全、任务高度来源、
 60 m雷达范围、深处点云显示异常，以及从狭窄走廊进入采空区时是否会把走廊误判为三面墙。
 
+本轮用户要求重新启动任务一仿真，并保存前面失败的仿真现象供论文使用。已创建
+`/home/nuc/task1_logs/failure_cases/large_platform/`，保存入口平台误判包
+`run01_false_end_wall.bag`、深处同步超时包`run02_sync_timeout.bag.active`及案例说明。
+成功对照包`task1_large_platform_run03.bag`仍保留在上级目录，没有重复复制大文件。
+
+重新启动前发现上一轮完成后的旧roslaunch没有及时退出，继续运行到约10000 s仿真时间后
+`fsm_node`以退出码-9终止；该长时间资源累积现象也写入案例说明。旧进程随后已停止，
+新的任务一仿真将在清理完成后重新运行。本轮资料目录不删除或覆盖原始数据。
+
+随后重新启动run04，运行至约128 m目标附近时用户要求停止。停止前日志显示0.867--133.582 s
+持续有`Gazebo MID360 registered`输出，说明逐帧`/cloud_registered`仍在生成；累计体素约
+120000后基本饱和，RViz因此表现为累计点云不再明显增加，而SUPER障碍物轮廓仍更新。日志中
+另有约18次`odometry is -0.00x s old`间歇丢帧，但没有持续雷达断流。run04已归档为
+`/home/nuc/task1_logs/task1_large_platform_run04_user_interrupted.bag`，对应ROS日志和
+分析说明保存在`failure_cases/large_platform/`。
+
+本轮诊断结论：问题不是雷达完全无数据；主要原因是累计全局点云达到120000体素上限、
+逐帧点云RViz显示衰减时间仅0.4 s，以及仿真时钟造成少量负时间戳延迟。后续应分别增加或
+改为滑动窗口显示、修正仿真时间戳负延迟容忍度，并用`rostopic hz /cloud_registered`
+和`rostopic echo /cloud_registered/header`区分数据链路与RViz显示问题。
+
 第三次大场景仿真已经完成闭环：PX4保持连接并进入OFFBOARD，无人机从入口外高平台沿
 任务机头方向进入，实际速度约1.7 m/s，随后在约154.5 m进度处识别前墙，覆盖状态为
 `three_wall=ready end_seen=true end_depth=157.50 end_span=85.00 left=0.97 right=1.00 gaps=2/0 confirm=4/4`，完成后返航并进入`AUTO.LOITER`。因此本轮验证的是仿真闭环和判据，不代表真实雷达、EKF或人工接管已经实机验收。
