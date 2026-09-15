@@ -2115,3 +2115,4 @@ ENTRY、EXPLORE、BOUNDARY_SWEEP、VERIFY、RETURN、ABORT状态机。机头方�
 本轮将任务一速度限制统一改为1.0 m/s：SUPER的 traj_opt.boundary.max_vel=1.0，PX4指令桥 max_speed=1.0；同时将指令桥 max_height 和任务一真实/SITL启动入口的高度上限统一改为1.8 m。任务一的巡航高度仍由相对home的观察高度参数决定，最终输出还会经过指令桥高度硬限制。
 本轮临时测试调整：新增 force_goaf_task 参数并在 task1_real.launch 和 task1_px4_sitl.launch 设为 true，忽略CH6任务选择通道；CH7仍作为自动允许/启动开关，任务二保持不可用。测试结束后将该参数恢复为 false，即重新启用CH6任务选择逻辑。mission_scheduler 编译已通过。
 本轮确认Fast-LIO2 /Odometry可通过 fastlio_px4_vision_bridge 发布到 /mavros/vision_pose/pose_cov，默认30 Hz，并在未解锁时建立 camera_init 到 PX4 odom 的初始对齐；输入超时、跳变、无效四元数或MAVROS断开时会将 vision_healthy 置为false。该链路具备PX4接入接口，但不能仅凭ROS话题存在保证QGC不报警：PX4还必须启用EKF2外部视觉融合并正确设置EV高度源、安装外参/延迟等参数。现场应同时检查 /Odometry、/mavros/vision_pose/pose_cov 的频率、/mine_uav/task1/vision_healthy，以及QGC的EKF/定位状态。
+本轮现场只读检查：当前没有运行roscore、MAVROS或fastlio_px4_vision_bridge，因此无法读取 /Odometry 或验证其到PX4的实际转发；/dev/ttyACM0、/dev/ttyUSB0、/dev/ttyUSB1 当前均不存在。内核日志曾显示CH341/CH340在USB 3-2短暂枚举为 ttyUSB1，随后设备断开并重连失败/再次短暂连接，说明当前串口设备并未稳定存在。
