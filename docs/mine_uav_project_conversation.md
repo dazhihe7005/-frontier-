@@ -2110,3 +2110,4 @@ ENTRY、EXPLORE、BOUNDARY_SWEEP、VERIFY、RETURN、ABORT状态机。机头方�
 同步回调仍要求点云和里程计时间匹配；home来自任务启动瞬间的同步位姿，而不是固定原点。任务一的高层目标只从当前可达、已知自由且满足膨胀安全距离的空间中产生，SUPER继续负责局部A*/安全走廊、轨迹碰撞检查和备份轨迹，因此两层共同构成避障链路。
 
 代码已同步到 `/home/nuc/super_ws`并通过 `catkin_make --pkg mine_uav_control -j2`编译通过。当前结论是：在SITL和代码逻辑层面已有避障能力，且此前已验证终墙前不会穿墙；但真实实验仍需拆桨、低速、可立即人工接管，并另外验证真实点云坐标系/外参、制动距离、定位和通信中断保护。当前修改尚未在本轮推送GitHub，待本轮结束按项目约定提交并推送。
+本轮已完成本地提交 `0a44420 feat: gate task one start on CH7 enable edge`；推送因当前环境暂时无法解析 `github.com` 失败，网络恢复后需执行 `git push origin main`。
