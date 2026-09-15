@@ -45,6 +45,6 @@
     <!-- These bounds are in the local takeoff frame, not world altitude. -->
     <arg name="bridge_max_horizontal_radius" value="175.0"/>
     <arg name="bridge_min_height" value="-2.0"/>
-    <arg name="bridge_max_height" value="5.0"/>
+    <arg name="bridge_max_height" value="1.8"/>
   </include>
 </launch>

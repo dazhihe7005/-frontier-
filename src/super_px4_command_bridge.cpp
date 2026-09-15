@@ -61,11 +61,11 @@ class SuperPx4CommandBridge {
     private_nh_.param("command_timeout", command_timeout_, 0.25);
     private_nh_.param("local_pose_timeout", local_pose_timeout_, 0.5);
     private_nh_.param("output_rate", output_rate_, 50.0);
-    private_nh_.param("max_speed", max_speed_, 2.0);
+    private_nh_.param("max_speed", max_speed_, 1.0);
     private_nh_.param("max_acceleration", max_acceleration_, 3.0);
     private_nh_.param("max_horizontal_radius", max_horizontal_radius_, 40.0);
     private_nh_.param("min_height", min_height_, -0.5);
-    private_nh_.param("max_height", max_height_, 3.0);
+    private_nh_.param("max_height", max_height_, 1.8);
     private_nh_.param("use_acceleration", use_acceleration_, true);
     private_nh_.param("auto_enable_topic", auto_enable_topic_,
                       std::string("/mine_uav/mission/auto_enable"));
@@ -579,11 +579,11 @@ class SuperPx4CommandBridge {
   double command_timeout_{0.25};
   double local_pose_timeout_{0.5};
   double output_rate_{50.0};
-  double max_speed_{2.0};
+  double max_speed_{1.0};
   double max_acceleration_{3.0};
   double max_horizontal_radius_{40.0};
   double min_height_{-0.5};
-  double max_height_{3.0};
+  double max_height_{1.8};
   double alignment_x_{0.0};
   double alignment_y_{0.0};
   double alignment_z_{0.0};
