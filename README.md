@@ -161,7 +161,9 @@ git apply /path/to/frontier-upload/patches/super_optimizer_diagnostics.patch
 
 - 订阅 Fast-LIO2 的 `/cloud_registered` 和 `/Odometry`；
 - 用点云射线建立轻量局部 free/occupied voxel map；
-- 从已知自由空间与未知空间的边界提取 frontier candidate；
+- 从当前位置出发，在膨胀后的已知自由体素上做六连通洪泛搜索；
+- 只从该可达连通分量提取 frontier candidate，目标必须同时为
+  `known-free`、满足机体安全间距且位于安全围栏内；
 - 按信息增益、距离和已覆盖目标去重选择下一个观察点；
 - 到达目标后继续选择下一个目标；
 - 地图边界闭合并稳定、收到返航命令或电量低于阈值时返回 home。
@@ -175,7 +177,7 @@ git apply /path/to/frontier-upload/patches/super_optimizer_diagnostics.patch
 
 左右墙体和前方障碍使用当前 `/cloud_registered` 的点云证据，并通过连续帧确认抑制单帧误检。地面点会通过垂直方向过滤，避免把地面误判为前方墙体。相关参数在 `config/super_exploration_decider.yaml` 中，包括前方角度、墙体量程、障碍确认帧数和机头方向权重。
 
-该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。默认完成判据已改为地图闭合：达到最小深入距离、前向边界连续确认、任务中心走廊内不存在可执行前沿、占据地图在设定时间内无显著增长，并连续多周期成立，才发布模型完成并返航。前向边界确认后不再进入左右 frontier fallback，而是原地等待点云收敛。原三面墙覆盖率仍发布为诊断量，但不参与默认完成决策。
+该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。高层可达性过滤防止把墙后或断开的自由区域选作frontier目标；SUPER继续使用ROG-Map膨胀障碍、A*、安全飞行走廊、在线碰撞复查和备份轨迹作为第二层保护。地图完成/返航判据仍是实验功能，尚未按未知尺寸采空区最终方案验收，不能仅凭当前状态量宣称实机建模完整。原三面墙覆盖率只作诊断。
 
 启动：
 
@@ -192,7 +194,7 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标的水平位置使用原始 home，垂直位置由 `return_home_height_offset` 控制。真机默认偏移为 `0 m`；复杂场景PX4 SITL验证中覆盖为 `1.8 m`，返航阶段保持安全巡航高度，降落应由独立状态处理。
 
-`max_exploration_radius_from_home` 是相对任务起点的水平安全围栏，避免目标随着滚动点云不断向外漂移。真机默认值为 `35 m`，应按实际采空区长度和通信/续航能力调整；算法演示因 SUPER 示例地图较窄而覆盖为 `6 m`。
+`max_exploration_radius_from_home` 是相对任务起点的水平安全围栏，避免目标随着滚动点云不断向外漂移。真机默认值为 `35 m`，未知尺寸场景不能按预估洞长设置，而应根据续航、动态返航代价和安全制度给出允许上限。当前 `max_task_lateral_offset=4 m` 仍是早期狭长巷道限制，不适合直接验收未知宽度的大采空区，后续覆盖策略阶段必须将它与完成判据解耦。
 
 必须使用上面的统一环境脚本同时加载两个 Catkin 工作空间。直接依次 source 两个工作空间时，后一个会覆盖前一个的搜索路径，常见现象是 `rostopic` 无法加载 `livox_ros_driver2/CustomMsg`。统一脚本会同时保留 Fast-LIO2 与 SUPER 的 ROS 包、Python 消息和动态库路径。
 
@@ -214,7 +216,7 @@ rostopic hz /Odometry
 rostopic pub -1 /mine_uav/exploration/return_home std_msgs/Bool "data: true"
 ```
 
-重要限制：这是第一版 frontier/viewpoint 决策器，使用本节点的轻量 voxel map；SUPER 仍使用自己的 ROG-Map。两者共享同一份 Fast-LIO2 输入，但不是同一份内存地图。后续可以把决策器改成直接读取 ROG-Map 的 frontier API，或将全局建模地图独立出来。
+重要限制：这是第一版 frontier/viewpoint 决策器，使用本节点的轻量 voxel map；SUPER 仍使用自己的 ROG-Map。两者共享同一份 Fast-LIO2 输入，但不是同一份内存地图。当前已确认的是“目标可达性过滤 + 下层避墙”，未知尺寸采空区的完整覆盖和最终返航判据尚未验收。此前累计地图终墙锁存实验出现过入口/顶板组合误判，相关实验补丁已从工作版本剥离。后续应将全局覆盖地图独立出来，再单独设计和回归最终完成条件。
 
 ## Fast-LIO2 → 任务调度器 → 采空区/竖井任务
 

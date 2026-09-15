@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <geometry_msgs/PoseStamped.h>
@@ -56,6 +57,7 @@ class SuperExplorationDecider {
   using SyncPolicy =
       message_filters::sync_policies::ApproximateTime<Cloud, Odom>;
   using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
+  using VoxelSet = std::unordered_set<VoxelKey, VoxelKeyHash>;
 
   enum CellState : uint8_t { FREE = 1, OCCUPIED = 2 };
 
@@ -124,10 +126,12 @@ class SuperExplorationDecider {
   bool isOccupied(const VoxelKey& key) const;
   bool isClearForVehicle(const VoxelKey& key) const;
   bool isKnownFree(const VoxelKey& key) const;
-  std::vector<FrontierCandidate> findFrontiers() const;
+  VoxelSet reachableFreeVoxels() const;
+  std::vector<FrontierCandidate> findFrontiers(VoxelSet& reachable) const;
   bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
-  bool selectAndPublishFrontier();
-  bool publishForwardLookaheadGoal();
+  bool selectAndPublishFrontier(
+      const std::vector<FrontierCandidate>& candidates);
+  bool publishForwardLookaheadGoal(const VoxelSet& reachable);
   bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
   bool isForwardCandidate(const FrontierCandidate& candidate) const;
   double candidateHeadingAlignment(const FrontierCandidate& candidate) const;
@@ -289,6 +293,8 @@ class SuperExplorationDecider {
   int map_closure_max_actionable_frontiers_{0};
   int map_closure_growth_voxels_{500};
   int map_closure_confirm_cycles_{4};
+  int max_reachable_voxels_{150000};
+  int max_frontier_candidates_{500};
   bool raycast_enable_{true};
   bool strict_cloud_frame_{false};
   bool require_three_wall_completion_{true};

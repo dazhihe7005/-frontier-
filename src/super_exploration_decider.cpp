@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <queue>
 #include <set>
 #include <sstream>
 
@@ -292,6 +293,10 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("map_closure_require_front_boundary",
                     map_closure_require_front_boundary_,
                     map_closure_require_front_boundary_);
+  private_nh_.param("max_reachable_voxels", max_reachable_voxels_,
+                    max_reachable_voxels_);
+  private_nh_.param("max_frontier_candidates", max_frontier_candidates_,
+                    max_frontier_candidates_);
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
@@ -382,6 +387,7 @@ bool SuperExplorationDecider::loadParameters() {
       map_closure_stable_time_ <= 0.0 ||
       map_closure_max_actionable_frontiers_ < 0 ||
       map_closure_growth_voxels_ < 1 || map_closure_confirm_cycles_ < 1 ||
+      max_reachable_voxels_ < 1000 || max_frontier_candidates_ < 1 ||
       sync_queue_size_ < 2 || max_points_per_cloud_ < 1) {
     ROS_FATAL("Invalid exploration decider parameters");
     return false;
@@ -484,6 +490,87 @@ bool SuperExplorationDecider::isOccupied(const VoxelKey& key) const {
 bool SuperExplorationDecider::isKnownFree(const VoxelKey& key) const {
   const auto it = voxels_.find(key);
   return it != voxels_.end() && it->second == kFree;
+}
+
+SuperExplorationDecider::VoxelSet
+SuperExplorationDecider::reachableFreeVoxels() const {
+  VoxelSet reachable;
+  if (!have_home_) {
+    return reachable;
+  }
+
+  VoxelKey start = positionToKey(current_pose_.pose.position.x,
+                                 current_pose_.pose.position.y,
+                                 current_pose_.pose.position.z);
+  if (!isKnownFree(start) || !isClearForVehicle(start)) {
+    bool found = false;
+    for (int radius = 1; radius <= 2 && !found; ++radius) {
+      for (int dx = -radius; dx <= radius && !found; ++dx) {
+        for (int dy = -radius; dy <= radius && !found; ++dy) {
+          for (int dz = -radius; dz <= radius; ++dz) {
+            const VoxelKey candidate{start.x + dx, start.y + dy, start.z + dz};
+            if (isKnownFree(candidate) && isClearForVehicle(candidate)) {
+              start = candidate;
+              found = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!found) {
+      return reachable;
+    }
+  }
+
+  static const int kNeighbors[6][3] = {
+      {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+      {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  std::queue<VoxelKey> queue;
+  reachable.insert(start);
+  queue.push(start);
+  const double radius_squared =
+      frontier_search_radius_ * frontier_search_radius_;
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+
+  while (!queue.empty() &&
+         reachable.size() < static_cast<std::size_t>(max_reachable_voxels_)) {
+    const VoxelKey current = queue.front();
+    queue.pop();
+    for (const auto& offset : kNeighbors) {
+      const VoxelKey neighbor{current.x + offset[0], current.y + offset[1],
+                              current.z + offset[2]};
+      if (reachable.count(neighbor) > 0 || !isKnownFree(neighbor) ||
+          !isClearForVehicle(neighbor)) {
+        continue;
+      }
+      const geometry_msgs::Point point = keyToPoint(neighbor);
+      if (squaredDistance(point, current_pose_.pose.position) >
+          radius_squared) {
+        continue;
+      }
+      const double home_dx = point.x - home_pose_.pose.position.x;
+      const double home_dy = point.y - home_pose_.pose.position.y;
+      const double lateral = -s * home_dx + c * home_dy;
+      const double relative_height =
+          point.z - home_pose_.pose.position.z;
+      if (std::abs(lateral) > max_task_lateral_offset_ ||
+          relative_height < min_observation_height_above_home_ -
+                                voxel_resolution_ ||
+          relative_height > max_observation_height_above_home_ +
+                                voxel_resolution_) {
+        continue;
+      }
+      reachable.insert(neighbor);
+      queue.push(neighbor);
+    }
+  }
+  if (reachable.size() >=
+      static_cast<std::size_t>(max_reachable_voxels_)) {
+    ROS_WARN_THROTTLE(5.0, "Reachable-free flood fill hit its configured cap");
+  }
+  return reachable;
 }
 
 void SuperExplorationDecider::updateMap(
@@ -952,14 +1039,21 @@ bool SuperExplorationDecider::isNearCoveredGoal(
 }
 
 std::vector<SuperExplorationDecider::FrontierCandidate>
-SuperExplorationDecider::findFrontiers() const {
+SuperExplorationDecider::findFrontiers(VoxelSet& reachable) const {
   std::vector<FrontierCandidate> candidates;
+  reachable = reachableFreeVoxels();
+  if (reachable.empty()) {
+    return candidates;
+  }
   const double max_distance_squared =
       frontier_search_radius_ * frontier_search_radius_;
   const double min_distance_squared = min_goal_distance_ * min_goal_distance_;
 
   for (const auto& entry : voxels_) {
     if (entry.second != kFree) {
+      continue;
+    }
+    if (reachable.count(entry.first) == 0) {
       continue;
     }
     const geometry_msgs::Point point = keyToPoint(entry.first);
@@ -1040,7 +1134,26 @@ SuperExplorationDecider::findFrontiers() const {
             [](const FrontierCandidate& left, const FrontierCandidate& right) {
               return left.score > right.score;
             });
-  return candidates;
+  std::vector<FrontierCandidate> representatives;
+  const double spacing_squared = candidate_spacing_ * candidate_spacing_;
+  for (const auto& candidate : candidates) {
+    bool separated = true;
+    for (const auto& accepted : representatives) {
+      if (squaredDistance(candidate.goal.pose.position,
+                          accepted.goal.pose.position) < spacing_squared) {
+        separated = false;
+        break;
+      }
+    }
+    if (separated) {
+      representatives.push_back(candidate);
+      if (representatives.size() >=
+          static_cast<std::size_t>(max_frontier_candidates_)) {
+        break;
+      }
+    }
+  }
+  return representatives;
 }
 
 bool SuperExplorationDecider::isForwardCandidate(
@@ -1272,7 +1385,8 @@ bool SuperExplorationDecider::publishEndApproachGoal(
   return true;
 }
 
-bool SuperExplorationDecider::publishForwardLookaheadGoal() {
+bool SuperExplorationDecider::publishForwardLookaheadGoal(
+    const VoxelSet& reachable) {
   if (!have_home_ || exploration_phase_ != ExplorationPhase::kForwardPriority ||
       front_obstacle_streak_ >= front_obstacle_confirm_frames_) {
     return false;
@@ -1335,12 +1449,10 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal() {
         target.z = home_pose_.pose.position.z + cruise_height_above_home_ +
                    height_offset;
         const VoxelKey target_key = positionToKey(target.x, target.y, target.z);
-        // Exploration must intentionally advance toward unknown space. The
-        // exact centerline voxel is therefore allowed when it is not marked
-        // occupied; offset alternatives still require positive free-space
-        // evidence. SUPER performs the live local collision check/replan.
-        const bool centerline_target = std::abs(lateral) < 1e-6;
-        if ((!centerline_target && !isKnownFree(target_key)) ||
+        // A task-level goal must be proven free and connected by a clear,
+        // observed segment. Unknown is not free: allowing a centerline goal
+        // merely because it is not occupied can place the goal behind a wall.
+        if (reachable.count(target_key) == 0 ||
             !isClearForVehicle(target_key)) {
           continue;
         }
@@ -1356,14 +1468,11 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal() {
   return false;
 }
 
-bool SuperExplorationDecider::selectAndPublishFrontier() {
-  const auto candidates = findFrontiers();
-  publishVisualization(candidates);
+bool SuperExplorationDecider::selectAndPublishFrontier(
+    const std::vector<FrontierCandidate>& candidates) {
   if (candidates.empty()) {
     return false;
   }
-
-  updateExplorationPhase(candidates);
   const FrontierCandidate* selected = nullptr;
   std::string reason;
   if (exploration_phase_ == ExplorationPhase::kForwardPriority) {
@@ -1475,7 +1584,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   }
 
   const ThreeWallCoverage coverage = evaluateThreeWallCoverage();
-  const auto candidates = findFrontiers();
+  VoxelSet reachable;
+  const auto candidates = findFrontiers(reachable);
   const MapClosureStatus closure = evaluateMapClosure(candidates);
   const bool completion_prerequisites =
       exploration_started_ &&
@@ -1577,13 +1687,13 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
-  if (!have_active_goal_ && publishForwardLookaheadGoal()) {
+  if (!have_active_goal_ && publishForwardLookaheadGoal(reachable)) {
     publishStatus("EXPLORING",
                   "continuous forward look-ahead goal sent to SUPER");
     return;
   }
 
-  if (!have_active_goal_ && selectAndPublishFrontier()) {
+  if (!have_active_goal_ && selectAndPublishFrontier(candidates)) {
     publishStatus("EXPLORING", "new frontier goal sent to SUPER");
     return;
   }

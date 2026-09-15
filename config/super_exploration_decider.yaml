@@ -93,6 +93,10 @@ map_closure_max_actionable_frontiers: 0
 map_closure_growth_voxels: 500
 map_closure_confirm_cycles: 4
 map_closure_require_front_boundary: true
+# Reachability flood-fill and candidate clustering are safety/CPU limits, not
+# assumptions about mine dimensions.
+max_reachable_voxels: 150000
+max_frontier_candidates: 500
 
 # 以下三面墙指标只保留为诊断数据，不参与默认完成决策。
 wall_coverage_bin_size: 1.0
