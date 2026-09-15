@@ -36,6 +36,23 @@ CH340 串口，QGC 通过 NUC 转发的 UDP MAVLink 链路连接，或暂时关�
 
 启动前确认 CH340 串口没有被其他串口程序占用。
 
+### USB数传直接连接QGC
+
+当前实测USB数传电脑端是Silicon Labs CP2102，稳定设备名为：
+
+```text
+/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
+```
+
+该数传电脑端串口波特率是`57600`。使用pymavlink在`57600`下已收到PX4心跳
+（system id 1、component id 1）；QGC重新以该串口状态启动后识别PX4 v5.1.4并加载参数。
+无线数传指示灯常亮只说明两端无线链路建立，不能证明电脑串口波特率正确。
+
+对于把CP2102识别为普通串口、没有自动选对波特率的电脑，应在QGC的
+`Application Settings -> Comm Links`中添加Serial链路，选择上述设备或对应COM口，
+设置`57600`、无流控并连接。不要选择项目TELEM2直连所使用的`500000`；那是另一条
+CH340/MAVROS链路的波特率。QGC、MAVROS或串口终端同一时间只能有一个进程占用该串口。
+
 ## 任务一真实闭环
 
 任务一现在使用一条唯一的控制链：

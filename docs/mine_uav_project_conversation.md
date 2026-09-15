@@ -1809,3 +1809,25 @@ Gazebo启动，均在日志中识别后立即作废，不用于结论。按配�
 结果说明告警数不是唯一优化目标，也不能简单靠提高惩罚权重或放宽`penna_margin`解决。
 下一步应分析备用轨迹时间分配、停止点初值和重规划触发条件，并始终同时约束闭环完成、
 低速持续时间、路径、返航精度与动力学上限。
+
+## 第73轮：USB数传无法连接QGC诊断
+
+用户将飞控和两端数传上电，数传指示已建立无线连接，但当前NUC和其他电脑上的QGC无法
+连接，只有一台曾配置过的设备可以连接。首先只读检查宿主机USB设备和串口占用：电脑端
+数传被识别为Silicon Labs CP2102，设备为`/dev/ttyUSB1`，稳定路径是
+`/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0`；
+当前用户属于`dialout`组，权限正常。QGC已经独占该串口，ModemManager没有占用，所以
+问题不是“QGC看不到设备”或Linux串口权限。
+
+本机`QGroundControl.ini`没有保存手工Comm Link，依赖自动串口连接。临时关闭QGC后，
+用pymavlink依次监听常用波特率，在`57600`下立即收到有效PX4 MAVLink心跳：system id 1、
+component id 1、autopilot 12、vehicle type 2。由此确认飞控MAVLink、飞行端数传、无线
+链路和电脑端CP2102均正常，电脑端正确波特率为57600，不是CH340接TELEM2链路使用的
+500000。
+
+重新启动QGC后，日志显示识别PX4 v5.1.4并加载`1_1`参数缓存，缓存时间更新为本轮时间，
+QGC当前已连接且保持运行。现有证据把根因定位到不同电脑上的QGC没有为通用CP2102稳定
+使用正确的57600串口设置，自动连接可能受先前串口状态影响；无线灯常亮本身不能证明电脑端波特率正确。永久设置
+方法是在每台QGC的`Application Settings -> Comm Links`中新增Serial链路，选择CP2102
+对应端口，波特率设57600、无流控后保存连接。同一串口不能同时被QGC、MAVROS或串口工具
+占用。本轮没有修改PX4参数、数传参数或任务算法。
