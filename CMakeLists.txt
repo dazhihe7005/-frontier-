@@ -88,6 +88,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
 )
 
 catkin_install_python(PROGRAMS
+  scripts/analyze_task1_sitl_bag.py
   scripts/ground_station.py
   scripts/gazebo_mid360_fastlio_adapter.py
   scripts/task1_sitl_adapter.py

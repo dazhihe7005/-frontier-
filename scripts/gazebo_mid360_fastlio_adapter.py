@@ -194,7 +194,18 @@ class GazeboMid360FastlioAdapter:
         header = cloud.header
         header.stamp = now
         header.frame_id = self.world_frame
-        self.registered_pub.publish(point_cloud2.create_cloud_xyz32(header, registered))
+        if rospy.is_shutdown():
+            return
+        try:
+            self.registered_pub.publish(
+                point_cloud2.create_cloud_xyz32(header, registered)
+            )
+        except rospy.ROSException as error:
+            # A sensor callback can finish after roslaunch has already closed
+            # publishers. Suppress only that normal shutdown race.
+            if rospy.is_shutdown() or "closed topic" in str(error):
+                return
+            raise
         self._accumulate(registered)
         self._cloud_count += 1
         rospy.loginfo_throttle(

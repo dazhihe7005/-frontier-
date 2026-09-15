@@ -112,6 +112,17 @@ git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid3
 git apply --unidiff-zero /path/to/frontier-upload/patches/fast_lio2_sensor_restart.patch
 ```
 
+当前SUPER工作区还需要应用ROS1/Fast-LIO2任务门控补丁和优化器诊断补丁：
+
+```bash
+cd /path/to/SUPER
+git apply /path/to/frontier-upload/patches/super_ros1_fastlio_task_gate.patch
+git apply /path/to/frontier-upload/patches/super_optimizer_diagnostics.patch
+```
+
+第二个补丁修正备用轨迹采样时间变量，并把优化失败细分为位置、速度、加速度、角速度和
+推力残差。它不放宽动力学限制，也不改变已验证的二次备用轨迹优化流程。
+
 注意：在正式飞行前仍必须通过移动机体验证 PX4 确实融合外部视觉、标定
 雷达 IMU 坐标与飞行器 FRD 机体系安装关系，并确认 `EKF2_EV_CTRL` 的高度源选择。
 “话题有数据”不等于 EKF 已可靠融合，也不等于已经可以带桨飞行。
@@ -340,6 +351,48 @@ PX4切换到 AUTO.LOITER。这证明当前仿真任务一闭环已通过；真�
 本轮仍观察到SUPER的备份轨迹/指数轨迹优化偶发失败并触发快速重规划，未造成停飞或
 闭环失败，但不应视为已消除。后续需结合轨迹日志调整膨胀半径、局部地图、优化器和
 PX4跟踪参数，并增加“单位时间位移、低速持续时间、重规划失败率”作为正式验收指标。
+
+#### rosbag自动验收
+
+`analyze_task1_sitl_bag.py`把任务一SITL结果转换为可重复的PASS/FAIL判定。运行仿真时可在
+另一个终端记录轻量验收话题（不录大体积点云）：
+
+```bash
+export ROS_MASTER_URI=http://127.0.0.1:11312
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+mkdir -p /home/nuc/task1_logs
+rosbag record -O /home/nuc/task1_logs/task1_acceptance.bag \
+  /clock /Odometry /goal /mavros/state \
+  /mavros/local_position/pose /mavros/local_position/velocity_local \
+  /planning/pos_cmd /mine_uav/exploration/finished \
+  /mine_uav/exploration/model_coverage /mine_uav/exploration/status \
+  /mine_uav/task1/command_status /rosout_agg
+```
+
+任务完成并进入`AUTO.LOITER`后停止录包，再执行：
+
+```bash
+rosrun mine_uav_control analyze_task1_sitl_bag.py \
+  /home/nuc/task1_logs/task1_acceptance.bag \
+  --json-output /home/nuc/task1_logs/task1_acceptance.json
+```
+
+默认验收包括：进入OFFBOARD、任务COMPLETE、三面墙ready、退出到AUTO.LOITER、至少三个
+任务目标、路径长度不小于45 m、水平返航误差不大于1 m、最大横向偏移不大于1.5 m、
+有效航段速度中位数不小于1.5 m/s、低于0.2 m/s的连续时间不超过1 s、实际速度不超过
+3 m/s、SUPER规划速度不超过2.05 m/s、规划加速度不超过1.60 m/s²、里程计不低于5 Hz、
+OFFBOARD阶段不超过90 s且无指令桥故障。任一硬指标失败时程序返回非零退出码。
+
+`/rosout_agg`存在时程序还会统计SUPER优化失败日志。考虑到当前已知的快速重规划警告，
+默认只报告数量；调参形成稳定基线后可用`--max-super-failures N`把它升级为硬验收门槛。
+录包先于Gazebo启动也没有问题：验收器会利用`/clock`把rosbag接收时间重新映射到仿真
+时间，避免暂停、启动和仿真倍率造成任务时长及低速时长误判。
+
+当前复杂场景基线保留`backup_traj/penna_acc=1.0e5`。单变量试验中，`5.0e5`虽把备用
+优化告警从79条降至5条，但任务阶段增至34 s并产生1.136 s连续低速，验收FAIL；
+`3.0e5`则进入持续的走廊/静止重规划失败。不要仅为减少日志数量而提高该权重或放宽
+`penna_margin`，后续应联合检查备用轨迹时间分配、初值和重规划触发条件。
 
 专用RViz配置 `rviz/task1_mid360.rviz` 使用 `camera_init` 作为Fixed Frame，并默认显示
 `/cloud_registered`、累计点云和PX4轨迹。此前使用SUPER的 `top_down.rviz` 时Fixed

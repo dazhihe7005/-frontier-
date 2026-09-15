@@ -1,0 +1,81 @@
+diff --git a/super_planner/src/super_core/super_planner.cpp b/super_planner/src/super_core/super_planner.cpp
+index a7a9826..718639c 100755
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -973,7 +973,7 @@ namespace super_planner {
+                 eval_t += cfg_.sample_traj_dt;
+                 continue;
+             }
+-            temp_vel = ref_exp_traj.getVel(out_t);
++            temp_vel = ref_exp_traj.getVel(eval_t);
+             double v_norm = temp_vel.norm();
+             min_stop_dis.push_back(v_norm * v_norm / 2.0 / cfg_.exp_traj_cfg.max_acc);
+             eval_ps.emplace_back(eval_t, cur_pos);
+@@ -1020,6 +1020,9 @@ namespace super_planner {
+             latest_replan.setBackupCondition(init_ts, init_times, init_ps,
+                                              t0, te,
+                                              back_traj_info.getSFC());
++            // This second pass refreshes the optimizer's internal warm-start
++            // state used by subsequent replans. Its output is diagnostic and
++            // intentionally not committed as the active backup trajectory.
+             Trajectory traj;
+             double out_ts;
+             back_traj_opt_->optimize(ref_exp_traj.posTraj(),
+diff --git a/super_planner/src/traj_opt/backup_traj_optimizer_s4.cpp b/super_planner/src/traj_opt/backup_traj_optimizer_s4.cpp
+index 55df812..4267d76 100755
+--- a/super_planner/src/traj_opt/backup_traj_optimizer_s4.cpp
++++ b/super_planner/src/traj_opt/backup_traj_optimizer_s4.cpp
+@@ -528,6 +528,7 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
+         cout << "\tThr: " << opt_vars.penalty_log(7) << endl;
+         cout << "\tTs: " << opt_vars.ts << endl;
+     }
++    const int lbfgs_ret = ret;
+     if ((cfg_.penna_pos > 0 && opt_vars.penalty_log(1) > 0.2) ||
+         (cfg_.penna_vel > 0 && opt_vars.penalty_log(2) > cfg_.max_vel * cfg_.penna_margin) ||
+         (cfg_.penna_acc > 0 && opt_vars.penalty_log(3) > cfg_.max_acc * cfg_.penna_margin) ||
+@@ -546,7 +547,15 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
+             cout << "\tThr: " << opt_vars.penalty_log(7) << endl;
+             cout << "\tTs: " << opt_vars.ts << endl;
+         }
+-        ros_ptr_->warn(" -- [BackOpt] Opt failed, Omg or thr or Pos violation.");
++        ros_ptr_->warn(
++                " -- [BackOpt] Opt failed: lbfgs_ret={}, pos={}, vel={}, acc={}, omg={}, thr={}, margin={}.",
++                lbfgs_ret,
++                opt_vars.penalty_log(1),
++                opt_vars.penalty_log(2),
++                opt_vars.penalty_log(3),
++                opt_vars.penalty_log(6),
++                opt_vars.penalty_log(7),
++                cfg_.penna_margin);
+     }
+ 
+     if (ret >= 0) {
+diff --git a/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp b/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp
+index 265f1b1..1c01de8 100755
+--- a/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp
++++ b/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp
+@@ -712,6 +712,7 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
+         cout << "\tOptimized Time: " << opt_vars.times.transpose() << endl;
+     }
+ 
++    const int lbfgs_ret = ret;
+     if ((cfg_.penna_pos > 0 && opt_vars.penalty_log(1) > 0.2) ||
+         // (cfg_.penna_vel > 0 && opt_vars.penalty_log(2) > cfg_.max_vel * cfg_.penna_margin) ||
+         (cfg_.penna_acc > 0 && opt_vars.penalty_log(3) > cfg_.max_acc * cfg_.penna_margin) ||
+@@ -729,7 +730,15 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
+             cout << "\tThr: " << opt_vars.penalty_log(7) << endl;
+             cout << "\tOptimized Time: " << opt_vars.times.transpose() << endl;
+         }
+-        ros_ptr_->warn(" -- [ExpOpt] Opt failed, Omg or thr or Pos violation.");
++        ros_ptr_->warn(
++                " -- [ExpOpt] Opt failed: lbfgs_ret={}, pos={}, vel={}, acc={}, omg={}, thr={}, margin={}.",
++                lbfgs_ret,
++                opt_vars.penalty_log(1),
++                opt_vars.penalty_log(2),
++                opt_vars.penalty_log(3),
++                opt_vars.penalty_log(6),
++                opt_vars.penalty_log(7),
++                cfg_.penna_margin);
+         ret = -1;
+     }
+ 

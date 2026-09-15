@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+
+"""Evaluate a task-one PX4 SITL rosbag against repeatable acceptance limits."""
+
+import argparse
+import bisect
+from collections import Counter
+import json
+import math
+import sys
+
+import rosbag
+
+
+TOPICS = [
+    "/goal",
+    "/mavros/local_position/pose",
+    "/mavros/local_position/velocity_local",
+    "/mavros/state",
+    "/mine_uav/exploration/finished",
+    "/mine_uav/exploration/model_coverage",
+    "/mine_uav/exploration/status",
+    "/mine_uav/task1/command_status",
+    "/Odometry",
+    "/planning/pos_cmd",
+    "/rosout_agg",
+]
+
+FAULT_MARKERS = (
+    "FAULT",
+    "INVALID",
+    "GEOFENCE",
+    "SPEED_LIMIT",
+    "ACCELERATION_LIMIT",
+    "POSITION_LIMIT",
+)
+
+SUPER_FAILURE_CATEGORY_MARKERS = (
+    ("backup_optimization", "[BackOpt] Opt failed"),
+    ("main_optimization", "[ExpOpt] Opt failed"),
+    ("corridor_generation", "GeneratePolytopeFromLine failed"),
+    ("backup_trajectory_return", "generateBackupTrajectory return"),
+    ("main_trajectory_return", "GenerateExpTrajectory failed"),
+    ("other_minco", "Minco exp_traj opt failed"),
+)
+
+
+class ClockMapper:
+    """Map rosbag receipt time to Gazebo simulation time when /clock exists."""
+
+    def __init__(self, samples):
+        self.receipt = [sample[0] for sample in samples]
+        self.simulation = [sample[1] for sample in samples]
+
+    @property
+    def available(self):
+        return bool(self.receipt)
+
+    def map(self, receipt_time):
+        if not self.receipt:
+            return receipt_time
+        index = bisect.bisect_right(self.receipt, receipt_time) - 1
+        if index < 0:
+            return self.simulation[0]
+        if index >= len(self.receipt) - 1:
+            return self.simulation[-1]
+        left_receipt = self.receipt[index]
+        right_receipt = self.receipt[index + 1]
+        if right_receipt <= left_receipt:
+            return self.simulation[index]
+        fraction = (receipt_time - left_receipt) / (right_receipt - left_receipt)
+        return self.simulation[index] + fraction * (
+            self.simulation[index + 1] - self.simulation[index]
+        )
+
+
+def vector_norm(x, y, z):
+    return math.sqrt(x * x + y * y + z * z)
+
+
+def percentile(values, fraction):
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    index = int(fraction * (len(ordered) - 1))
+    return ordered[index]
+
+
+def mean(values):
+    return sum(values) / len(values) if values else None
+
+
+def rate(stamps):
+    if len(stamps) < 2 or stamps[-1] <= stamps[0]:
+        return None
+    return (len(stamps) - 1) / (stamps[-1] - stamps[0])
+
+
+def longest_below(samples, threshold):
+    longest = 0.0
+    start = None
+    for stamp, value in samples:
+        if value < threshold and start is None:
+            start = stamp
+        elif value >= threshold and start is not None:
+            longest = max(longest, stamp - start)
+            start = None
+    if start is not None and samples:
+        longest = max(longest, samples[-1][0] - start)
+    return longest
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Analyze task-one SITL completion, safety and fluidity"
+    )
+    parser.add_argument("bag", help="task-one rosbag path")
+    parser.add_argument("--json-output", help="optional JSON report path")
+    parser.add_argument("--min-median-speed", type=float, default=1.5)
+    parser.add_argument("--max-low-speed-duration", type=float, default=1.0)
+    parser.add_argument("--max-cross-track", type=float, default=1.5)
+    parser.add_argument("--max-return-error", type=float, default=1.0)
+    parser.add_argument("--max-planned-speed", type=float, default=2.05)
+    parser.add_argument("--max-planned-acceleration", type=float, default=1.60)
+    parser.add_argument("--max-actual-speed", type=float, default=3.0)
+    parser.add_argument("--min-odom-rate", type=float, default=5.0)
+    parser.add_argument("--min-path-length", type=float, default=45.0)
+    parser.add_argument("--max-offboard-duration", type=float, default=90.0)
+    parser.add_argument(
+        "--max-super-failures",
+        type=int,
+        default=-1,
+        help="fail above this /rosout_agg warning count; -1 only reports it",
+    )
+    return parser.parse_args()
+
+
+def analyze(path):
+    clock_samples = []
+    with rosbag.Bag(path) as bag:
+        for _topic, message, bag_stamp in bag.read_messages(topics=["/clock"]):
+            clock_samples.append((bag_stamp.to_sec(), message.clock.to_sec()))
+    clock_mapper = ClockMapper(clock_samples)
+
+    poses = []
+    velocities = []
+    planned_speeds = []
+    planned_accelerations = []
+    goals = []
+    state_changes = []
+    statuses = []
+    coverage = []
+    command_faults = []
+    odom_stamps = []
+    super_failures = []
+    super_failure_breakdown = Counter()
+    rosout_message_count = 0
+    finished_true = False
+    last_state = None
+
+    with rosbag.Bag(path) as bag:
+        for topic, message, bag_stamp in bag.read_messages(topics=TOPICS):
+            stamp = clock_mapper.map(bag_stamp.to_sec())
+            if topic == "/mavros/local_position/pose":
+                point = message.pose.position
+                poses.append((stamp, point.x, point.y, point.z))
+            elif topic == "/mavros/local_position/velocity_local":
+                linear = message.twist.linear
+                velocities.append(
+                    (stamp, vector_norm(linear.x, linear.y, linear.z))
+                )
+            elif topic == "/planning/pos_cmd":
+                velocity = message.velocity
+                acceleration = message.acceleration
+                planned_speeds.append(
+                    (stamp, vector_norm(velocity.x, velocity.y, velocity.z))
+                )
+                planned_accelerations.append(
+                    (
+                        stamp,
+                        vector_norm(
+                            acceleration.x, acceleration.y, acceleration.z
+                        ),
+                    )
+                )
+            elif topic == "/goal":
+                point = message.pose.position
+                goals.append((stamp, point.x, point.y, point.z))
+            elif topic == "/mavros/state":
+                state = (message.mode, bool(message.armed))
+                if state != last_state:
+                    state_changes.append((stamp, state[0], state[1]))
+                    last_state = state
+            elif topic == "/mine_uav/exploration/status":
+                if not statuses or statuses[-1][1] != message.data:
+                    statuses.append((stamp, message.data))
+            elif topic == "/mine_uav/exploration/model_coverage":
+                coverage.append((stamp, message.data))
+            elif topic == "/mine_uav/exploration/finished":
+                finished_true = finished_true or bool(message.data)
+            elif topic == "/mine_uav/task1/command_status":
+                if any(marker in message.data for marker in FAULT_MARKERS):
+                    entry = (stamp, message.data)
+                    if not command_faults or command_faults[-1][1] != message.data:
+                        command_faults.append(entry)
+            elif topic == "/Odometry":
+                odom_stamps.append(stamp)
+            elif topic == "/rosout_agg":
+                rosout_message_count += 1
+                text = getattr(message, "msg", "")
+                for category, marker in SUPER_FAILURE_CATEGORY_MARKERS:
+                    if marker in text:
+                        super_failures.append((stamp, text))
+                        super_failure_breakdown[category] += 1
+                        break
+
+    offboard_start = next(
+        (stamp for stamp, mode, _armed in state_changes if mode == "OFFBOARD"),
+        None,
+    )
+    loiter_after_offboard = None
+    if offboard_start is not None:
+        loiter_after_offboard = next(
+            (
+                stamp
+                for stamp, mode, _armed in state_changes
+                if stamp > offboard_start and mode == "AUTO.LOITER"
+            ),
+            None,
+        )
+    complete_time = next(
+        (stamp for stamp, text in statuses if text.startswith("COMPLETE")), None
+    )
+    active_end = loiter_after_offboard or complete_time
+
+    active_poses = []
+    active_velocities = []
+    if offboard_start is not None and active_end is not None:
+        active_poses = [
+            sample for sample in poses if offboard_start <= sample[0] <= active_end
+        ]
+        steady_start = offboard_start + 2.0
+        steady_end = max(steady_start, active_end - 2.0)
+        active_velocities = [
+            sample
+            for sample in velocities
+            if steady_start <= sample[0] <= steady_end
+        ]
+
+    path_length = 0.0
+    for previous, current in zip(active_poses, active_poses[1:]):
+        path_length += vector_norm(
+            current[1] - previous[1],
+            current[2] - previous[2],
+            current[3] - previous[3],
+        )
+
+    return_error = None
+    cross_track_max = None
+    if active_poses:
+        home_x, home_y = active_poses[0][1], active_poses[0][2]
+        final_x, final_y = active_poses[-1][1], active_poses[-1][2]
+        return_error = math.hypot(final_x - home_x, final_y - home_y)
+        forward_goal = next(
+            (
+                goal
+                for goal in goals
+                if math.hypot(goal[1] - home_x, goal[2] - home_y) > 2.0
+            ),
+            None,
+        )
+        if forward_goal is not None:
+            heading = math.atan2(forward_goal[2] - home_y, forward_goal[1] - home_x)
+            sine = math.sin(heading)
+            cosine = math.cos(heading)
+            cross_track_max = max(
+                abs(-sine * (sample[1] - home_x) + cosine * (sample[2] - home_y))
+                for sample in active_poses
+            )
+
+    speed_values = [value for _stamp, value in active_velocities]
+    planned_speed_values = [value for _stamp, value in planned_speeds]
+    planned_acceleration_values = [value for _stamp, value in planned_accelerations]
+    final_coverage = coverage[-1][1] if coverage else ""
+
+    return {
+        "bag": path,
+        "time_basis": "gazebo_clock" if clock_mapper.available else "bag_receipt",
+        "entered_offboard": offboard_start is not None,
+        "offboard_start": offboard_start,
+        "offboard_end": active_end,
+        "offboard_duration": (
+            active_end - offboard_start
+            if offboard_start is not None and active_end is not None
+            else None
+        ),
+        "entered_auto_loiter_after_offboard": loiter_after_offboard is not None,
+        "mission_complete": complete_time is not None and finished_true,
+        "complete_time": complete_time,
+        "three_wall_ready": "three_wall=ready" in final_coverage,
+        "final_coverage": final_coverage,
+        "goal_count": len(goals),
+        "goals": goals,
+        "path_length": path_length,
+        "return_horizontal_error": return_error,
+        "cross_track_max": cross_track_max,
+        "speed_mean": mean(speed_values),
+        "speed_median": percentile(speed_values, 0.5),
+        "speed_p90": percentile(speed_values, 0.9),
+        "speed_max": max(speed_values) if speed_values else None,
+        "low_speed_fraction": (
+            sum(value < 0.2 for value in speed_values) / len(speed_values)
+            if speed_values
+            else None
+        ),
+        "longest_speed_below_0_2": longest_below(active_velocities, 0.2),
+        "planned_speed_max": (
+            max(planned_speed_values) if planned_speed_values else None
+        ),
+        "planned_acceleration_max": (
+            max(planned_acceleration_values)
+            if planned_acceleration_values
+            else None
+        ),
+        "odom_rate": rate(odom_stamps),
+        "command_faults": command_faults,
+        "rosout_available": rosout_message_count > 0,
+        "rosout_message_count": rosout_message_count,
+        "super_failure_log_count": len(super_failures),
+        "super_failure_breakdown": dict(super_failure_breakdown),
+        "super_failure_examples": super_failures[:10],
+        "status_changes": statuses,
+        "state_changes": state_changes,
+    }
+
+
+def evaluate(report, arguments):
+    checks = {
+        "entered_offboard": report["entered_offboard"],
+        "mission_complete": report["mission_complete"],
+        "three_wall_ready": report["three_wall_ready"],
+        "entered_auto_loiter_after_offboard": report[
+            "entered_auto_loiter_after_offboard"
+        ],
+        "no_command_faults": not report["command_faults"],
+        "at_least_three_goals": report["goal_count"] >= 3,
+        "minimum_path_length": report["path_length"] >= arguments.min_path_length,
+        "return_horizontal_error": report["return_horizontal_error"] is not None
+        and report["return_horizontal_error"] <= arguments.max_return_error,
+        "cross_track_limit": report["cross_track_max"] is not None
+        and report["cross_track_max"] <= arguments.max_cross_track,
+        "median_cruise_speed": report["speed_median"] is not None
+        and report["speed_median"] >= arguments.min_median_speed,
+        "low_speed_duration": report["longest_speed_below_0_2"]
+        <= arguments.max_low_speed_duration,
+        "actual_speed_limit": report["speed_max"] is not None
+        and report["speed_max"] <= arguments.max_actual_speed,
+        "odometry_rate": report["odom_rate"] is not None
+        and report["odom_rate"] >= arguments.min_odom_rate,
+        "planned_speed_limit": report["planned_speed_max"] is not None
+        and report["planned_speed_max"] <= arguments.max_planned_speed,
+        "planned_acceleration_limit": report["planned_acceleration_max"] is not None
+        and report["planned_acceleration_max"]
+        <= arguments.max_planned_acceleration,
+        "offboard_duration": report["offboard_duration"] is not None
+        and report["offboard_duration"] <= arguments.max_offboard_duration,
+    }
+    if arguments.max_super_failures >= 0:
+        checks["super_failure_logs_available"] = report["rosout_available"]
+        checks["super_failure_limit"] = report["rosout_available"] and (
+            report["super_failure_log_count"] <= arguments.max_super_failures
+        )
+    report["checks"] = checks
+    report["failed_checks"] = [name for name, passed in checks.items() if not passed]
+    report["verdict"] = "PASS" if not report["failed_checks"] else "FAIL"
+    return report
+
+
+def format_value(value, suffix=""):
+    if value is None:
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:.3f}{suffix}"
+    return f"{value}{suffix}"
+
+
+def print_summary(report):
+    print(f"TASK1_SITL_ACCEPTANCE: {report['verdict']}")
+    print(
+        "completion: offboard=%s complete=%s three_wall=%s auto_loiter=%s"
+        % (
+            report["entered_offboard"],
+            report["mission_complete"],
+            report["three_wall_ready"],
+            report["entered_auto_loiter_after_offboard"],
+        )
+    )
+    print(
+        "motion: duration=%s path=%s return_error=%s cross_track=%s"
+        % (
+            format_value(report["offboard_duration"], "s"),
+            format_value(report["path_length"], "m"),
+            format_value(report["return_horizontal_error"], "m"),
+            format_value(report["cross_track_max"], "m"),
+        )
+    )
+    print(
+        "speed: mean=%s median=%s p90=%s max=%s low<0.2_longest=%s"
+        % (
+            format_value(report["speed_mean"], "m/s"),
+            format_value(report["speed_median"], "m/s"),
+            format_value(report["speed_p90"], "m/s"),
+            format_value(report["speed_max"], "m/s"),
+            format_value(report["longest_speed_below_0_2"], "s"),
+        )
+    )
+    super_failure_text = (
+        str(report["super_failure_log_count"])
+        if report["rosout_available"]
+        else "not_recorded"
+    )
+    print(
+        "planner: speed_max=%s acceleration_max=%s odom_rate=%s "
+        "bridge_faults=%d super_failure_logs=%s"
+        % (
+            format_value(report["planned_speed_max"], "m/s"),
+            format_value(report["planned_acceleration_max"], "m/s^2"),
+            format_value(report["odom_rate"], "Hz"),
+            len(report["command_faults"]),
+            super_failure_text,
+        )
+    )
+    if report["super_failure_breakdown"]:
+        print(
+            "super_failure_breakdown: "
+            + ", ".join(
+                f"{name}={count}"
+                for name, count in sorted(
+                    report["super_failure_breakdown"].items()
+                )
+            )
+        )
+    if report["failed_checks"]:
+        print("failed_checks: " + ", ".join(report["failed_checks"]))
+
+
+def main():
+    arguments = parse_arguments()
+    try:
+        report = evaluate(analyze(arguments.bag), arguments)
+    except (OSError, rosbag.bag.ROSBagException) as error:
+        print(f"Unable to analyze bag: {error}", file=sys.stderr)
+        return 2
+
+    print_summary(report)
+    if arguments.json_output:
+        with open(arguments.json_output, "w", encoding="utf-8") as output:
+            json.dump(report, output, indent=2, ensure_ascii=False)
+            output.write("\n")
+    return 0 if report["verdict"] == "PASS" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
