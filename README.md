@@ -55,6 +55,86 @@ CH340/MAVROS链路的波特率。QGC、MAVROS或串口终端同一时间只能�
 
 ## 任务一真实闭环
 
+### MID360 与 NUC 的固定地址
+
+MID360 雷达地址固定为 `192.168.1.157`，NUC 专用雷达网口 `enp89s0` 已建立
+NetworkManager 永久连接 `mid360-static`：
+
+```text
+NUC enp89s0: 192.168.1.10/24
+MID360:      192.168.1.157/24
+网关/DNS:    不设置
+```
+
+该连接已设置为开机自动启用，并设置 `ipv4.never-default=yes`，不会替代 NUC 原有的
+上网默认路由。正常重启后不需要再次执行 `ifconfig`、`ip addr add` 或手工配置地址。
+雷达关闭时网口可能显示无载波，这是正常现象。只在需要手动重新激活连接时执行：
+
+```bash
+nmcli connection up mid360-static
+```
+
+### 仅启动定位链路：MID360 → Fast-LIO2 → PX4
+
+该入口只启动 MID360 驱动、Fast-LIO2、MAVROS 和外部视觉位姿桥，不启动 SUPER、
+不发送飞行目标、不切换模式，也不会解锁飞机：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://localhost:11312
+roslaunch mine_uav_control px4_fastlio_localization.launch rviz:=false
+```
+
+如需同时查看点云，把最后一项改为 `rviz:=true`。保持上述终端运行，在另一个终端检查：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://localhost:11312
+rostopic hz /livox/imu
+rostopic hz /Odometry
+rostopic hz /mavros/vision_pose/pose_cov
+rostopic echo -n 1 /mine_uav/task1/vision_healthy
+rostopic echo -n 1 /mine_uav/task1/vision_status
+rostopic echo -n 1 /mavros/state
+rostopic echo -n 1 /mavros/estimator_status
+```
+
+数据路径是 `MID360 → /livox/lidar,/livox/imu → Fast-LIO2 /Odometry →
+/mavros/vision_pose/pose_cov → MAVROS → PX4 EKF2`。因此 `/Odometry` 是 Fast-LIO2
+在 NUC 上产生的位姿，不是雷达直接产生的消息。此前现场已验证其典型频率分别约为
+IMU 200 Hz、Odometry 10 Hz、发送给 PX4 的 vision pose 30 Hz。
+
+### 启动完整任务一
+
+完整任务一已经包含上述全部定位节点，不能与 `px4_fastlio_localization.launch` 同时运行。
+若前者正在运行，先在它的终端按 `Ctrl+C`，再执行：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://localhost:11312
+roslaunch mine_uav_control task1_real.launch rviz:=true
+```
+
+当前实验配置暂时忽略 CH6，只使用 CH7。启动前让 CH7 保持低位；确认定位健康后，
+由飞手手动解锁、起飞并稳定悬停，再把 CH7 从低位拨到高位并保持约 0.5 秒。
+任务一随后以当前位姿建立 home，开始向 SUPER 发布探索目标，指令桥预发送悬停目标后
+自动请求 OFFBOARD。节点不会自动解锁或自动起飞。CH7 拨回低位会退出任务控制并请求
+切回 `POSCTL`，飞手应立即接管。
+
+任务一运行状态可在第二个终端查看：
+
+```bash
+source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://localhost:11312
+rostopic echo /mine_uav/mission/status
+rostopic echo /mine_uav/exploration/status
+rostopic echo /mine_uav/task1/command_status
+rostopic echo /goal
+```
+
+首次带飞前仍应拆桨验证 CH7、定位中断保护和人工接管；当前任务一速度硬上限为
+`1.0 m/s`，相对任务 home 的高度硬上限为 `1.8 m`。
+
 ### 实验室临时测试启动逻辑（手动起飞后 CH7 启动）
 
 `task1_real.launch` 已启用 `require_mission_enable_edge=true`，因此任务一不会因节点启动、
@@ -100,6 +180,7 @@ OFFBOARD。真机默认退出到 `POSCTL`，必须保证遥控器和 PX4 失效�
 
 ```bash
 source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+export ROS_MASTER_URI=http://localhost:11312
 roslaunch mine_uav_control task1_real.launch
 ```
 

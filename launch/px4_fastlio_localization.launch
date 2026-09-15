@@ -1,0 +1,27 @@
+<launch>
+  <!-- Sensor-to-estimator validation stack only.  It never arms the vehicle,
+       changes flight mode, starts SUPER, or publishes flight setpoints. -->
+  <arg name="px4_device"
+       default="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"/>
+  <arg name="px4_baud" default="500000"/>
+  <arg name="rviz" default="false"/>
+
+  <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360s.launch"/>
+
+  <include file="$(find fast_lio)/launch/mapping_mid360.launch">
+    <arg name="rviz" value="$(arg rviz)"/>
+  </include>
+
+  <include file="$(find mine_uav_control)/launch/px4_serial.launch">
+    <arg name="device" value="$(arg px4_device)"/>
+    <arg name="baud" value="$(arg px4_baud)"/>
+    <arg name="respawn_mavros" value="true"/>
+  </include>
+
+  <node pkg="mine_uav_control" type="fastlio_px4_vision_bridge"
+        name="fastlio_px4_vision_bridge" output="screen"
+        respawn="true" respawn_delay="1.0">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
+  </node>
+</launch>
