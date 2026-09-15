@@ -2113,3 +2113,4 @@ ENTRY、EXPLORE、BOUNDARY_SWEEP、VERIFY、RETURN、ABORT状态机。机头方�
 本轮已完成本地提交 `0a44420 feat: gate task one start on CH7 enable edge`；推送因当前环境暂时无法解析 `github.com` 失败，网络恢复后需执行 `git push origin main`。
 本轮确认：飞行中CH7拨低会撤销自动允许，桥接器先发布当前位置保持目标，再请求PX4退出OFFBOARD并切换到POSCTL；这不是自动定点悬停，飞手必须保持摇杆和模式可控。任务一速度来自SUPER的 traj_opt.boundary.max_vel=2.0 m/s，桥接器 max_speed=2.2 m/s 是校验上限；实际速度还受加速度1.5 m/s²、轨迹、障碍和PX4跟踪能力限制，因此不能保证始终达到2.0 m/s。
 本轮将任务一速度限制统一改为1.0 m/s：SUPER的 traj_opt.boundary.max_vel=1.0，PX4指令桥 max_speed=1.0；同时将指令桥 max_height 和任务一真实/SITL启动入口的高度上限统一改为1.8 m。任务一的巡航高度仍由相对home的观察高度参数决定，最终输出还会经过指令桥高度硬限制。
+本轮临时测试调整：新增 force_goaf_task 参数并在 task1_real.launch 和 task1_px4_sitl.launch 设为 true，忽略CH6任务选择通道；CH7仍作为自动允许/启动开关，任务二保持不可用。测试结束后将该参数恢复为 false，即重新启用CH6任务选择逻辑。mission_scheduler 编译已通过。

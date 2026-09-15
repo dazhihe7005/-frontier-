@@ -48,6 +48,7 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
   private_nh_.param("require_auto_enable_low_before_enable",
                     require_auto_enable_low_before_enable_,
                     require_auto_enable_low_before_enable_);
+  private_nh_.param("force_goaf_task", force_goaf_task_, force_goaf_task_);
   private_nh_.param("shaft_task_available", shaft_task_available_,
                     shaft_task_available_);
 
@@ -213,12 +214,15 @@ void MissionScheduler::timerCallback(const ros::TimerEvent&) {
     reason = "rc_lost";
   } else if (!auto_enabled_) {
     reason = auto_reason;
-  } else if (rc_selection_ == RcSelection::kInvalid) {
-    reason = "rc_switch_invalid_or_mid";
   } else if (!mavros_ok) {
     reason = "mavros_disconnected";
   } else if (require_odometry_ && !odometry_fresh) {
     reason = "fastlio2_odometry_lost";
+  } else if (force_goaf_task_) {
+    desired_selection = RcSelection::kGoafExploration;
+    reason = "force_goaf_task_test_mode";
+  } else if (rc_selection_ == RcSelection::kInvalid) {
+    reason = "rc_switch_invalid_or_mid";
   } else if (rc_selection_ == RcSelection::kShaftExploration &&
              !shaft_task_available_) {
     reason = "shaft_task_not_implemented";

@@ -23,7 +23,11 @@
   </group>
 
   <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>
-  <include file="$(find mine_uav_control)/launch/mission_scheduler.launch"/>
+  <include file="$(find mine_uav_control)/launch/mission_scheduler.launch">
+    <!-- Temporary task-one test: CH6 is ignored; CH7 remains the automatic
+         enable/start switch. Restore false when task two is brought back. -->
+    <arg name="force_goaf_task" value="true"/>
+  </include>
   <include file="$(find mine_uav_control)/launch/super_exploration_decider.launch">
     <!-- Laboratory procedure: manual hover first, then CH7 low->high starts
          a fresh task and captures home from the synchronized pose. -->

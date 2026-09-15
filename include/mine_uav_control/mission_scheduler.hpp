@@ -83,6 +83,7 @@ class MissionScheduler {
   bool require_odometry_{true};
   bool require_mavros_connection_{false};
   bool require_auto_enable_low_before_enable_{true};
+  bool force_goaf_task_{false};
   bool shaft_task_available_{false};
 
   bool have_rc_{false};
