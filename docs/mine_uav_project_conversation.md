@@ -2111,3 +2111,4 @@ ENTRY、EXPLORE、BOUNDARY_SWEEP、VERIFY、RETURN、ABORT状态机。机头方�
 
 代码已同步到 `/home/nuc/super_ws`并通过 `catkin_make --pkg mine_uav_control -j2`编译通过。当前结论是：在SITL和代码逻辑层面已有避障能力，且此前已验证终墙前不会穿墙；但真实实验仍需拆桨、低速、可立即人工接管，并另外验证真实点云坐标系/外参、制动距离、定位和通信中断保护。当前修改尚未在本轮推送GitHub，待本轮结束按项目约定提交并推送。
 本轮已完成本地提交 `0a44420 feat: gate task one start on CH7 enable edge`；推送因当前环境暂时无法解析 `github.com` 失败，网络恢复后需执行 `git push origin main`。
+本轮确认：飞行中CH7拨低会撤销自动允许，桥接器先发布当前位置保持目标，再请求PX4退出OFFBOARD并切换到POSCTL；这不是自动定点悬停，飞手必须保持摇杆和模式可控。任务一速度来自SUPER的 traj_opt.boundary.max_vel=2.0 m/s，桥接器 max_speed=2.2 m/s 是校验上限；实际速度还受加速度1.5 m/s²、轨迹、障碍和PX4跟踪能力限制，因此不能保证始终达到2.0 m/s。
