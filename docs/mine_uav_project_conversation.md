@@ -1831,3 +1831,19 @@ QGC当前已连接且保持运行。现有证据把根因定位到不同电脑�
 方法是在每台QGC的`Application Settings -> Comm Links`中新增Serial链路，选择CP2102
 对应端口，波特率设57600、无流控后保存连接。同一串口不能同时被QGC、MAVROS或串口工具
 占用。本轮没有修改PX4参数、数传参数或任务算法。
+
+## 第74轮：Codex整机访问权限说明
+
+用户询问如何给予Codex这台设备的完全访问权限。当前会话由客户端以受管的
+`workspace-write`模式启动，可写`/home/nuc`和临时目录，但读取真实USB设备、启动本地
+网络服务、访问系统目录或执行部分宿主机命令仍可能需要单次批准。项目配置中的
+`trust_level = "trusted"`只表示信任项目，不等于关闭沙箱或授予root权限；聊天中声明
+“以后全部同意”也不能覆盖客户端/系统层的批准机制。
+
+本机Codex CLI 0.154.0提供两种相关启动方式：`-s danger-full-access -a never`关闭Codex
+文件系统沙箱并不再询问批准；`--dangerously-bypass-approvals-and-sandbox`同时跳过批准和
+沙箱，CLI明确标记为极度危险、仅适合设备本身已有外层隔离的环境。两种方式都只获得
+当前Linux用户`nuc`本来拥有的权限，并不会自动获得root；不建议把Codex以root运行或为
+所有命令配置`NOPASSWD: ALL`。当前会话不能自行升级，必须由用户在客户端选择Full Access
+后新建会话，或从终端用相应参数重新启动。更推荐保留当前模式，对USB、Gazebo、Git推送
+等所需类别使用可持久化的窄范围批准规则。
