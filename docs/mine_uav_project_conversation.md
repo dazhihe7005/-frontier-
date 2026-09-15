@@ -2082,3 +2082,21 @@ ENTRY、EXPLORE、BOUNDARY_SWEEP、VERIFY、RETURN、ABORT状态机。机头方�
 19.2 m，未越过终墙。结果证明下层不会直接穿墙，但错误目标会造成大量重规划，因此高层
 可达过滤是必要的第一道保护。测试后已关闭全部仿真进程，精简版本通过
 `catkin_make --pkg mine_uav_control -j2`编译。
+
+## 第84轮：验证无人机到达尽头后的自主返航
+
+用户澄清本轮不是手动发布返航命令，而是验证无人机自主深入、识别尽头、判断任务完成并
+自行返航。第一次启动因PX4 SITL在启动阶段以255退出，未计入测试；单独诊断PX4启动正常，
+随后重新启动完整链路。
+
+第二次完整PX4/Gazebo/SUPER/MID360模拟链路成功运行。任务调度器自动切换到任务一，决策器
+捕获home约为`(-0.01,-0.01,-0.13)`，沿前方依次发布约`x=7.48、12.61、15.40、18.43 m`
+的look-ahead目标。接近终墙后前方障碍连续确认并切换到frontier fallback；地图状态最终为
+`map_closure=ready`、`front_closed=true`、`actionable=0`、`closure_confirm=4/4`、
+`end_seen=true`、`end_depth=22.50 m`、`progress=18.82 m`。
+
+随后决策器自行发布home目标`(-0.01,-0.01,1.67)`，SUPER暂停探索，PX4接受模式切换到
+`AUTO.LOITER`。最终状态为`COMPLETE`、`finished=True`、`returning=False`，MAVROS里程计
+约为`(-0.35,-0.01,1.52)`，已回到home附近。因此当前标准场景已经验证“自动发现尽头→完成
+确认→生成返航目标→回到home→AUTO.LOITER”的闭环。该结果只证明当前仿真场景的自动返航
+链路有效，不代表未知尺寸、超出续航或存在遮挡的真实采空区已经具备完整建模保证。
