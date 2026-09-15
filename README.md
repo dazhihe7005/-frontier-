@@ -451,3 +451,23 @@ roslaunch mine_uav_control mission_scheduler_sitl.launch
 ```
 
 该启动文件使用 PX4 SITL/MAVROS 的 `/mavros/local_position/odom` 作为调度器的临时位姿健康输入，并不代表真实 Fast-LIO2 已接入。调度器的 RC 输入仍然是 `/mavros/rc/in`。SITL 中可以先验证 PX4/MAVROS 连接、RC 通道、任务一/任务二切换和位姿超时保护；任务一 SUPER 的完整规划还需要另行提供 SITL 点云或回放 Fast-LIO2 点云，因为标准 PX4 SITL 不会自动产生 Fast-LIO2 的 `/cloud_registered`。
+
+#### 150 m 采空区大场景仿真
+
+用于观察“平台外悬停 → 狭窄入口 → 100 m 宽、30 m 高、150 m 深采空区 → 前墙 → 返航”的完整任务一闭环：
+
+```bash
+export ROS_MASTER_URI=http://127.0.0.1:11312
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
+  /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:$ROS_PACKAGE_PATH
+roslaunch mine_uav_control task1_large_platform_sitl.launch gui:=true rviz:=true
+```
+
+该专用场景使用理想化 Gazebo 三维射线模型模拟 MID360，不是 Livox 原始数据、回波强度或真实噪声模型。仿真专用雷达范围约 70 m；实际 MID360 约 60 m 的有效探测距离意味着前墙通常要在无人机接近后才能识别。第三次运行已验证：无人机到达约 154.5 m，末端墙深度 157.5 m，墙面跨度 85 m，左右覆盖率 0.97/1.00，连续确认 4/4，随后返航并进入 `AUTO.LOITER`。
+
+任务原点在任务一第一次被允许时从当前 `/Odometry` 捕获，而不是无条件使用节点启动时的第一帧。因此实机可以先手动起飞并稳定悬停，再打开自动允许；返航高度是相对该任务原点的高度。任务一当前不做地形跟随：下方地面突然下降时不会自动跟着下降，地面突然升高则依靠点云障碍/规划保护，真正的地形跟随需要单独加入高度控制策略。
+
+末端墙判定要求“通过任务中线的连续横向墙体”，不再使用最左点到最右点的简单跨度，避免入口平台边缘和两侧墙被拼成假墙。但狭窄走廊若存在中线前墙且满足真实配置的最小跨度，仍可能被判为末端；实机还应加入入口缓冲距离、走廊/采空区开阔度判据和连续多帧确认。

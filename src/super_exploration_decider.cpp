@@ -378,7 +378,11 @@ void SuperExplorationDecider::synchronizedCallback(
   if (first_data_time_.isZero()) {
     first_data_time_ = last_sync_time_;
   }
-  if (!have_home_) {
+  // Capture the mission origin only after task one is actually enabled.  The
+  // node normally starts while the pilot is still taking off; capturing the
+  // first odometry sample there would make a later return target point at the
+  // ground instead of at the hover where autonomy was accepted.
+  if (!have_home_ && enabled_) {
     home_pose_ = current_pose_;
     home_pose_.header.frame_id = world_frame_;
     mission_heading_yaw_ = poseYaw(home_pose_.pose);
@@ -613,7 +617,7 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
 
   struct EndPlaneEvidence {
     std::set<int> lateral_bins;
-    bool center_seen{false};
+    std::set<int> center_bins;
   };
 
   const double c = std::cos(mission_heading_yaw_);
@@ -653,30 +657,61 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
       continue;
     }
     EndPlaneEvidence& plane = end_planes[forward_bin];
-    plane.lateral_bins.insert(
-        static_cast<int>(std::floor(lateral / wall_coverage_bin_size_)));
+    const int lateral_bin =
+        static_cast<int>(std::floor(lateral / wall_coverage_bin_size_));
+    plane.lateral_bins.insert(lateral_bin);
     if (lateral_abs <= wall_coverage_end_center_half_width_) {
-      plane.center_seen = true;
+      plane.center_bins.insert(lateral_bin);
     }
   }
 
   int end_bin = -1;
   for (const auto& candidate : end_planes) {
-    if (!candidate.second.center_seen ||
+    if (candidate.second.center_bins.empty() ||
         candidate.second.lateral_bins.empty()) {
       continue;
     }
-    const int first_lateral_bin = *candidate.second.lateral_bins.begin();
-    const int last_lateral_bin = *candidate.second.lateral_bins.rbegin();
-    const double span =
-        (last_lateral_bin - first_lateral_bin + 1) *
-        wall_coverage_bin_size_;
-    if (span < wall_coverage_end_min_span_) {
+
+    // A genuine end wall must form one center-connected lateral component.
+    // Merely taking the outermost returns is unsafe: two distant side-wall
+    // points plus a short platform edge can otherwise look like a full-width
+    // end wall.  Reuse the configured gap allowance to tolerate sparse LiDAR
+    // sampling without bridging large unobserved regions.
+    int component_first = 0;
+    int component_last = 0;
+    int previous_bin = 0;
+    bool component_has_center = false;
+    bool first_bin = true;
+    double center_connected_span = 0.0;
+    const auto finish_component = [&]() {
+      if (!first_bin && component_has_center) {
+        center_connected_span = std::max(
+            center_connected_span,
+            (component_last - component_first + 1) *
+                wall_coverage_bin_size_);
+      }
+    };
+    for (const int lateral_bin : candidate.second.lateral_bins) {
+      if (first_bin ||
+          lateral_bin - previous_bin > wall_coverage_max_gap_bins_ + 1) {
+        finish_component();
+        component_first = lateral_bin;
+        component_has_center = false;
+        first_bin = false;
+      }
+      component_last = lateral_bin;
+      component_has_center =
+          component_has_center ||
+          candidate.second.center_bins.count(lateral_bin) > 0;
+      previous_bin = lateral_bin;
+    }
+    finish_component();
+    if (center_connected_span < wall_coverage_end_min_span_) {
       continue;
     }
     if (candidate.first > end_bin) {
       end_bin = candidate.first;
-      result.end_lateral_span = span;
+      result.end_lateral_span = center_connected_span;
     }
   }
 

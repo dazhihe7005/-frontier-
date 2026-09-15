@@ -1,0 +1,143 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="goaf_large_platform">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <scene>
+      <ambient>0.35 0.35 0.35 1</ambient>
+      <background>0.06 0.07 0.08 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <gui fullscreen="0">
+      <camera name="overview">
+        <pose>-35 -80 48 0 0.38 0.78</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+
+    <!-- Outside platform: top surface at z=15 m, centered on the open
+         entrance. The vehicle starts 1.15 m above it at x=-8 m. -->
+    <model name="entrance_platform">
+      <static>true</static>
+      <pose>-8 0 14.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>16 14 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>16 14 1</size></box></geometry>
+          <material>
+            <ambient>0.22 0.24 0.28 1</ambient>
+            <diffuse>0.32 0.35 0.40 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Open entrance at x=0. Internal dimensions are exactly
+         150 m (x) by 100 m (y) by 30 m (z). -->
+    <model name="left_wall">
+      <static>true</static>
+      <pose>75 50 15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>150 0.4 30</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>150 0.4 30</size></box></geometry>
+          <material>
+            <ambient>0.30 0.25 0.20 1</ambient>
+            <diffuse>0.42 0.35 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="right_wall">
+      <static>true</static>
+      <pose>75 -50 15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>150 0.4 30</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>150 0.4 30</size></box></geometry>
+          <material>
+            <ambient>0.30 0.25 0.20 1</ambient>
+            <diffuse>0.42 0.35 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="far_wall">
+      <static>true</static>
+      <pose>150 0 15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.4 100 30</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 100 30</size></box></geometry>
+          <material>
+            <ambient>0.34 0.27 0.20 1</ambient>
+            <diffuse>0.48 0.38 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="ceiling">
+      <static>true</static>
+      <pose>75 0 30 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>150 100 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>150 100 0.4</size></box></geometry>
+          <material>
+            <ambient>0.20 0.20 0.20 1</ambient>
+            <diffuse>0.28 0.28 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="chamber_floor">
+      <static>true</static>
+      <pose>75 0 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>150 100 0.2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>150 100 0.2</size></box></geometry>
+          <material>
+            <ambient>0.18 0.16 0.14 1</ambient>
+            <diffuse>0.26 0.23 0.20 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Sparse centerline reference posts make progress visible in Gazebo
+         without obstructing the planned straight flight corridor. -->
+    <model name="marker_050">
+      <static>true</static><pose>50 20 15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.5</radius><length>30</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.5</radius><length>30</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="marker_100">
+      <static>true</static><pose>100 -20 15 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.5</radius><length>30</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.5</radius><length>30</length></cylinder></geometry></visual>
+      </link>
+    </model>
+  </world>
+</sdf>

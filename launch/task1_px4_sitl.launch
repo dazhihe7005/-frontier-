@@ -7,7 +7,24 @@
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
   <arg name="vehicle_sdf"
        default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
+  <arg name="spawn_x" default="0"/>
+  <arg name="spawn_y" default="0"/>
+  <arg name="spawn_z" default="1.15"/>
+  <arg name="spawn_yaw" default="0"/>
   <arg name="max_exploration_radius" default="24.0"/>
+  <arg name="frontier_search_radius" default="10.0"/>
+  <arg name="decider_max_map_radius" default="40.0"/>
+  <arg name="decider_raycast_max_range" default="40.0"/>
+  <arg name="decider_sync_slop" default="0.08"/>
+  <arg name="decider_data_timeout" default="1.0"/>
+  <arg name="decider_max_points_per_cloud" default="5000"/>
+  <arg name="side_wall_max_range" default="12.0"/>
+  <arg name="wall_coverage_side_max_distance" default="8.0"/>
+  <arg name="wall_coverage_end_min_span" default="4.0"/>
+  <arg name="lidar_max_range" default="29.5"/>
+  <arg name="bridge_max_horizontal_radius" default="40.0"/>
+  <arg name="bridge_min_height" default="-0.5"/>
+  <arg name="bridge_max_height" default="3.0"/>
 
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -15,12 +32,12 @@
     <arg name="vehicle" value="iris"/>
     <arg name="sdf" value="$(arg vehicle_sdf)"/>
     <arg name="world" value="$(arg world)"/>
-    <arg name="x" value="0"/>
-    <arg name="y" value="0"/>
+    <arg name="x" value="$(arg spawn_x)"/>
+    <arg name="y" value="$(arg spawn_y)"/>
     <!-- Start above the ground for the exploration-loop SITL test. The real
          vehicle should run a separate takeoff phase before enabling task one. -->
-    <arg name="z" value="1.15"/>
-    <arg name="Y" value="0"/>
+    <arg name="z" value="$(arg spawn_z)"/>
+    <arg name="Y" value="$(arg spawn_yaw)"/>
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
 
@@ -44,7 +61,7 @@
     <param name="self_filter_z_min" value="-0.65"/>
     <param name="self_filter_z_max" value="0.25"/>
     <param name="min_range" value="0.30"/>
-    <param name="max_range" value="29.5"/>
+    <param name="max_range" value="$(arg lidar_max_range)"/>
     <param name="voxel_size" value="0.20"/>
   </node>
 
@@ -58,8 +75,19 @@
   <node pkg="mine_uav_control" type="super_exploration_decider"
         name="super_exploration_decider" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
-    <param name="frontier_search_radius" value="10.0"/>
+    <param name="frontier_search_radius" value="$(arg frontier_search_radius)"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
+    <param name="max_map_radius" value="$(arg decider_max_map_radius)"/>
+    <param name="raycast_max_range" value="$(arg decider_raycast_max_range)"/>
+    <param name="sync_slop" value="$(arg decider_sync_slop)"/>
+    <param name="data_timeout" value="$(arg decider_data_timeout)"/>
+    <param name="max_points_per_cloud"
+           value="$(arg decider_max_points_per_cloud)"/>
+    <param name="side_wall_max_range" value="$(arg side_wall_max_range)"/>
+    <param name="wall_coverage_side_max_distance"
+           value="$(arg wall_coverage_side_max_distance)"/>
+    <param name="wall_coverage_end_min_span"
+           value="$(arg wall_coverage_end_min_span)"/>
     <!-- Keep the mine traversal almost level. Vertical exploration frontiers
          caused large climbs and repeated SUPER feasibility failures. -->
     <param name="min_observation_height_above_home" value="0.4"/>
@@ -82,6 +110,9 @@
        headless-SITL hold after task completion; the real launch keeps POSCTL. -->
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
     <arg name="fallback_mode" value="AUTO.LOITER"/>
+    <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
+    <arg name="min_height" value="$(arg bridge_min_height)"/>
+    <arg name="max_height" value="$(arg bridge_max_height)"/>
   </include>
 
   <group if="$(arg rviz)">

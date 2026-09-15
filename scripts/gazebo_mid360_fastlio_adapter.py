@@ -192,7 +192,11 @@ class GazeboMid360FastlioAdapter:
             return
 
         header = cloud.header
-        header.stamp = now
+        # The registered cloud and pose form one synthetic Fast-LIO2 sample.
+        # Give them the same timestamp so the downstream ApproximateTime
+        # synchronizer cannot lose pairs when a dense scan takes noticeable
+        # CPU time to transform.
+        header.stamp = odom.header.stamp
         header.frame_id = self.world_frame
         if rospy.is_shutdown():
             return
