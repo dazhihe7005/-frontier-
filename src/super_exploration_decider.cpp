@@ -191,6 +191,8 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("forward_corridor_half_width",
                     forward_corridor_half_width_,
                     forward_corridor_half_width_);
+  private_nh_.param("max_task_lateral_offset", max_task_lateral_offset_,
+                    max_task_lateral_offset_);
   private_nh_.param("forward_progress_weight", forward_progress_weight_,
                     forward_progress_weight_);
   private_nh_.param("forward_lateral_penalty", forward_lateral_penalty_,
@@ -270,6 +272,26 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("require_three_wall_completion",
                     require_three_wall_completion_,
                     require_three_wall_completion_);
+  private_nh_.param("use_map_closure_completion", use_map_closure_completion_,
+                    use_map_closure_completion_);
+  private_nh_.param("map_closure_min_progress", map_closure_min_progress_,
+                    map_closure_min_progress_);
+  private_nh_.param("map_closure_no_frontier_time",
+                    map_closure_no_frontier_time_,
+                    map_closure_no_frontier_time_);
+  private_nh_.param("map_closure_stable_time", map_closure_stable_time_,
+                    map_closure_stable_time_);
+  private_nh_.param("map_closure_max_actionable_frontiers",
+                    map_closure_max_actionable_frontiers_,
+                    map_closure_max_actionable_frontiers_);
+  private_nh_.param("map_closure_growth_voxels", map_closure_growth_voxels_,
+                    map_closure_growth_voxels_);
+  private_nh_.param("map_closure_confirm_cycles",
+                    map_closure_confirm_cycles_,
+                    map_closure_confirm_cycles_);
+  private_nh_.param("map_closure_require_front_boundary",
+                    map_closure_require_front_boundary_,
+                    map_closure_require_front_boundary_);
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
@@ -297,6 +319,8 @@ bool SuperExplorationDecider::loadParameters() {
       front_obstacle_min_vertical_span_ <= 0.0 ||
       !std::isfinite(forward_corridor_half_width_) ||
       forward_corridor_half_width_ <= vehicle_radius_ ||
+      !std::isfinite(max_task_lateral_offset_) ||
+      max_task_lateral_offset_ < forward_corridor_half_width_ ||
       !std::isfinite(forward_progress_weight_) ||
       forward_progress_weight_ <= 0.0 ||
       !std::isfinite(forward_lateral_penalty_) ||
@@ -350,12 +374,24 @@ bool SuperExplorationDecider::loadParameters() {
       side_wall_missing_confirm_frames_ < 1 ||
       front_obstacle_confirm_frames_ < 1 ||
       wall_coverage_max_gap_bins_ < 0 || three_wall_confirm_cycles_ < 1 ||
+      !std::isfinite(map_closure_min_progress_) ||
+      map_closure_min_progress_ < 0.0 ||
+      !std::isfinite(map_closure_no_frontier_time_) ||
+      map_closure_no_frontier_time_ <= 0.0 ||
+      !std::isfinite(map_closure_stable_time_) ||
+      map_closure_stable_time_ <= 0.0 ||
+      map_closure_max_actionable_frontiers_ < 0 ||
+      map_closure_growth_voxels_ < 1 || map_closure_confirm_cycles_ < 1 ||
       sync_queue_size_ < 2 || max_points_per_cloud_ < 1) {
     ROS_FATAL("Invalid exploration decider parameters");
     return false;
   }
   if (min_unknown_neighbors_ < 1) {
     min_unknown_neighbors_ = 1;
+  }
+  if (require_three_wall_completion_ && use_map_closure_completion_) {
+    ROS_FATAL("Only one completion policy may be enabled");
+    return false;
   }
   return true;
 }
@@ -774,11 +810,91 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
   return result;
 }
 
+SuperExplorationDecider::MapClosureStatus
+SuperExplorationDecider::evaluateMapClosure(
+    const std::vector<FrontierCandidate>& candidates) {
+  MapClosureStatus result;
+  if (!have_home_) {
+    return result;
+  }
+
+  const ros::Time now = ros::Time::now();
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+  const double dx = current_pose_.pose.position.x -
+                    home_pose_.pose.position.x;
+  const double dy = current_pose_.pose.position.y -
+                    home_pose_.pose.position.y;
+  result.vehicle_progress = c * dx + s * dy;
+  result.front_boundary_seen =
+      front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+
+  for (const auto& entry : voxels_) {
+    if (entry.second == kOccupied) {
+      ++result.occupied_voxels;
+    }
+  }
+
+  for (const auto& candidate : candidates) {
+    if (isForwardCandidate(candidate) &&
+        candidateMissionProgress(candidate) >=
+            result.vehicle_progress + 0.5 * min_goal_distance_ &&
+        std::abs(candidateMissionLateral(candidate)) <=
+            max_task_lateral_offset_) {
+      ++result.actionable_frontiers;
+    }
+  }
+
+  if (last_actionable_frontier_time_.isZero()) {
+    last_actionable_frontier_time_ = now;
+  }
+  if (result.actionable_frontiers >
+      static_cast<std::size_t>(map_closure_max_actionable_frontiers_)) {
+    last_actionable_frontier_time_ = now;
+  }
+  result.no_frontier_duration =
+      (now - last_actionable_frontier_time_).toSec();
+
+  if (last_significant_map_growth_time_.isZero() ||
+      map_growth_reference_count_ == 0) {
+    last_significant_map_growth_time_ = now;
+    map_growth_reference_count_ = result.occupied_voxels;
+  } else if (result.occupied_voxels < map_growth_reference_count_ ||
+             result.occupied_voxels >=
+                 map_growth_reference_count_ +
+                     static_cast<std::size_t>(map_closure_growth_voxels_)) {
+    last_significant_map_growth_time_ = now;
+    map_growth_reference_count_ = result.occupied_voxels;
+  }
+  result.stable_map_duration =
+      (now - last_significant_map_growth_time_).toSec();
+
+  const bool frontier_closed =
+      result.actionable_frontiers <=
+          static_cast<std::size_t>(map_closure_max_actionable_frontiers_) &&
+      result.no_frontier_duration >= map_closure_no_frontier_time_;
+  const bool front_boundary_ok =
+      !map_closure_require_front_boundary_ || result.front_boundary_seen;
+  result.complete = result.vehicle_progress >= map_closure_min_progress_ &&
+                    front_boundary_ok && frontier_closed &&
+                    result.stable_map_duration >= map_closure_stable_time_;
+  return result;
+}
+
 void SuperExplorationDecider::publishCoverageStatus(
-    const ThreeWallCoverage& coverage) {
+    const ThreeWallCoverage& coverage, const MapClosureStatus& closure) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(2)
-         << "three_wall=" << (coverage.complete ? "ready" : "incomplete")
+         << "map_closure=" << (closure.complete ? "ready" : "incomplete")
+         << " front_closed="
+         << (closure.front_boundary_seen ? "true" : "false")
+         << " actionable=" << closure.actionable_frontiers
+         << " no_frontier_s=" << closure.no_frontier_duration
+         << " stable_s=" << closure.stable_map_duration
+         << " occupied=" << closure.occupied_voxels
+         << " closure_confirm=" << map_closure_complete_streak_ << "/"
+         << map_closure_confirm_cycles_
+         << " three_wall=" << (coverage.complete ? "ready" : "diagnostic")
          << " end_seen=" << (coverage.end_wall_found ? "true" : "false")
          << " end_depth=" << coverage.end_depth
          << " progress=" << coverage.vehicle_progress
@@ -862,6 +978,12 @@ SuperExplorationDecider::findFrontiers() const {
       const double max_goal_z = home_pose_.pose.position.z +
                                 max_observation_height_above_home_;
       if (point.z < min_goal_z || point.z > max_goal_z) {
+        continue;
+      }
+      const double mission_lateral =
+          -std::sin(mission_heading_yaw_) * home_dx +
+          std::cos(mission_heading_yaw_) * home_dy;
+      if (std::abs(mission_lateral) > max_task_lateral_offset_) {
         continue;
       }
     }
@@ -1353,6 +1475,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   }
 
   const ThreeWallCoverage coverage = evaluateThreeWallCoverage();
+  const auto candidates = findFrontiers();
+  const MapClosureStatus closure = evaluateMapClosure(candidates);
   const bool completion_prerequisites =
       exploration_started_ &&
       reached_goal_count_ >= min_goals_before_complete_ &&
@@ -1365,7 +1489,24 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   } else {
     three_wall_complete_streak_ = 0;
   }
-  publishCoverageStatus(coverage);
+  if (use_map_closure_completion_ && closure.complete &&
+      completion_prerequisites) {
+    map_closure_complete_streak_ = std::min(
+        map_closure_complete_streak_ + 1, map_closure_confirm_cycles_);
+  } else {
+    map_closure_complete_streak_ = 0;
+  }
+  publishCoverageStatus(coverage, closure);
+  if (use_map_closure_completion_ &&
+      map_closure_complete_streak_ >= map_closure_confirm_cycles_) {
+    std_msgs::Bool message;
+    message.data = true;
+    model_complete_publisher_.publish(message);
+    publishStatus("MODEL_COMPLETE",
+                  "point-cloud boundary closed and map converged");
+    beginReturnHome("map closure confirmed");
+    return;
+  }
   if (require_three_wall_completion_ &&
       three_wall_complete_streak_ >= three_wall_confirm_cycles_) {
     std_msgs::Bool message;
@@ -1377,7 +1518,6 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
-  const auto candidates = findFrontiers();
   publishVisualization(candidates);
   if (!candidates.empty()) {
     last_frontier_time_ = ros::Time::now();
@@ -1430,6 +1570,13 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
+  if (!have_active_goal_ && use_map_closure_completion_ &&
+      closure.front_boundary_seen) {
+    publishStatus("WAIT_MAP_CLOSURE",
+                  "front boundary closed; waiting for frontier and map convergence");
+    return;
+  }
+
   if (!have_active_goal_ && publishForwardLookaheadGoal()) {
     publishStatus("EXPLORING",
                   "continuous forward look-ahead goal sent to SUPER");
@@ -1441,7 +1588,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
-  if (!require_three_wall_completion_ && completion_prerequisites &&
+  if (!require_three_wall_completion_ && !use_map_closure_completion_ &&
+      completion_prerequisites &&
       !last_frontier_time_.isZero() &&
       (ros::Time::now() - last_frontier_time_).toSec() >=
           no_frontier_timeout_) {
@@ -1450,6 +1598,9 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   } else if (require_three_wall_completion_) {
     publishStatus("WAIT_MODEL_COVERAGE",
                   "three continuous walls are not confirmed yet");
+  } else if (use_map_closure_completion_) {
+    publishStatus("WAIT_MAP_CLOSURE",
+                  "map boundary or convergence conditions are incomplete");
   } else {
     publishStatus("WAIT_FRONTIER", "no usable frontier yet");
   }
@@ -1509,6 +1660,8 @@ void SuperExplorationDecider::clearMissionState() {
   battery_percentage_ = -1.0;
   reached_goal_count_ = 0;
   three_wall_complete_streak_ = 0;
+  map_closure_complete_streak_ = 0;
+  map_growth_reference_count_ = 0;
   mission_heading_yaw_ = 0.0;
   exploration_phase_ = ExplorationPhase::kForwardPriority;
   left_wall_visible_ = false;
@@ -1518,6 +1671,8 @@ void SuperExplorationDecider::clearMissionState() {
   front_obstacle_streak_ = 0;
   first_data_time_ = ros::Time();
   last_frontier_time_ = ros::Time();
+  last_actionable_frontier_time_ = ros::Time();
+  last_significant_map_growth_time_ = ros::Time();
   std_msgs::Bool false_message;
   false_message.data = false;
   finished_publisher_.publish(false_message);

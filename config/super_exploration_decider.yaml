@@ -58,6 +58,9 @@ front_obstacle_min_vertical_span: 0.8
 # While either side wall is visible, keep task-level goals in the entry-axis
 # corridor. SUPER may still deviate locally around an obstacle.
 forward_corridor_half_width: 2.0
+# All task-level frontier goals, including fallback goals, must stay inside
+# this corridor measured from the mission-start heading axis.
+max_task_lateral_offset: 4.0
 forward_progress_weight: 2.0
 forward_lateral_penalty: 2.0
 forward_height_penalty: 1.0
@@ -76,9 +79,22 @@ directional_floor_exclusion: 0.5
 side_wall_missing_confirm_frames: 8
 front_obstacle_confirm_frames: 3
 
-# 采空区语义完成判据。以任务开始时的机头方向建立纵向/横向坐标，只有左右
-# 侧墙从入口到尽头连续覆盖、尽头墙横向覆盖足够且飞机已接近尽头时才允许返航。
-require_three_wall_completion: true
+# 任务完成采用地图闭合判据，不再要求识别三面墙。飞机深入到安全距离后，
+# 只有前向边界闭合、任务走廊内无可执行前沿、占据地图停止显著增长，并连续
+# 多周期满足条件，才发布 model_complete 并返航。
+require_three_wall_completion: false
+use_map_closure_completion: true
+map_closure_min_progress: 8.0
+map_closure_no_frontier_time: 4.0
+map_closure_stable_time: 4.0
+map_closure_max_actionable_frontiers: 0
+# 0.5 m decision voxels still fluctuate while Gazebo/SLAM pose jitters. Treat
+# fewer than this many newly occupied voxels during the stable window as noise.
+map_closure_growth_voxels: 500
+map_closure_confirm_cycles: 4
+map_closure_require_front_boundary: true
+
+# 以下三面墙指标只保留为诊断数据，不参与默认完成决策。
 wall_coverage_bin_size: 1.0
 wall_coverage_min_depth: 8.0
 # 末端墙必须距任务入口至少12 m，过滤入口平台边缘等近场结构。
@@ -104,8 +120,8 @@ three_wall_confirm_cycles: 4
 goal_reached_distance: 1.0
 goal_timeout: 30.0
 
-# 完成前至少到达一个观察点。启用三面墙判据后，无 frontier 超时只用于状态
-# 观察，不再独立触发“建模完成”；关闭 require_three_wall_completion 才回退到旧判据。
+# 完成前至少到达一个观察点。旧的 no_frontier_timeout 仅在两个严格完成策略
+# 都关闭时生效。
 min_goals_before_complete: 1
 min_data_duration: 5.0
 no_frontier_timeout: 15.0

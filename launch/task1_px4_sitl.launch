@@ -23,7 +23,13 @@
   <arg name="wall_coverage_end_min_depth" default="12.0"/>
   <arg name="wall_coverage_end_max_gap_bins" default="2"/>
   <arg name="wall_coverage_end_min_span" default="4.0"/>
+  <arg name="max_task_lateral_offset" default="4.0"/>
+  <arg name="map_closure_min_progress" default="8.0"/>
+  <arg name="map_closure_no_frontier_time" default="4.0"/>
+  <arg name="map_closure_stable_time" default="4.0"/>
+  <arg name="map_closure_growth_voxels" default="500"/>
   <arg name="lidar_max_range" default="29.5"/>
+  <arg name="max_global_points" default="120000"/>
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
   <arg name="bridge_min_height" default="-0.5"/>
   <arg name="bridge_max_height" default="3.0"/>
@@ -65,6 +71,7 @@
     <param name="min_range" value="0.30"/>
     <param name="max_range" value="$(arg lidar_max_range)"/>
     <param name="voxel_size" value="0.20"/>
+    <param name="max_global_points" value="$(arg max_global_points)"/>
   </node>
 
   <node pkg="mine_uav_control" type="mission_scheduler"
@@ -94,6 +101,16 @@
            value="$(arg wall_coverage_end_max_gap_bins)"/>
     <param name="wall_coverage_end_min_span"
            value="$(arg wall_coverage_end_min_span)"/>
+    <param name="max_task_lateral_offset"
+           value="$(arg max_task_lateral_offset)"/>
+    <param name="map_closure_min_progress"
+           value="$(arg map_closure_min_progress)"/>
+    <param name="map_closure_no_frontier_time"
+           value="$(arg map_closure_no_frontier_time)"/>
+    <param name="map_closure_stable_time"
+           value="$(arg map_closure_stable_time)"/>
+    <param name="map_closure_growth_voxels"
+           value="$(arg map_closure_growth_voxels)"/>
     <!-- Keep the mine traversal almost level. Vertical exploration frontiers
          caused large climbs and repeated SUPER feasibility failures. -->
     <param name="min_observation_height_above_home" value="0.4"/>

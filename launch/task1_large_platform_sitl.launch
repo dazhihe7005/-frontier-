@@ -32,7 +32,15 @@
     <arg name="wall_coverage_end_min_depth" value="15.0"/>
     <arg name="wall_coverage_end_max_gap_bins" value="15"/>
     <arg name="wall_coverage_end_min_span" value="80.0"/>
+    <arg name="max_task_lateral_offset" value="4.0"/>
+    <!-- Do not allow the entrance platform or narrow access corridor to
+         satisfy completion before the vehicle is well inside the chamber. -->
+    <arg name="map_closure_min_progress" value="30.0"/>
+    <arg name="map_closure_no_frontier_time" value="4.0"/>
+    <arg name="map_closure_stable_time" value="4.0"/>
+    <arg name="map_closure_growth_voxels" value="1000"/>
     <arg name="lidar_max_range" value="69.5"/>
+    <arg name="max_global_points" value="500000"/>
 
     <!-- These bounds are in the local takeoff frame, not world altitude. -->
     <arg name="bridge_max_horizontal_radius" value="175.0"/>

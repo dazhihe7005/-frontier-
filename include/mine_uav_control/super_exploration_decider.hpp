@@ -84,6 +84,16 @@ class SuperExplorationDecider {
     int expected_side_bins{0};
   };
 
+  struct MapClosureStatus {
+    bool complete{false};
+    bool front_boundary_seen{false};
+    double vehicle_progress{0.0};
+    double no_frontier_duration{0.0};
+    double stable_map_duration{0.0};
+    std::size_t actionable_frontiers{0};
+    std::size_t occupied_voxels{0};
+  };
+
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
   void decisionTimerCallback(const ros::TimerEvent& event);
@@ -102,7 +112,10 @@ class SuperExplorationDecider {
   void updateDirectionalEvidence(const sensor_msgs::PointCloud2& cloud,
                                  const geometry_msgs::PoseStamped& pose);
   ThreeWallCoverage evaluateThreeWallCoverage() const;
-  void publishCoverageStatus(const ThreeWallCoverage& coverage);
+  MapClosureStatus evaluateMapClosure(
+      const std::vector<FrontierCandidate>& candidates);
+  void publishCoverageStatus(const ThreeWallCoverage& coverage,
+                             const MapClosureStatus& closure);
   void pruneMap();
   void markFree(const VoxelKey& key);
   void markOccupied(const VoxelKey& key);
@@ -164,6 +177,8 @@ class SuperExplorationDecider {
   ros::Time first_data_time_;
   ros::Time last_frontier_time_;
   ros::Time goal_sent_time_;
+  ros::Time last_actionable_frontier_time_;
+  ros::Time last_significant_map_growth_time_;
 
   bool have_data_{false};
   bool have_home_{false};
@@ -178,6 +193,8 @@ class SuperExplorationDecider {
   double battery_percentage_{-1.0};
   int reached_goal_count_{0};
   int three_wall_complete_streak_{0};
+  int map_closure_complete_streak_{0};
+  std::size_t map_growth_reference_count_{0};
 
   double mission_heading_yaw_{0.0};
 
@@ -234,6 +251,7 @@ class SuperExplorationDecider {
   double front_obstacle_min_lateral_span_{1.0};
   double front_obstacle_min_vertical_span_{0.8};
   double forward_corridor_half_width_{2.0};
+  double max_task_lateral_offset_{4.0};
   double forward_progress_weight_{2.0};
   double forward_lateral_penalty_{2.0};
   double forward_height_penalty_{1.0};
@@ -265,9 +283,17 @@ class SuperExplorationDecider {
   int max_points_per_cloud_{5000};
   int min_unknown_neighbors_{1};
   int min_goals_before_complete_{1};
+  double map_closure_min_progress_{8.0};
+  double map_closure_no_frontier_time_{4.0};
+  double map_closure_stable_time_{4.0};
+  int map_closure_max_actionable_frontiers_{0};
+  int map_closure_growth_voxels_{500};
+  int map_closure_confirm_cycles_{4};
   bool raycast_enable_{true};
   bool strict_cloud_frame_{false};
   bool require_three_wall_completion_{true};
+  bool use_map_closure_completion_{false};
+  bool map_closure_require_front_boundary_{true};
 };
 
 }  // namespace mine_uav_control

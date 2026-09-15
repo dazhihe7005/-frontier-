@@ -35,6 +35,9 @@ class GazeboMid360FastlioAdapter:
         self.max_input_age = max(
             0.05, float(rospy.get_param("~max_input_age", 0.5))
         )
+        self.future_odom_tolerance = max(
+            0.0, float(rospy.get_param("~future_odom_tolerance", 0.05))
+        )
         self.min_range = max(0.0, float(rospy.get_param("~min_range", 0.30)))
         self.max_range = max(
             self.min_range + 0.1, float(rospy.get_param("~max_range", 29.5))
@@ -132,7 +135,7 @@ class GazeboMid360FastlioAdapter:
 
         now = rospy.Time.now()
         odom_age = (now - odom.header.stamp).to_sec()
-        if odom_age < 0.0 or odom_age > self.max_input_age:
+        if odom_age < -self.future_odom_tolerance or odom_age > self.max_input_age:
             rospy.logwarn_throttle(
                 2.0, "MID360 cloud rejected: odometry is %.3f s old", odom_age
             )
@@ -230,10 +233,11 @@ class GazeboMid360FastlioAdapter:
         with self._lock:
             for point in points:
                 key = tuple(int(math.floor(value * inverse)) for value in point)
-                if key not in self._global_voxels:
-                    self._global_voxels[key] = point
+                if key in self._global_voxels:
+                    continue
                 if len(self._global_voxels) >= self.max_global_points:
                     break
+                self._global_voxels[key] = point
 
     def _publish_global_cloud(self, _event):
         with self._lock:

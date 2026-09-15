@@ -164,18 +164,18 @@ git apply /path/to/frontier-upload/patches/super_optimizer_diagnostics.patch
 - 从已知自由空间与未知空间的边界提取 frontier candidate；
 - 按信息增益、距离和已覆盖目标去重选择下一个观察点；
 - 到达目标后继续选择下一个目标；
-- 连续没有新 frontier、收到返航命令或电量低于阈值时返回 home。
+- 地图边界闭合并稳定、收到返航命令或电量低于阈值时返回 home。
 
 ### 任务一的机头方向优先状态机
 
 当前决策器已增加两阶段方向策略：
 
 1. `FORWARD_PRIORITY`：从当前 Fast-LIO2 位姿四元数计算机体 yaw，只在机头前方配置角度内的 frontier 中选点，并对机头方向增加评分权重。
-2. `FRONTIER_FALLBACK`：当前方障碍连续多帧确认，或连续多帧既没有左右墙体观测又没有前方可行 frontier 时启用；优先选择非前方 frontier，避免继续向已确认的前方障碍飞行。
+2. `FRONTIER_FALLBACK`：当前方障碍连续多帧确认，或连续多帧既没有左右墙体观测又没有前方可行 frontier 时启用；候选目标仍受任务轴横向硬走廊限制，不会因一侧点云缺失而无限向另一侧漂移。
 
 左右墙体和前方障碍使用当前 `/cloud_registered` 的点云证据，并通过连续帧确认抑制单帧误检。地面点会通过垂直方向过滤，避免把地面误判为前方墙体。相关参数在 `config/super_exploration_decider.yaml` 中，包括前方角度、墙体量程、障碍确认帧数和机头方向权重。
 
-该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。当前已增加以进入时机头方向为纵轴的三面墙完成判据：把左右占据墙面按纵向分箱，检查覆盖比例和最大连续缺口；尽头墙必须同时具备中部回波和足够横向跨度，并要求飞机进入设定的尽头接近距离。普通 frontier 提前消失时，会主动生成尽头墙安全停距观察点。连续多周期满足条件后才发布模型完成并返航；无 frontier 超时不再单独代表建模完成。
+该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。默认完成判据已改为地图闭合：达到最小深入距离、前向边界连续确认、任务中心走廊内不存在可执行前沿、占据地图在设定时间内无显著增长，并连续多周期成立，才发布模型完成并返航。前向边界确认后不再进入左右 frontier fallback，而是原地等待点云收敛。原三面墙覆盖率仍发布为诊断量，但不参与默认完成决策。
 
 启动：
 
@@ -188,7 +188,7 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 注意：当前 SUPER 的 `FsmRos1::setGoalPosiAndYaw()` 会在 `fsm.click_height > -5` 时强制覆盖目标 z。要让观察点使用点云计算出的三维 z 高度，应在 SUPER 使用的 YAML 中设置 `fsm.click_height: -10.0`。
 
-当前真机链路统一使用 Fast-LIO2 的 `camera_init`：`/Odometry`、`/cloud_registered`、决策器 `/goal`、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。该节点不做 TF 变换，`strict_cloud_frame: true` 会拒绝其他坐标系的点云。
+当前真机链路统一使用 Fast-LIO2 的 `camera_init`：`/Odometry`、`/cloud_registered`、决策器 `/goal`、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。决策器不做 TF 变换，`strict_cloud_frame: true` 会拒绝其他坐标系的点云；SUPER 到 PX4 的转换由独立对齐桥完成，这不等于雷达安装外参已自动标定。
 
 观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标的水平位置使用原始 home，垂直位置由 `return_home_height_offset` 控制。真机默认偏移为 `0 m`；复杂场景PX4 SITL验证中覆盖为 `1.8 m`，返航阶段保持安全巡航高度，降落应由独立状态处理。
 
@@ -302,8 +302,9 @@ home返航点，最终位置约 `(-0.35, 0.17, 1.05) m`，`model_complete=true`�
 `finished=true`、指令桥状态为 `TASK1_COMPLETE`，PX4切到 `AUTO.LOITER`，之后不再
 发布任务setpoint。模拟点云和里程计均稳定为 `10 Hz`。
 
-当前已使用“左右墙纵向连续覆盖 + 尽头墙横向覆盖 + 接近尽头 + 多周期确认”触发返航，
-旧的无 frontier 超时判据默认关闭。本判据验证的是决策器占据体素中的几何连续性，不能
+当前默认使用“前向边界闭合 + 中心走廊无可执行前沿 + 地图增长稳定 + 多周期确认”触发
+返航，左右墙和尽头墙覆盖率仅作诊断，旧的无 frontier 单条件判据默认关闭。本判据验证
+的是决策器占据体素中的几何闭合与稳定性，不能
 替代雷达建模模块对点云密度、配准误差、孔洞和最终模型质量的验收，也不能替代真机外部
 视觉融合、安装外参和碰撞裕量测试。
 
@@ -395,7 +396,7 @@ rosrun mine_uav_control analyze_task1_sitl_bag.py \
   --json-output /home/nuc/task1_logs/task1_acceptance.json
 ```
 
-默认验收包括：进入OFFBOARD、任务COMPLETE、三面墙ready、退出到AUTO.LOITER、至少三个
+默认验收包括：进入OFFBOARD、任务COMPLETE、地图闭合ready、退出到AUTO.LOITER、至少三个
 任务目标、路径长度不小于45 m、水平返航误差不大于1 m、最大横向偏移不大于1.5 m、
 有效航段速度中位数不小于1.5 m/s、低于0.2 m/s的连续时间不超过1 s、实际速度不超过
 3 m/s、SUPER规划速度不超过2.05 m/s、规划加速度不超过1.60 m/s²、里程计不低于5 Hz、

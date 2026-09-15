@@ -297,6 +297,7 @@ def analyze(path):
         "entered_auto_loiter_after_offboard": loiter_after_offboard is not None,
         "mission_complete": complete_time is not None and finished_true,
         "complete_time": complete_time,
+        "map_closure_ready": "map_closure=ready" in final_coverage,
         "three_wall_ready": "three_wall=ready" in final_coverage,
         "final_coverage": final_coverage,
         "goal_count": len(goals),
@@ -338,7 +339,7 @@ def evaluate(report, arguments):
     checks = {
         "entered_offboard": report["entered_offboard"],
         "mission_complete": report["mission_complete"],
-        "three_wall_ready": report["three_wall_ready"],
+        "map_closure_ready": report["map_closure_ready"],
         "entered_auto_loiter_after_offboard": report[
             "entered_auto_loiter_after_offboard"
         ],
@@ -387,11 +388,11 @@ def format_value(value, suffix=""):
 def print_summary(report):
     print(f"TASK1_SITL_ACCEPTANCE: {report['verdict']}")
     print(
-        "completion: offboard=%s complete=%s three_wall=%s auto_loiter=%s"
+        "completion: offboard=%s complete=%s map_closure=%s auto_loiter=%s"
         % (
             report["entered_offboard"],
             report["mission_complete"],
-            report["three_wall_ready"],
+            report["map_closure_ready"],
             report["entered_auto_loiter_after_offboard"],
         )
     )
