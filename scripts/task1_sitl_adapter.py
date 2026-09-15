@@ -13,9 +13,9 @@ import math
 import threading
 
 import rospy
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from mavros_msgs.msg import RCIn, State
-from mavros_msgs.srv import CommandBool
+from mavros_msgs.srv import CommandBool, SetMode
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud2
@@ -35,6 +35,18 @@ class Task1SitlAdapter:
             2.0, float(rospy.get_param("~auto_enable_delay", 8.0))
         )
         self.allow_auto_arm = bool(rospy.get_param("~allow_auto_arm", True))
+        self.simulate_manual_takeoff = bool(
+            rospy.get_param("~simulate_manual_takeoff", True)
+        )
+        self.takeoff_height = max(
+            0.5, float(rospy.get_param("~takeoff_height", 1.5))
+        )
+        self.takeoff_hover_duration = max(
+            0.5, float(rospy.get_param("~takeoff_hover_duration", 1.0))
+        )
+        self.offboard_prestream_duration = max(
+            1.0, float(rospy.get_param("~offboard_prestream_duration", 1.0))
+        )
         self.publish_analytic_cloud = bool(
             rospy.get_param("~publish_analytic_cloud", True)
         )
@@ -47,6 +59,11 @@ class Task1SitlAdapter:
         self._state = State()
         self._start_time = rospy.Time.now()
         self._last_arm_request = rospy.Time(0)
+        self._last_mode_request = rospy.Time(0)
+        self._takeoff_origin = None
+        self._takeoff_prestream_start = rospy.Time(0)
+        self._takeoff_reached_time = rospy.Time(0)
+        self._takeoff_complete = not self.simulate_manual_takeoff
         self._environment = (
             self._build_environment() if self.publish_analytic_cloud else []
         )
@@ -69,6 +86,9 @@ class Task1SitlAdapter:
         self.rc_pub = rospy.Publisher(
             "/mine_uav/sitl/rc/in", RCIn, queue_size=2
         )
+        self.takeoff_setpoint_pub = rospy.Publisher(
+            "/mavros/setpoint_position/local", PoseStamped, queue_size=10
+        )
         self.alignment_pub = rospy.Publisher(
             "/mine_uav/task1/fastlio_to_px4_alignment",
             TransformStamped,
@@ -84,6 +104,7 @@ class Task1SitlAdapter:
         )
         rospy.Subscriber("/mavros/state", State, self._state_callback, queue_size=10)
         self.arm_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
+        self.mode_client = rospy.ServiceProxy("/mavros/set_mode", SetMode)
 
         rospy.Timer(rospy.Duration(1.0 / self.cloud_rate), self._publish_sensor)
         rospy.Timer(rospy.Duration(1.0 / self.rc_rate), self._publish_operator)
@@ -192,12 +213,17 @@ class Task1SitlAdapter:
         rc.header.stamp = rospy.Time.now()
         rc.channels = [1500] * channel_count
         rc.channels[self.task_channel_index] = 1000  # task one
-        rc.channels[self.auto_channel_index] = (
-            2000 if elapsed >= self.auto_enable_delay and state.armed else 1000
-        )
+        if self.allow_auto_arm and self.simulate_manual_takeoff:
+            self._run_simulated_manual_takeoff(state)
+        rc.channels[self.auto_channel_index] = 2000 if (
+            elapsed >= self.auto_enable_delay
+            and state.armed
+            and self._takeoff_complete
+        ) else 1000
         self.rc_pub.publish(rc)
 
-        if not self.allow_auto_arm or state.armed or not state.connected:
+        if (not self.allow_auto_arm or self.simulate_manual_takeoff or
+                state.armed or not state.connected):
             return
         if elapsed < self.arm_delay or self._latest_odom is None:
             return
@@ -218,6 +244,92 @@ class Task1SitlAdapter:
                 rospy.logwarn_throttle(2.0, "PX4 SITL rejected arm request")
         except rospy.ServiceException as error:
             rospy.logwarn_throttle(2.0, "SITL arm service failed: %s", error)
+
+    def _run_simulated_manual_takeoff(self, state):
+        """Place SITL in the same state as a pilot-established hover.
+
+        Task one is kept disabled while a position setpoint is pre-streamed,
+        OFFBOARD is entered, the vehicle climbs 1.5 m, and the hover remains
+        stable for one second. Only then may the emulated CH7 go high.
+        """
+        with self._lock:
+            odom = self._latest_odom
+        if odom is None or not state.connected or self._takeoff_complete:
+            return
+
+        now = rospy.Time.now()
+        if self._takeoff_origin is None:
+            self._takeoff_origin = (
+                odom.pose.pose.position.x,
+                odom.pose.pose.position.y,
+                odom.pose.pose.position.z,
+                odom.pose.pose.orientation,
+            )
+            self._takeoff_prestream_start = now
+            rospy.loginfo(
+                "SITL pre-task takeoff initialized: ground z=%.2f, target z=%.2f",
+                self._takeoff_origin[2],
+                self._takeoff_origin[2] + self.takeoff_height,
+            )
+
+        target = PoseStamped()
+        target.header.stamp = now
+        target.header.frame_id = "map"
+        target.pose.position.x = self._takeoff_origin[0]
+        target.pose.position.y = self._takeoff_origin[1]
+        target.pose.position.z = self._takeoff_origin[2] + self.takeoff_height
+        target.pose.orientation = self._takeoff_origin[3]
+        self.takeoff_setpoint_pub.publish(target)
+
+        if (now - self._takeoff_prestream_start).to_sec() < \
+                self.offboard_prestream_duration:
+            return
+        if state.mode != "OFFBOARD":
+            if (now - self._last_mode_request).to_sec() < 1.0:
+                return
+            self._last_mode_request = now
+            try:
+                response = self.mode_client(custom_mode="OFFBOARD")
+                if response.mode_sent:
+                    rospy.loginfo("PX4 SITL pre-task OFFBOARD request accepted")
+                else:
+                    rospy.logwarn_throttle(2.0, "PX4 SITL rejected OFFBOARD request")
+            except rospy.ServiceException as error:
+                rospy.logwarn_throttle(2.0, "SITL mode service failed: %s", error)
+            return
+
+        if not state.armed:
+            if (now - self._last_arm_request).to_sec() < 1.0:
+                return
+            self._last_arm_request = now
+            try:
+                response = self.arm_client(True)
+                if response.success:
+                    rospy.loginfo("PX4 SITL armed for pre-task takeoff")
+                else:
+                    rospy.logwarn_throttle(2.0, "PX4 SITL rejected arm request")
+            except rospy.ServiceException as error:
+                rospy.logwarn_throttle(2.0, "SITL arm service failed: %s", error)
+            return
+
+        position = odom.pose.pose.position
+        horizontal_error = math.hypot(
+            position.x - target.pose.position.x,
+            position.y - target.pose.position.y,
+        )
+        vertical_error = abs(position.z - target.pose.position.z)
+        if horizontal_error <= 0.20 and vertical_error <= 0.15:
+            if self._takeoff_reached_time.is_zero():
+                self._takeoff_reached_time = now
+                rospy.loginfo("SITL reached 1.5 m pre-task hover")
+            elif (now - self._takeoff_reached_time).to_sec() >= \
+                    self.takeoff_hover_duration:
+                self._takeoff_complete = True
+                rospy.loginfo(
+                    "SITL pre-task hover stable; emulated CH7 may now enable task one"
+                )
+        else:
+            self._takeoff_reached_time = rospy.Time(0)
 
     def _publish_health(self, _event):
         stamp = rospy.Time.now()

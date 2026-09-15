@@ -574,6 +574,24 @@ roslaunch mine_uav_control task1_large_platform_sitl.launch gui:=true rviz:=true
 
 该专用场景使用理想化 Gazebo 三维射线模型模拟 MID360，不是 Livox 原始数据、回波强度或真实噪声模型。仿真专用雷达范围约 70 m；实际 MID360 约 60 m 的有效探测距离意味着前墙通常要在无人机接近后才能识别。第三次运行已验证：无人机到达约 154.5 m，末端墙深度 157.5 m，墙面跨度 85 m，左右覆盖率 0.97/1.00，连续确认 4/4，随后返航并进入 `AUTO.LOITER`。
 
+#### 40 m × 40 m × 30 m 空旷采空区仿真
+
+当前展示场景采用入口外中部高度平台、40 m 深、40 m 宽、30 m 高的空旷采空区，内部不设置立柱或横向障碍：
+
+```bash
+export ROS_MASTER_URI=http://127.0.0.1:11312
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
+  /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:$ROS_PACKAGE_PATH
+roslaunch mine_uav_control task1_40m_platform_sitl.launch gui:=true rviz:=true
+```
+
+该场景把任务级目标限制在入口航向轴左右 1 m 内，正常前向 look-ahead 只搜索中心线左右 0.5 m；SUPER仍负责局部轨迹平滑、碰撞检测和必要的避障偏移。该限制用于空旷涵洞主航段，不能替代真机刹停距离、点云外参及失效接管测试。
+
+当前安全状态：SITL已能先自动建立1.5 m稳定悬停，再模拟CH7启动并在空中捕获home；但2026-09-15的首轮回归中，SUPER在目标高度与home相同的情况下仍出现备份轨迹优化连续失败，并短时生成约2.25 m的z指令。1.8 m安全桥正确拒绝该指令并退出托管。该问题解决并通过重复回归前，任务一不得直接用于有桨真机自主飞行。
+
 任务原点在任务一第一次被允许时从当前 `/Odometry` 捕获，而不是无条件使用节点启动时的第一帧。因此实机可以先手动起飞并稳定悬停，再打开自动允许；返航高度是相对该任务原点的高度。任务一当前不做地形跟随：下方地面突然下降时不会自动跟着下降，地面突然升高则依靠点云障碍/规划保护，真正的地形跟随需要单独加入高度控制策略。
 
 末端墙判定要求“通过任务中线的连续横向墙体”，不再使用最左点到最右点的简单跨度，避免入口平台边缘和两侧墙被拼成假墙。但狭窄走廊若存在中线前墙且满足真实配置的最小跨度，仍可能被判为末端；实机还应加入入口缓冲距离、走廊/采空区开阔度判据和连续多帧确认。

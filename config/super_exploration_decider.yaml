@@ -23,10 +23,10 @@ raycast_enable: true
 max_points_per_cloud: 5000
 vehicle_radius: 0.35
 
-# 观察点相对任务起点的高度范围。当前上限与 SUPER 的局部地图高度匹配；
-# 正式飞行前应按巷道净高、雷达安装高度和安全裕量重新标定。
-min_observation_height_above_home: 0.5
-max_observation_height_above_home: 2.5
+# Home在CH7允许任务时的空中悬停点捕获。默认保持该高度，只允许小幅向上
+# 调整；不得把“相对home高度”误当成“相对地面高度”再叠加一次起飞高度。
+min_observation_height_above_home: 0.0
+max_observation_height_above_home: 0.3
 
 # 观察点选择与覆盖策略。
 frontier_search_radius: 30.0
@@ -70,7 +70,7 @@ forward_goal_handover_distance: 3.0
 # planner remains responsible for collision-free local deviations.
 forward_lookahead_distance: 8.0
 forward_lookahead_step: 0.5
-cruise_height_above_home: 0.8
+cruise_height_above_home: 0.0
 # Only points near the vehicle height count as wall-direction evidence. This
 # prevents a low-flying vehicle from classifying the mine ceiling as a frontal
 # obstacle while preserving side-wall returns around the lidar horizon.
@@ -136,8 +136,8 @@ data_timeout: 1.0
 sync_queue_size: 20
 sync_slop: 0.08
 battery_return_threshold: 0.20
-# Real missions normally capture home while already airborne, so this remains
-# zero by default. Ground-started SITL overrides it to a safe hover height.
+# Real and SITL missions capture home after reaching an airborne hover, so
+# return to the same task-start altitude.
 return_home_height_offset: 0.0
 battery_topic: "/mavros/battery"
 return_request_topic: "/mine_uav/exploration/return_home"
