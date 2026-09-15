@@ -192,6 +192,11 @@ class SuperExplorationDecider {
   bool returning_home_{false};
   bool mission_finished_{false};
   bool enabled_{true};
+  // In the laboratory test mode, autonomy must be started by a fresh
+  // scheduler enable transition (CH7 low -> high), never by a stale latched
+  // state or by the first odometry message seen at node startup.
+  bool require_mission_enable_edge_{false};
+  bool mission_start_pending_{false};
   bool return_requested_{false};
   bool have_battery_{false};
   double battery_percentage_{-1.0};

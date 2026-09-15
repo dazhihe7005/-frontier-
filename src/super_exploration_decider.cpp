@@ -59,6 +59,9 @@ SuperExplorationDecider::SuperExplorationDecider(
       cloud_subscriber_(nh_, "/cloud_registered", 1),
       odom_subscriber_(nh_, "/Odometry", 1) {
   loadParameters();
+  if (require_mission_enable_edge_) {
+    enabled_ = false;
+  }
 
   cloud_subscriber_.subscribe(nh_, cloud_topic_, 1);
   odom_subscriber_.subscribe(nh_, odom_topic_, 1);
@@ -131,6 +134,9 @@ bool SuperExplorationDecider::loadParameters() {
                     std::string("/mine_uav/exploration/model_coverage"));
   private_nh_.param("visualization_topic", visualization_topic_,
                     std::string("/mine_uav/exploration/frontiers"));
+  private_nh_.param("require_mission_enable_edge",
+                    require_mission_enable_edge_,
+                    require_mission_enable_edge_);
 
   private_nh_.param("voxel_resolution", voxel_resolution_, voxel_resolution_);
   private_nh_.param("max_map_radius", max_map_radius_, max_map_radius_);
@@ -432,11 +438,13 @@ void SuperExplorationDecider::synchronizedCallback(
   // node normally starts while the pilot is still taking off; capturing the
   // first odometry sample there would make a later return target point at the
   // ground instead of at the hover where autonomy was accepted.
-  if (!have_home_ && enabled_) {
+  if (!have_home_ && enabled_ &&
+      (!require_mission_enable_edge_ || mission_start_pending_)) {
     home_pose_ = current_pose_;
     home_pose_.header.frame_id = world_frame_;
     mission_heading_yaw_ = poseYaw(home_pose_.pose);
     have_home_ = true;
+    mission_start_pending_ = false;
     ROS_INFO("Exploration home captured at %.2f %.2f %.2f, heading %.1f deg",
              home_pose_.pose.position.x, home_pose_.pose.position.y,
              home_pose_.pose.position.z,
@@ -1734,8 +1742,14 @@ void SuperExplorationDecider::missionEnableCallback(
     publishStatus("DISABLED", "task scheduler selected another task");
     ROS_INFO("SUPER exploration paused by mission scheduler");
   } else {
+    // A new enable transition starts a fresh test mission.  This clears any
+    // map/home left from the previous run and arms home capture for the first
+    // synchronized Fast-LIO2 cloud+odometry sample after CH7 is raised.
+    clearMissionState();
+    mission_start_pending_ = true;
     publishStatus("WAIT_DATA", "task scheduler selected goaf exploration");
-    ROS_INFO("SUPER exploration enabled by mission scheduler");
+    ROS_INFO("SUPER exploration enabled by mission scheduler; waiting for "
+             "the first synchronized sample to capture home");
   }
 }
 
@@ -1794,6 +1808,7 @@ bool SuperExplorationDecider::enableCallback(
     std_srvs::SetBool::Request& request,
     std_srvs::SetBool::Response& response) {
   enabled_ = request.data;
+  mission_start_pending_ = enabled_;
   response.success = true;
   response.message = enabled_ ? "exploration enabled" : "exploration paused";
   publishStatus(enabled_ ? "WAIT_DATA" : "DISABLED", response.message);
@@ -1803,7 +1818,8 @@ bool SuperExplorationDecider::enableCallback(
 bool SuperExplorationDecider::resetCallback(
     std_srvs::Trigger::Request&, std_srvs::Trigger::Response& response) {
   clearMissionState();
-  enabled_ = true;
+  enabled_ = !require_mission_enable_edge_;
+  mission_start_pending_ = false;
   response.success = true;
   response.message = "exploration state reset";
   publishStatus("WAIT_DATA", response.message);

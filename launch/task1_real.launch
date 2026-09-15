@@ -24,7 +24,11 @@
 
   <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>
   <include file="$(find mine_uav_control)/launch/mission_scheduler.launch"/>
-  <include file="$(find mine_uav_control)/launch/super_exploration_decider.launch"/>
+  <include file="$(find mine_uav_control)/launch/super_exploration_decider.launch">
+    <!-- Laboratory procedure: manual hover first, then CH7 low->high starts
+         a fresh task and captures home from the synchronized pose. -->
+    <arg name="require_mission_enable_edge" value="true"/>
+  </include>
 
   <group if="$(arg start_super)">
     <node pkg="super_planner" type="fsm_node" name="fsm_node"

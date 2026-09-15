@@ -1,10 +1,12 @@
 <launch>
   <arg name="config" default="$(find mine_uav_control)/config/super_exploration_decider.yaml" />
+  <arg name="require_mission_enable_edge" default="false" />
 
   <node pkg="mine_uav_control"
         type="super_exploration_decider"
         name="super_exploration_decider"
         output="screen">
     <rosparam command="load" file="$(arg config)" />
+    <param name="require_mission_enable_edge" value="$(arg require_mission_enable_edge)" />
   </node>
 </launch>

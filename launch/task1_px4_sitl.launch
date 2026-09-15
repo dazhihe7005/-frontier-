@@ -33,6 +33,7 @@
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
   <arg name="bridge_min_height" default="-0.5"/>
   <arg name="bridge_max_height" default="3.0"/>
+  <arg name="require_mission_enable_edge" default="true"/>
 
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -121,6 +122,7 @@
          the mapped floor until a separate landing phase is implemented. -->
     <param name="return_home_height_offset" value="1.8"/>
     <param name="no_frontier_timeout" value="8.0"/>
+    <param name="require_mission_enable_edge" value="$(arg require_mission_enable_edge)"/>
   </node>
 
   <node pkg="super_planner" type="fsm_node" name="fsm_node"
