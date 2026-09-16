@@ -73,10 +73,11 @@ SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只
 
 ### SITL局部轨迹优化说明
 
-当前运行版在官方SUPER `2ad3419` 上叠加了接口适配、诊断、参数和核心行为改动。
+当前运行工作区已恢复官方SUPER `2ad3419` 核心逻辑，只保留项目所需的 `camera_init` 消息帧
+接口适配；任务一参数由项目自己的 YAML 注入。历史补丁
 `patches/super_preserve_reachable_goal.patch` 与
 `patches/super_remove_duplicate_backup_optimize.patch` 会改变官方目标修正和备份轨迹优化语义，
-目前没有充分A/B证据证明应长期保留，不能再直接称为已验证修复。公平对照还发现SUPER在轨迹
+默认不应重新应用。公平对照还发现SUPER在轨迹
 结束但实际位置距目标超过硬编码的0.1 m时，会对同一目标再次从静止规划，这更符合“接近目标后
 长时间反复规划”的现象。详细提交对照、A/B证据和后续隔离顺序见
 [`docs/super_version_audit.md`](docs/super_version_audit.md)。
@@ -86,6 +87,12 @@ SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只
 绕过 `max_dis`。完整源码证据、复现结果、影响边界和验证计划见
 [`docs/rog_map_nearest_cell_alias_defect_report.md`](docs/rog_map_nearest_cell_alias_defect_report.md)。
 该缺陷目前是“已复现、尚未修复”，不能据此宣称全部轨迹问题已经解决。
+
+继续追踪后已经用同场景运行时诊断确认另一项官方核心问题：安全走廊内部点与终点可能匹配到
+同一个导引采样时间，官方 `10 ms` 下限再乘 `0.8` 后生成约 `8 ms` 的退化轨迹段，并直接触发
+动力学约束失败。同时，高层 `WAIT_MAP_CLOSURE`、PX4悬停桥与SUPER保留旧目标之间缺少明确的
+目标取消协议。完整证据和修复边界见
+[`docs/super_optimizer_and_goal_protocol_root_cause_report.md`](docs/super_optimizer_and_goal_protocol_root_cause_report.md)。
 
 在完成隔离回归前，不能仅凭日志中的`ReplanOnce succeed`判定真机可飞，也不能通过扩大高度
 围栏或继续叠加入口过滤来掩盖局部轨迹问题。
