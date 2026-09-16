@@ -83,6 +83,8 @@ SUPER ROS1 节点使用 `ros::AsyncSpinner(0)`，目标、主 FSM、重规划和
 
 目标信息、epoch、活动标志和状态转换由一个短临界区保护。`PlanFromRest` 与 `ReplanOnce` 等耗时计算在临界区外执行，只在读取输入快照和提交结果时加锁，避免为修复取消竞争而阻塞 100 Hz 指令输出。指令回调发布前也必须校验活动 epoch；允许取消回调之前已经完成的一条在途消息，不允许取消提交完成后再生成旧目标消息。
 
+独立源码审查发现额外的提交边界：官方 `SuperPlanner::PlanFromRest()` 与 `ReplanOnce()` 在返回 FSM 之前就调用 `cmd_traj_info_.setTrajectory(...)`，直接改写 100 Hz 定时器读取的共享轨迹。因此只在函数返回后调用 `commitIfCurrent` 不够，旧规划仍可能覆盖新目标轨迹。规划器必须先在局部对象完成计算，再在同一目标 epoch 校验保护下执行短暂的共享轨迹提交；未通过校验不得写入 `cmd_traj_info_`、更新本次提交对应的规划器状态或发布提交轨迹。FSM 需记录已提交轨迹对应的 epoch，指令定时器仅在活动 epoch 与已提交 epoch 一致时采样/发布；新目标被接受但尚未产生新轨迹时不得沿用上一目标轨迹。`CmdTraj` 自身互斥锁与 lifecycle 锁保持固定顺序，且不能把耗时规划放入 lifecycle 锁。以上必须用可控交错测试覆盖旧规划取消后才计算完成、取消后立即设置新目标两种情况。
+
 ROS1 包装层订阅统一命令：
 
 - 收到合法 `SET_GOAL` 时调用现有 `setGoalPosiAndYaw()`；
