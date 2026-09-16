@@ -48,3 +48,11 @@ python3 scripts/analyze_40m_sim_map.py /home/nuc/task1_logs/failure_cases/goal_l
 ```
 
 两条命令分别返回 `PASS`，JSON 与 bag 同目录保存；bag 大文件只在 NUC 本机，不提交 Git。
+
+## 下一项风险的 A/B：ROG-Map 顶板与 PX4 高度围栏
+
+主分支 run11 使用 `rog_map.virtual_ceil_height=4.0`。ROG-Map 的 `ORIGIN_AT_CORNER` 编译方式先按 0.2 m 网格与 `inflation_step=3` 量化为约 3.3 m 的有效虚拟顶板；`InfMap::getGridType(Vec3f)` 在其下再减去 `0.2×(1+3)=0.8 m`，所以该接口约从 z=2.5 m 才视为占据。部分 SUPER 路径查询使用 `isOccupiedInflate`，其顶板判断还不同；不能把单个参数理解成严格的优化轨迹上限。桥接器却在应用 `alignment_z` 后，按 PX4 局部坐标拒绝 z>1.8 m。规划约束、坐标原点和最终围栏不是同一个合同。
+
+隔离试验 run12 只把输入顶板从 4.0 改成 3.2，使上述 `getGridType(Vec3f)` 的占据边界约为 z=1.7 m；1.5 m 悬停点仍可行。run12 飞行和五面地图都 PASS：home 误差 0.138 m、横偏 1.055 m、最高 z 1.617 m、桥接故障 0。但相对 run11 的最高 z 1.631 m、SUPER 失败日志 1 条、地板 98.3%，run12 是 1.617 m、6 条、地板 92.2%；没有证据证明单个顶板参数改善轨迹可靠性。更关键的是这两个 z 分别属于 `camera_init` 和经 `alignment_z` 转换后的 PX4 局部系，真实设备的对齐偏移不保证为零。因此恢复 4.0 的已验证主分支配置，仅修正误导性注释，并保留 run12 bag/JSON 作为反例。
+
+真正的下一步应先规定飞行高度以哪个坐标系为准、何时锁定/更新对齐；由唯一的安全约束发布者把 PX4 高度区间转换到规划坐标系，在 SUPER 的安全走廊和轨迹提交阶段共同约束，且任何对齐突变都应退出托管。不能靠桥接器逐点夹紧整条轨迹，也不能取消桥接器最后一道围栏。该设计、边界测试和不同高度/入口几何 SITL 尚未完成。
