@@ -15,7 +15,7 @@
   <arg name="max_exploration_radius" default="24.0"/>
   <arg name="frontier_search_radius" default="10.0"/>
   <arg name="decider_max_map_radius" default="40.0"/>
-  <arg name="decider_raycast_max_range" default="40.0"/>
+  <arg name="decider_raycast_max_range" default="30.0"/>
   <arg name="decider_sync_slop" default="0.08"/>
   <arg name="decider_data_timeout" default="1.0"/>
   <arg name="decider_max_points_per_cloud" default="5000"/>
@@ -30,7 +30,7 @@
   <arg name="map_closure_no_frontier_time" default="4.0"/>
   <arg name="map_closure_stable_time" default="4.0"/>
   <arg name="map_closure_growth_voxels" default="500"/>
-  <arg name="lidar_max_range" default="29.5"/>
+  <arg name="lidar_max_range" default="30.0"/>
   <arg name="max_global_points" default="120000"/>
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
   <arg name="bridge_min_height" default="-0.5"/>

@@ -115,7 +115,8 @@ class SuperExplorationDecider {
                                  const geometry_msgs::PoseStamped& pose);
   ThreeWallCoverage evaluateThreeWallCoverage() const;
   MapClosureStatus evaluateMapClosure(
-      const std::vector<FrontierCandidate>& candidates);
+      const std::vector<FrontierCandidate>& candidates,
+      bool end_wall_seen);
   void publishCoverageStatus(const ThreeWallCoverage& coverage,
                              const MapClosureStatus& closure);
   void pruneMap();

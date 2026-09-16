@@ -66,6 +66,7 @@ class SuperPx4CommandBridge {
     private_nh_.param("max_horizontal_radius", max_horizontal_radius_, 40.0);
     private_nh_.param("min_height", min_height_, -0.5);
     private_nh_.param("max_height", max_height_, 1.8);
+    private_nh_.param("height_clamp_tolerance", height_clamp_tolerance_, 0.25);
     private_nh_.param("use_acceleration", use_acceleration_, true);
     private_nh_.param("auto_enable_topic", auto_enable_topic_,
                       std::string("/mine_uav/mission/auto_enable"));
@@ -345,19 +346,37 @@ class SuperPx4CommandBridge {
       return;
     }
     const auto output = convert(*command);
-    if (!insideFlightVolume(output, &reason)) {
+    auto bounded_output = output;
+    if (bounded_output.position.z > max_height_ &&
+        bounded_output.position.z <= max_height_ + height_clamp_tolerance_) {
+      ROS_WARN_THROTTLE(
+          2.0,
+          "Clamping small SUPER height overshoot %.3f to max_height %.3f",
+          bounded_output.position.z, max_height_);
+      bounded_output.position.z = max_height_;
+    } else if (bounded_output.position.z < min_height_ &&
+               bounded_output.position.z >= min_height_ -
+                   height_clamp_tolerance_) {
+      ROS_WARN_THROTTLE(
+          2.0,
+          "Clamping small SUPER height undershoot %.3f to min_height %.3f",
+          bounded_output.position.z, min_height_);
+      bounded_output.position.z = min_height_;
+    }
+    if (!insideFlightVolume(bounded_output, &reason)) {
       ROS_ERROR_THROTTLE(
           1.0,
           "Rejecting SUPER command outside flight volume: xyz=(%.3f, %.3f, %.3f), "
           "limits: radius<=%.3f, z=[%.3f, %.3f], alignment_z=%.3f",
-          output.position.x, output.position.y, output.position.z,
+          bounded_output.position.x, bounded_output.position.y,
+          bounded_output.position.z,
           max_horizontal_radius_, min_height_, max_height_, alignment_z_);
       valid_command_ = false;
       latchFault(reason);
       return;
     }
     valid_command_ = true;
-    latest_target_ = output;
+    latest_target_ = bounded_output;
     updateStatus();
   }
 
@@ -584,6 +603,7 @@ class SuperPx4CommandBridge {
   double max_horizontal_radius_{40.0};
   double min_height_{-0.5};
   double max_height_{1.8};
+  double height_clamp_tolerance_{0.25};
   double alignment_x_{0.0};
   double alignment_y_{0.0};
   double alignment_z_{0.0};

@@ -18,12 +18,12 @@
     <arg name="spawn_z" value="16.15"/>
     <arg name="spawn_yaw" value="0.0"/>
 
-    <!-- The far wall is 48 m from the task platform. MID360's simulated
-         usable radius is capped near the real sensor's nominal 60 m range. -->
+    <!-- The far wall is 48 m from the task platform. Use a 30 m effective
+         scan radius so the vehicle must make meaningful progress. -->
     <arg name="max_exploration_radius" value="55.0"/>
     <arg name="frontier_search_radius" value="20.0"/>
     <arg name="decider_max_map_radius" value="65.0"/>
-    <arg name="decider_raycast_max_range" value="59.5"/>
+    <arg name="decider_raycast_max_range" value="30.0"/>
     <arg name="decider_sync_slop" value="0.15"/>
     <arg name="decider_data_timeout" value="3.0"/>
     <arg name="decider_max_points_per_cloud" value="2200"/>
@@ -45,7 +45,7 @@
     <arg name="map_closure_no_frontier_time" value="4.0"/>
     <arg name="map_closure_stable_time" value="4.0"/>
     <arg name="map_closure_growth_voxels" value="700"/>
-    <arg name="lidar_max_range" value="59.5"/>
+    <arg name="lidar_max_range" value="30.0"/>
     <arg name="max_global_points" value="250000"/>
 
     <arg name="bridge_max_horizontal_radius" value="58.0"/>

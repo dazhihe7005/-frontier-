@@ -18,7 +18,7 @@ strict_cloud_frame: true
 # 轻量 frontier 地图参数。SUPER 自己仍使用其 ROG-Map。
 voxel_resolution: 0.5
 max_map_radius: 40.0
-raycast_max_range: 40.0
+raycast_max_range: 30.0
 raycast_enable: true
 max_points_per_cloud: 5000
 vehicle_radius: 0.35

@@ -907,7 +907,8 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
 
 SuperExplorationDecider::MapClosureStatus
 SuperExplorationDecider::evaluateMapClosure(
-    const std::vector<FrontierCandidate>& candidates) {
+    const std::vector<FrontierCandidate>& candidates,
+    bool end_wall_seen) {
   MapClosureStatus result;
   if (!have_home_) {
     return result;
@@ -922,7 +923,8 @@ SuperExplorationDecider::evaluateMapClosure(
                     home_pose_.pose.position.y;
   result.vehicle_progress = c * dx + s * dy;
   result.front_boundary_seen =
-      front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+      front_obstacle_streak_ >= front_obstacle_confirm_frames_ ||
+      end_wall_seen;
 
   for (const auto& entry : voxels_) {
     if (entry.second == kOccupied) {
@@ -1594,7 +1596,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   const ThreeWallCoverage coverage = evaluateThreeWallCoverage();
   VoxelSet reachable;
   const auto candidates = findFrontiers(reachable);
-  const MapClosureStatus closure = evaluateMapClosure(candidates);
+  const MapClosureStatus closure =
+      evaluateMapClosure(candidates, coverage.end_wall_found);
   const bool completion_prerequisites =
       exploration_started_ &&
       reached_goal_count_ >= min_goals_before_complete_ &&
