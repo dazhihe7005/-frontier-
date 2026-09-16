@@ -29,7 +29,8 @@ super_planner:
   planning_horizon: 7.0
   sensing_horizon: -1
   receding_dis: 4.0
-  robot_r: 0.35
+  # Assumes 800 mm motor-to-motor span; 800 cm would be a different scale.
+  robot_r: 0.40
   yaw_dot_max: 1.0
   yaw_mode: 1
   mpc_horizon: 15
@@ -45,7 +46,7 @@ traj_opt:
     max_omg: 2.5
     max_acc_thr: 20.0
     min_acc_thr: 6.0
-    penna_margin: 0.05
+    penna_margin: 0.15
   exp_traj:
     pos_constraint_type: 1
     energy_cost_type: 4
@@ -98,7 +99,9 @@ astar:
 rog_map:
   resolution: 0.1
   inflation_resolution: 0.2
-  inflation_step: 2
+  # 0.2 m x 3 cells = 0.6 m obstacle clearance; with robot_r=0.4 m
+  # the reference point keeps approximately 1.0 m total clearance.
+  inflation_step: 3
   unk_inflation_en: false
   unk_inflation_step: 1
   map_size: [50, 50, 6]

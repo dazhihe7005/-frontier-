@@ -2166,3 +2166,12 @@ home为`z=1.51m`，首个及后续前向目标保持`z=1.51m`；日志中没有`
 本轮还发现备份轨迹优化在同一轮被重复调用，放大L-BFGS失败日志和计算延迟。已删除这次无效的第二次调用，保留原有备份轨迹作为安全回退。SUPER工作区`catkin_make --pkg super_planner -j2`编译通过。限时回归中出现了`Preserve reachable goal at ... z=1.494958`和连续的`GenerateExpTrajectory SUCCESS`，说明目标高度量化问题已修正；但仍有部分`BackOpt Opt failed`及少量`Yaw rate too large`，因此局部轨迹平滑性还未达到可以宣称真机带桨的程度，下一步应继续针对备份优化收敛、yaw平滑和障碍走廊有效性做带障碍SITL验证。
 
 本轮未改变真实PX4定位、任务完成/返航判据、速度/高度安全限幅。仓库新增补丁：`patches/super_preserve_reachable_goal.patch`、`patches/super_remove_duplicate_backup_optimize.patch`，README同步增加局部轨迹优化说明。
+## 2026-09-16：机体尺寸、安全距离与SUPER三维规划
+
+用户补充机体轴距约800（原话单位为800 cm，工程上先按800 mm检查）以及避障安全距离1 m，并要求继续优化SUPER轨迹、进行仿真。核对源码确认SUPER不是二维规划器：ROG-Map为三维体素地图，CIRI生成三维安全走廊，MINCO优化三维位置/速度/加速度轨迹，Fsm状态中的目标和轨迹均包含x、y、z。
+
+按800 mm轴距暂取机体包络半径0.4 m，项目配置`super_planner/robot_r`由0.35改为0.40；ROG-Map膨胀分辨率为0.2 m，`inflation_step`由2改为3，约增加0.6 m障碍膨胀，机体半径加膨胀约为1.0 m参考点安全距离。备份/主轨迹优化边界中的`penna_margin`由0.05改为0.15，以避免将较小的数值优化残差误判为失败；速度1.0 m/s、加速度1.5 m/s²、角速度2.5 rad/s等硬边界未放宽。由于虚拟地面/顶面也会按膨胀步长收缩，当前有效虚拟高度约为-1.3至1.7 m，1.5 m悬停仍在范围内，但后续需要按真实飞行高度重新规划。
+
+本轮尝试限时SITL。第一次因Gazebo实体残留`entity already exists`，清理明确的gzserver、gzclient、px4、roscore进程及`/tmp/px4-sock-0`后重新启动；第二次启动时仿真服务未能完成，`super_exploration_decider`在任务阶段前退出，未产生有效的轨迹回归数据。因此本轮不把仿真失败当作轨迹算法结论；需要下一轮先解决仿真启动/日志残留，再比较备份优化失败率、轨迹曲率、yaw rate和最小障碍距离。
+
+当前可调参数主要包括：`robot_r`机体包络半径、`inflation_resolution/inflation_step`障碍膨胀、`corridor_bound_dis`走廊边界、`planning_horizon/receding_dis`局部规划视野、`max_vel/max_acc/max_jerk/max_omg`动力学边界、`yaw_dot_max`偏航速度、`opt_accuracy/integral_reso`优化精度、任务决策器的前向走廊/目标间距/完成判据，以及PX4桥的高度/速度/水平半径硬安全限幅。真机参数不能只按SITL现象放宽。
