@@ -14,14 +14,16 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   std_srvs
+  super_planner
   visualization_msgs
 )
 
 catkin_package(
   INCLUDE_DIRS include
-  LIBRARIES arc_trajectory
+  LIBRARIES arc_trajectory super_exploration_decider_lib
   CATKIN_DEPENDS geometry_msgs message_filters mavros_msgs nav_msgs
                  pcl_conversions quadrotor_msgs roscpp sensor_msgs std_msgs std_srvs
+                 super_planner
                  visualization_msgs
 )
 
@@ -55,10 +57,17 @@ add_executable(super_px4_command_bridge
 )
 target_link_libraries(super_px4_command_bridge ${catkin_LIBRARIES})
 
-add_executable(super_exploration_decider
+add_library(super_exploration_decider_lib
   src/super_exploration_decider.cpp
 )
-target_link_libraries(super_exploration_decider ${catkin_LIBRARIES})
+add_dependencies(super_exploration_decider_lib ${catkin_EXPORTED_TARGETS})
+target_link_libraries(super_exploration_decider_lib ${catkin_LIBRARIES})
+
+add_executable(super_exploration_decider
+  src/super_exploration_decider_node.cpp
+)
+target_link_libraries(super_exploration_decider super_exploration_decider_lib
+                      ${catkin_LIBRARIES})
 
 add_executable(task1_perception_gate
   src/task1_perception_gate.cpp
@@ -71,6 +80,14 @@ add_executable(mission_scheduler
 target_link_libraries(mission_scheduler ${catkin_LIBRARIES})
 
 if(CATKIN_ENABLE_TESTING)
+  find_package(rostest REQUIRED)
+  add_rostest_gtest(test_super_goal_publication
+    test/super_goal_publication.test
+    test/test_super_goal_publication.cpp
+  )
+  target_link_libraries(test_super_goal_publication
+    super_exploration_decider_lib ${catkin_LIBRARIES})
+  add_dependencies(test_super_goal_publication ${catkin_EXPORTED_TARGETS})
   catkin_add_gtest(test_arc_trajectory
     test/test_arc_trajectory.cpp
   )
@@ -82,7 +99,8 @@ endif()
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
                 fastlio_px4_vision_bridge
                 super_px4_command_bridge
-                super_exploration_decider task1_perception_gate mission_scheduler
+                super_exploration_decider_lib super_exploration_decider
+                task1_perception_gate mission_scheduler
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

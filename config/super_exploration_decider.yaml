@@ -2,8 +2,8 @@
 cloud_topic: "/cloud_registered"
 odom_topic: "/Odometry"
 
-# SUPER FsmRos1 默认订阅的目标话题。
-goal_topic: "/goal"
+# SUPER 任务模式的原子目标/取消话题；原生点击模式仍可单独使用 /goal。
+goal_command_topic: "/mine_uav/super/goal_command"
 world_frame: "camera_init"
 
 # Task scheduler gate. If no scheduler is running, the decider keeps its

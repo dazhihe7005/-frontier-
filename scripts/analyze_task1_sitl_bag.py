@@ -13,7 +13,7 @@ import rosbag
 
 
 TOPICS = [
-    "/goal",
+    "/mine_uav/super/goal_command",
     "/mavros/local_position/pose",
     "/mavros/local_position/velocity_local",
     "/mavros/state",
@@ -110,6 +110,56 @@ def longest_below(samples, threshold):
     return longest
 
 
+def analyze_goal_lifecycle_events(events, grace=0.02):
+    """Count outputs after a matching cancel and before the next SET.
+
+    Events are (receipt_time, kind, goal_id) in bag order. The only tolerated
+    post-cancel command is one already in flight within the 20 ms grace.
+    PlanFromRest logs never have grace: starting a new plan after cancellation
+    is precisely the regression this metric is meant to expose.
+    """
+    active_goal_id = None
+    cancel_time = None
+    grace_used = False
+    stale_commands = 0
+    stale_plans = 0
+    cancel_count = 0
+    ignored_stale_cancels = 0
+    silence_latency = 0.0
+    for stamp, kind, goal_id in events:
+        if kind == "set":
+            if goal_id:
+                active_goal_id = goal_id
+                cancel_time = None
+                grace_used = False
+        elif kind == "cancel":
+            if active_goal_id is not None and (
+                goal_id == 0 or goal_id == active_goal_id
+            ):
+                active_goal_id = None
+                cancel_time = stamp
+                grace_used = False
+                cancel_count += 1
+            elif goal_id != 0:
+                ignored_stale_cancels += 1
+        elif kind in ("pos_cmd", "plan_from_rest") and cancel_time is not None:
+            silence_latency = max(silence_latency, stamp - cancel_time)
+            if kind == "plan_from_rest":
+                stale_plans += 1
+            elif stamp - cancel_time >= grace or grace_used:
+                stale_commands += 1
+            else:
+                grace_used = True
+    return {
+        "active_goal_id": active_goal_id,
+        "cancel_count": cancel_count,
+        "ignored_stale_cancels": ignored_stale_cancels,
+        "stale_position_commands": stale_commands,
+        "stale_plan_from_rest_calls": stale_plans,
+        "cancel_to_silence_latency": silence_latency,
+    }
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Analyze task-one SITL completion, safety and fluidity"
@@ -154,6 +204,8 @@ def analyze(path):
     odom_stamps = []
     super_failures = []
     super_failure_breakdown = Counter()
+    lifecycle_events = []
+    lifecycle_command_count = 0
     rosout_message_count = 0
     finished_true = False
     last_state = None
@@ -170,6 +222,7 @@ def analyze(path):
                     (stamp, vector_norm(linear.x, linear.y, linear.z))
                 )
             elif topic == "/planning/pos_cmd":
+                lifecycle_events.append((stamp, "pos_cmd", 0))
                 velocity = message.velocity
                 acceleration = message.acceleration
                 planned_speeds.append(
@@ -183,9 +236,14 @@ def analyze(path):
                         ),
                     )
                 )
-            elif topic == "/goal":
-                point = message.pose.position
-                goals.append((stamp, point.x, point.y, point.z))
+            elif topic == "/mine_uav/super/goal_command":
+                lifecycle_command_count += 1
+                if message.command == message.SET_GOAL:
+                    point = message.goal.position
+                    goals.append((stamp, point.x, point.y, point.z))
+                    lifecycle_events.append((stamp, "set", message.goal_id))
+                elif message.command == message.CANCEL_GOAL:
+                    lifecycle_events.append((stamp, "cancel", message.goal_id))
             elif topic == "/mavros/state":
                 state = (message.mode, bool(message.armed))
                 if state != last_state:
@@ -208,6 +266,8 @@ def analyze(path):
             elif topic == "/rosout_agg":
                 rosout_message_count += 1
                 text = getattr(message, "msg", "")
+                if "PlanFromRest" in text:
+                    lifecycle_events.append((stamp, "plan_from_rest", 0))
                 for category, marker in SUPER_FAILURE_CATEGORY_MARKERS:
                     if marker in text:
                         super_failures.append((stamp, text))
@@ -282,6 +342,7 @@ def analyze(path):
     planned_speed_values = [value for _stamp, value in planned_speeds]
     planned_acceleration_values = [value for _stamp, value in planned_accelerations]
     final_coverage = coverage[-1][1] if coverage else ""
+    lifecycle = analyze_goal_lifecycle_events(lifecycle_events)
 
     return {
         "bag": path,
@@ -302,6 +363,8 @@ def analyze(path):
         "final_coverage": final_coverage,
         "goal_count": len(goals),
         "goals": goals,
+        "goal_lifecycle_available": lifecycle_command_count > 0,
+        "goal_lifecycle": lifecycle,
         "path_length": path_length,
         "return_horizontal_error": return_error,
         "cross_track_max": cross_track_max,
@@ -345,6 +408,10 @@ def evaluate(report, arguments):
         ],
         "no_command_faults": not report["command_faults"],
         "at_least_three_goals": report["goal_count"] >= 3,
+        "goal_lifecycle_recorded": report["goal_lifecycle_available"],
+        "goal_cancel_observed": report["goal_lifecycle"]["cancel_count"] > 0,
+        "no_stale_position_commands": report["goal_lifecycle"]["stale_position_commands"] == 0,
+        "no_stale_plan_from_rest": report["goal_lifecycle"]["stale_plan_from_rest_calls"] == 0,
         "minimum_path_length": report["path_length"] >= arguments.min_path_length,
         "return_horizontal_error": report["return_horizontal_error"] is not None
         and report["return_horizontal_error"] <= arguments.max_return_error,
@@ -429,6 +496,18 @@ def print_summary(report):
             format_value(report["odom_rate"], "Hz"),
             len(report["command_faults"]),
             super_failure_text,
+        )
+    )
+    lifecycle = report["goal_lifecycle"]
+    print(
+        "goal_lifecycle: recorded=%s cancels=%d stale_pos_cmd=%d "
+        "stale_plan_from_rest=%d cancel_to_silence=%s"
+        % (
+            report["goal_lifecycle_available"],
+            lifecycle["cancel_count"],
+            lifecycle["stale_position_commands"],
+            lifecycle["stale_plan_from_rest_calls"],
+            format_value(lifecycle["cancel_to_silence_latency"], "s"),
         )
     )
     if report["super_failure_breakdown"]:

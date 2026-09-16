@@ -1,8 +1,10 @@
 # Repository-owned SUPER profile for task one. Do not edit SUPER's upstream
 # click_smooth_ros1.yaml for this project; all task-specific tuning lives here.
 fsm:
-  click_goal_en: true
+  click_goal_en: false
   click_goal_topic: "/goal"
+  goal_command_en: true
+  goal_command_topic: "/mine_uav/super/goal_command"
   click_height: -10.0
   click_yaw_en: true
   replan_rate: 15.0

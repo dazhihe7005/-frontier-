@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <geometry_msgs/PoseStamped.h>
+#include <super_planner/GoalCommand.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -52,6 +53,7 @@ class SuperExplorationDecider {
                           const ros::NodeHandle& private_nh);
 
  private:
+  friend class SuperExplorationDeciderTestPeer;
   using Cloud = sensor_msgs::PointCloud2;
   using Odom = nav_msgs::Odometry;
   using SyncPolicy =
@@ -145,6 +147,8 @@ class SuperExplorationDecider {
   const char* explorationPhaseName() const;
   void publishGoal(const geometry_msgs::PoseStamped& goal,
                    const std::string& reason);
+  void cancelActiveGoal(const std::string& reason,
+                        bool unconditional = false);
   void beginReturnHome(const std::string& reason);
   void publishStatus(const std::string& state,
                      const std::string& detail = std::string());
@@ -178,6 +182,8 @@ class SuperExplorationDecider {
   geometry_msgs::PoseStamped current_pose_;
   geometry_msgs::PoseStamped home_pose_;
   geometry_msgs::PoseStamped current_goal_;
+  uint64_t next_goal_id_{1};
+  uint64_t active_goal_id_{0};
   double active_goal_initial_distance_{0.0};
   ros::Time last_sync_time_;
   ros::Time first_data_time_;
@@ -218,7 +224,7 @@ class SuperExplorationDecider {
 
   std::string cloud_topic_;
   std::string odom_topic_;
-  std::string goal_topic_;
+  std::string goal_command_topic_;
   std::string world_frame_;
   std::string return_request_topic_;
   std::string mission_enable_topic_;

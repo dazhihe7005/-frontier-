@@ -72,8 +72,9 @@ SuperExplorationDecider::SuperExplorationDecider(
       boost::bind(&SuperExplorationDecider::synchronizedCallback, this,
                   boost::placeholders::_1, boost::placeholders::_2));
 
-  goal_publisher_ = nh_.advertise<geometry_msgs::PoseStamped>(goal_topic_, 1,
-                                                                true);
+  goal_publisher_ = nh_.advertise<super_planner::GoalCommand>(
+      goal_command_topic_, 20, true);
+  cancelActiveGoal("startup", true);
   status_publisher_ = nh_.advertise<std_msgs::String>(status_topic_, 1, true);
   finished_publisher_ = nh_.advertise<std_msgs::Bool>(finished_topic_, 1, true);
   returning_publisher_ =
@@ -114,7 +115,8 @@ SuperExplorationDecider::SuperExplorationDecider(
 bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("cloud_topic", cloud_topic_, std::string("/cloud_registered"));
   private_nh_.param("odom_topic", odom_topic_, std::string("/Odometry"));
-  private_nh_.param("goal_topic", goal_topic_, std::string("/goal"));
+  private_nh_.param("goal_command_topic", goal_command_topic_,
+                    std::string("/mine_uav/super/goal_command"));
   private_nh_.param("world_frame", world_frame_, std::string("world"));
   private_nh_.param("return_request_topic", return_request_topic_,
                     std::string("/mine_uav/exploration/return_home"));
@@ -1342,11 +1344,19 @@ void SuperExplorationDecider::publishVisualization(
 
 void SuperExplorationDecider::publishGoal(
     const geometry_msgs::PoseStamped& goal, const std::string& reason) {
+  cancelActiveGoal("replace_goal");
   active_goal_is_end_approach_ = false;
   current_goal_ = goal;
   current_goal_.header.frame_id = world_frame_;
   current_goal_.header.stamp = ros::Time::now();
-  goal_publisher_.publish(current_goal_);
+  super_planner::GoalCommand command;
+  command.header = current_goal_.header;
+  command.command = super_planner::GoalCommand::SET_GOAL;
+  command.goal_id = next_goal_id_++;
+  command.goal = current_goal_.pose;
+  command.reason = reason;
+  goal_publisher_.publish(command);
+  active_goal_id_ = command.goal_id;
   goal_sent_time_ = current_goal_.header.stamp;
   active_goal_initial_distance_ = std::sqrt(squaredDistance(
       current_pose_.pose.position, current_goal_.pose.position));
@@ -1355,6 +1365,22 @@ void SuperExplorationDecider::publishGoal(
   ROS_INFO("New SUPER goal (%s): %.2f %.2f %.2f", reason.c_str(),
            current_goal_.pose.position.x, current_goal_.pose.position.y,
            current_goal_.pose.position.z);
+}
+
+void SuperExplorationDecider::cancelActiveGoal(const std::string& reason,
+                                                bool unconditional) {
+  if (!unconditional && active_goal_id_ == 0) {
+    return;
+  }
+  super_planner::GoalCommand command;
+  command.header.stamp = ros::Time::now();
+  command.header.frame_id = world_frame_;
+  command.command = super_planner::GoalCommand::CANCEL_GOAL;
+  command.goal_id = unconditional ? 0 : active_goal_id_;
+  command.reason = reason;
+  goal_publisher_.publish(command);
+  active_goal_id_ = 0;
+  have_active_goal_ = false;
 }
 
 bool SuperExplorationDecider::publishEndApproachGoal(
@@ -1544,7 +1570,7 @@ void SuperExplorationDecider::beginReturnHome(const std::string& reason) {
     return;
   }
   returning_home_ = true;
-  have_active_goal_ = false;
+  cancelActiveGoal("return_home");
   geometry_msgs::PoseStamped return_pose = home_pose_;
   return_pose.pose.position.z += return_home_height_offset_;
   publishGoal(return_pose, reason);
@@ -1560,6 +1586,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
   if (!dataIsFresh() || !have_home_) {
+    cancelActiveGoal("wait_data");
     publishStatus("WAIT_DATA", "Fast-LIO2 synchronized data is stale or absent");
     return;
   }
@@ -1573,12 +1600,15 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   }
 
   if (returning_home_) {
+    if (active_goal_id_ == 0) {
+      publishGoal(current_goal_, "resume_return_home_after_data_gap");
+    }
     if (squaredDistance(current_pose_.pose.position,
                        current_goal_.pose.position) <=
         goal_reached_distance_ * goal_reached_distance_) {
       returning_home_ = false;
       mission_finished_ = true;
-      have_active_goal_ = false;
+      cancelActiveGoal("home_reached");
       std_msgs::Bool message;
       message.data = true;
       finished_publisher_.publish(message);
@@ -1666,19 +1696,19 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     if (distance <= goal_reached_distance_ || forward_goal_handover) {
       covered_goals_.push_back(current_goal_.pose.position);
       ++reached_goal_count_;
-      have_active_goal_ = false;
+      cancelActiveGoal(forward_goal_handover ? "forward_handover" : "goal_reached");
       publishStatus(forward_goal_handover ? "GOAL_HANDOVER" : "GOAL_REACHED",
                     forward_goal_handover
                         ? "selecting the next look-ahead goal without stopping"
                         : "selecting next frontier");
     } else if (preempt_blocked_forward_goal) {
       covered_goals_.push_back(current_goal_.pose.position);
-      have_active_goal_ = false;
+      cancelActiveGoal("front_wall_preempt");
       publishStatus("GOAL_PREEMPTED",
                     "confirmed front wall blocks the forward goal");
     } else if (goal_age > goal_timeout_) {
       covered_goals_.push_back(current_goal_.pose.position);
-      have_active_goal_ = false;
+      cancelActiveGoal("goal_timeout");
       publishStatus("GOAL_TIMEOUT", "discarding unreachable candidate");
     } else {
       publishStatus("EXPLORING",
@@ -1744,13 +1774,14 @@ void SuperExplorationDecider::missionEnableCallback(
   }
   enabled_ = message->data;
   if (!enabled_) {
-    have_active_goal_ = false;
+    cancelActiveGoal("mission_disabled", true);
     publishStatus("DISABLED", "task scheduler selected another task");
     ROS_INFO("SUPER exploration paused by mission scheduler");
   } else {
     // A new enable transition starts a fresh test mission.  This clears any
     // map/home left from the previous run and arms home capture for the first
     // synchronized Fast-LIO2 cloud+odometry sample after CH7 is raised.
+    cancelActiveGoal("mission_reenabled", true);
     clearMissionState();
     mission_start_pending_ = true;
     publishStatus("WAIT_DATA", "task scheduler selected goaf exploration");
@@ -1814,6 +1845,12 @@ void SuperExplorationDecider::clearMissionState() {
 bool SuperExplorationDecider::enableCallback(
     std_srvs::SetBool::Request& request,
     std_srvs::SetBool::Response& response) {
+  if (!request.data) {
+    cancelActiveGoal("service_disabled", true);
+  } else if (!enabled_) {
+    cancelActiveGoal("service_reenabled", true);
+    clearMissionState();
+  }
   enabled_ = request.data;
   mission_start_pending_ = enabled_;
   response.success = true;
@@ -1824,6 +1861,7 @@ bool SuperExplorationDecider::enableCallback(
 
 bool SuperExplorationDecider::resetCallback(
     std_srvs::Trigger::Request&, std_srvs::Trigger::Response& response) {
+  cancelActiveGoal("service_reset", true);
   clearMissionState();
   enabled_ = !require_mission_enable_edge_;
   mission_start_pending_ = false;
@@ -1834,12 +1872,3 @@ bool SuperExplorationDecider::resetCallback(
 }
 
 }  // namespace mine_uav_control
-
-int main(int argc, char** argv) {
-  ros::init(argc, argv, "super_exploration_decider");
-  ros::NodeHandle nh;
-  ros::NodeHandle private_nh("~");
-  mine_uav_control::SuperExplorationDecider decider(nh, private_nh);
-  ros::spin();
-  return 0;
-}

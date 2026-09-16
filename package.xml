@@ -20,11 +20,12 @@
   <depend>rospy</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>super_planner</depend>
   <depend>visualization_msgs</depend>
 
   <exec_depend>perfect_drone_sim</exec_depend>
-  <exec_depend>super_planner</exec_depend>
   <exec_depend>gazebo_plugins</exec_depend>
 
   <test_depend>gtest</test_depend>
+  <test_depend>rostest</test_depend>
 </package>
