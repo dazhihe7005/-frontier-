@@ -90,12 +90,16 @@ SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只
 
 继续追踪后已经用同场景运行时诊断确认另一项官方核心问题：安全走廊内部点与终点可能匹配到
 同一个导引采样时间，官方 `10 ms` 下限再乘 `0.8` 后生成约 `8 ms` 的退化轨迹段，并直接触发
-动力学约束失败。同时，高层 `WAIT_MAP_CLOSURE`、PX4悬停桥与SUPER保留旧目标之间缺少明确的
-目标取消协议。完整证据和修复边界见
+动力学约束失败。该项现已通过 `段长/max_vel` 几何时间下界修复：7个新增单元测试通过，Release
+编译成功；同场景再次捕获5个原始0.008 s输入，修正后对应约束失败由5次降为0次。可复现补丁为
+[`patches/super_geometric_time_lower_bound.patch`](patches/super_geometric_time_lower_bound.patch)。
+同时，高层 `WAIT_MAP_CLOSURE`、PX4悬停桥与SUPER保留旧目标之间仍缺少明确的目标取消协议。
+完整证据、A/B结果和剩余边界见
 [`docs/super_optimizer_and_goal_protocol_root_cause_report.md`](docs/super_optimizer_and_goal_protocol_root_cause_report.md)。
 
-在完成隔离回归前，不能仅凭日志中的`ReplanOnce succeed`判定真机可飞，也不能通过扩大高度
-围栏或继续叠加入口过滤来掩盖局部轨迹问题。
+这次修复只关闭了“重复时间戳→8 ms退化段→对应动力学失败”链路，不代表其他L-BFGS线搜索、
+位置约束或目标生命周期问题已经解决。在完成剩余隔离回归前，不能仅凭日志中的
+`ReplanOnce succeed`判定真机可飞，也不能通过扩大高度围栏或继续叠加入口过滤来掩盖局部轨迹问题。
 
 ### MID360 与 NUC 的固定地址
 
@@ -274,11 +278,13 @@ git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid3
 git apply --unidiff-zero /path/to/frontier-upload/patches/fast_lio2_sensor_restart.patch
 ```
 
-当前SUPER工作区以港大官方提交 `2ad3419` 为核心基线，只应用指令坐标帧适配补丁：
+当前SUPER工作区以港大官方提交 `2ad3419` 为核心基线，应用指令坐标帧适配和已回归验证的
+几何时间下界补丁：
 
 ```bash
 cd /path/to/SUPER
 git apply /path/to/frontier-upload/patches/super_ros1_fastlio_task_gate.patch
+git apply /path/to/frontier-upload/patches/super_geometric_time_lower_bound.patch
 ```
 
 任务点云、里程计话题、三维目标高度及任务动力学参数全部由项目自己的

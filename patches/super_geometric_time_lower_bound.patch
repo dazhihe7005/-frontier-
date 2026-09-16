@@ -1,0 +1,265 @@
+diff --git a/super_planner/CMakeLists.txt b/super_planner/CMakeLists.txt
+index 226f253..9b264fc 100755
+--- a/super_planner/CMakeLists.txt
++++ b/super_planner/CMakeLists.txt
+@@ -81,6 +81,16 @@ target_link_libraries(fsm_node
+         ${THIRD_PARTY}
+ )
+ 
++if(CATKIN_ENABLE_TESTING)
++    catkin_add_gtest(super_guide_time_initialization_test
++            test/guide_time_initialization_test.cpp)
++    if(TARGET super_guide_time_initialization_test)
++        target_link_libraries(super_guide_time_initialization_test
++                super
++                ${THIRD_PARTY})
++    endif()
++endif()
++
+ #add_executable(read_replan_log
+ #        Apps/read_replan_log.cpp
+ #)
+diff --git a/super_planner/package.xml b/super_planner/package.xml
+index 8e6e368..44bf421 100755
+--- a/super_planner/package.xml
++++ b/super_planner/package.xml
+@@ -65,6 +65,7 @@
+     <exec_depend>rospy</exec_depend>
+     <exec_depend>std_msgs</exec_depend>
+     <exec_depend>rog_map</exec_depend>
++    <test_depend>gtest</test_depend>
+ 
+ 
+     <!-- The export tag contains other, unspecified, tags -->
+diff --git a/super_planner/include/traj_opt/guide_time_initialization.h b/super_planner/include/traj_opt/guide_time_initialization.h
+new file mode 100644
+index 0000000..a8642e1
+--- /dev/null
++++ b/super_planner/include/traj_opt/guide_time_initialization.h
+@@ -0,0 +1,11 @@
++#pragma once
++
++#include <utils/header/type_utils.hpp>
++
++namespace traj_opt {
++
++bool applyGeometricTimeLowerBound(const super_utils::Mat3Df &path,
++                                  double max_vel,
++                                  super_utils::VecDf &times);
++
++}  // namespace traj_opt
+diff --git a/super_planner/src/traj_opt/guide_time_initialization.cpp b/super_planner/src/traj_opt/guide_time_initialization.cpp
+new file mode 100644
+index 0000000..f8d4d3d
+--- /dev/null
++++ b/super_planner/src/traj_opt/guide_time_initialization.cpp
+@@ -0,0 +1,28 @@
++#include <traj_opt/guide_time_initialization.h>
++
++#include <algorithm>
++#include <cmath>
++
++namespace traj_opt {
++
++bool applyGeometricTimeLowerBound(const super_utils::Mat3Df &path,
++                                  const double max_vel,
++                                  super_utils::VecDf &times) {
++    if (path.cols() != times.size() + 1) {
++        return false;
++    }
++    if (!(max_vel > 0.0) || !std::isfinite(max_vel)
++        || !path.allFinite() || !times.allFinite()
++        || (times.array() < 0.0).any()) {
++        return false;
++    }
++
++    for (Eigen::Index i = 0; i < times.size(); ++i) {
++        const double distance = (path.col(i + 1) - path.col(i)).norm();
++        const double velocity_limited_time = distance / max_vel;
++        times(i) = std::max(times(i), velocity_limited_time);
++    }
++    return times.allFinite();
++}
++
++}  // namespace traj_opt
+diff --git a/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp b/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp
+index 265f1b1..d68e2b7 100755
+--- a/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp
++++ b/super_planner/src/traj_opt/exp_traj_optimizer_s4.cpp
+@@ -22,6 +22,7 @@
+ */
+ 
+ #include <traj_opt/exp_traj_optimizer_s4.h>
++#include <traj_opt/guide_time_initialization.h>
+ #include <utils/optimization/lbfgs.h>
+ #include <ros_interface/ros_interface.hpp>
+ 
+@@ -537,6 +538,12 @@ bool ExpTrajOpt::setupProblemAndCheck() {
+     } else {
+         opt_vars.times *= 0.8;
+     }
++    if (!applyGeometricTimeLowerBound(opt_vars.init_path, cfg_.max_vel,
++                                      opt_vars.times)) {
++        cout << YELLOW << " -- [ExpOpt] Invalid path or time initialization."
++             << RESET << endl;
++        return false;
++    }
+ 
+     if (std::isnan(opt_vars.times.sum())) {
+         cout << YELLOW << " -- [ExpOpt] Init times and point failed." << RESET << endl;
+@@ -621,8 +628,35 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
+     opt_vars.penalty_log.resize(8);
+     opt_vars.penalty_log.setZero();
+ 
++    if (opt_vars.given_init_ts_and_ps) {
++        if (opt_vars.init_ts.size() != opt_vars.times.size()
++            || static_cast<Eigen::Index>(opt_vars.init_ps.size())
++               != opt_vars.points.cols()) {
++            cout << YELLOW << " -- [TrajOpt] Explicit path and time dimensions do not match the corridor."
++                 << RESET << endl;
++            return INFINITY;
++        }
++        opt_vars.times = opt_vars.init_ts;
++        for (int i = 0; i < opt_vars.init_ps.size(); i++) {
++            opt_vars.points.col(i) = opt_vars.init_ps[i];
++        }
++
++        Mat3Df explicit_init_path(3, opt_vars.times.size() + 1);
++        explicit_init_path.col(0) = opt_vars.headPVAJ.col(0);
++        explicit_init_path.rightCols(1) = opt_vars.tailPVAJ.col(0);
++        for (int i = 0; i < opt_vars.points.cols(); ++i) {
++            explicit_init_path.col(i + 1) = opt_vars.points.col(i);
++        }
++        if (!applyGeometricTimeLowerBound(explicit_init_path, cfg_.max_vel,
++                                          opt_vars.times)) {
++            cout << YELLOW << " -- [TrajOpt] Invalid explicit path or time initialization."
++                 << RESET << endl;
++            return INFINITY;
++        }
++    }
++
+     /* 2) check the initial value of the optimization varibles */
+-    if (opt_vars.times.minCoeff() < 1e-3) {
++    if (opt_vars.times.size() == 0 || opt_vars.times.minCoeff() < 1e-3) {
+         cout << YELLOW << " -- [TrajOpt] Error, the init times have zero, force return." << RESET << endl;
+         cout << " -- Head PVAJ: " << endl;
+         cout << opt_vars.headPVAJ << endl;
+@@ -633,13 +667,6 @@ double ExpTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
+         return INFINITY;
+     }
+ 
+-    if (opt_vars.given_init_ts_and_ps) {
+-        opt_vars.times = opt_vars.init_ts;
+-        for (int i = 0; i < opt_vars.init_ps.size(); i++) {
+-            opt_vars.points.col(i) = opt_vars.init_ps[i];
+-        }
+-    }
+-
+     /* 3)  construct the initial guess of the optimization varibles*/
+     gcopter::backwardMapTToTau(opt_vars.times, tau);
+     switch (opt_vars.pos_constraint_type) {
+diff --git a/super_planner/test/guide_time_initialization_test.cpp b/super_planner/test/guide_time_initialization_test.cpp
+new file mode 100644
+index 0000000..09bdae6
+--- /dev/null
++++ b/super_planner/test/guide_time_initialization_test.cpp
+@@ -0,0 +1,99 @@
++#include <gtest/gtest.h>
++
++#include <limits>
++
++#include <traj_opt/guide_time_initialization.h>
++
++namespace {
++
++using super_utils::Mat3Df;
++using super_utils::VecDf;
++
++TEST(GuideTimeInitialization,
++     RaisesDegenerateNonzeroSegmentToVelocityBound) {
++    Mat3Df path(3, 3);
++    path.col(0) << 0.0, 0.0, 0.0;
++    path.col(1) << 1.0, 0.0, 0.0;
++    path.col(2) << 1.4, 0.0, 0.0;
++    VecDf times(2);
++    times << 1.0, 0.008;
++
++    ASSERT_TRUE(traj_opt::applyGeometricTimeLowerBound(path, 1.0, times));
++
++    EXPECT_DOUBLE_EQ(times(0), 1.0);
++    EXPECT_NEAR(times(1), 0.4, 1.0e-12);
++}
++
++TEST(GuideTimeInitialization, PreservesLongerGuideDuration) {
++    Mat3Df path(3, 2);
++    path.col(0) << 0.0, 0.0, 0.0;
++    path.col(1) << 0.4, 0.0, 0.0;
++    VecDf times(1);
++    times << 0.75;
++
++    ASSERT_TRUE(traj_opt::applyGeometricTimeLowerBound(path, 1.0, times));
++
++    EXPECT_DOUBLE_EQ(times(0), 0.75);
++}
++
++TEST(GuideTimeInitialization, DoesNotInflateZeroLengthSegment) {
++    Mat3Df path(3, 2);
++    path.col(0) << 2.0, -1.0, 0.5;
++    path.col(1) = path.col(0);
++    VecDf times(1);
++    times << 0.008;
++
++    ASSERT_TRUE(traj_opt::applyGeometricTimeLowerBound(path, 1.0, times));
++
++    EXPECT_DOUBLE_EQ(times(0), 0.008);
++}
++
++TEST(GuideTimeInitialization, RejectsNonFinitePath) {
++    Mat3Df path(3, 2);
++    path.setZero();
++    path(0, 1) = std::numeric_limits<double>::quiet_NaN();
++    VecDf times(1);
++    times << 0.5;
++
++    EXPECT_FALSE(traj_opt::applyGeometricTimeLowerBound(path, 1.0, times));
++}
++
++TEST(GuideTimeInitialization, RejectsNonFiniteTime) {
++    Mat3Df path(3, 2);
++    path.setZero();
++    VecDf times(1);
++    times << std::numeric_limits<double>::infinity();
++
++    EXPECT_FALSE(traj_opt::applyGeometricTimeLowerBound(path, 1.0, times));
++}
++
++TEST(GuideTimeInitialization, RejectsNegativeTime) {
++    Mat3Df path(3, 2);
++    path.setZero();
++    path(0, 1) = 0.4;
++    VecDf times(1);
++    times << -0.1;
++
++    EXPECT_FALSE(traj_opt::applyGeometricTimeLowerBound(path, 1.0, times));
++}
++
++TEST(GuideTimeInitialization, RejectsInvalidVelocityAndDimensions) {
++    Mat3Df path(3, 2);
++    path.setZero();
++    VecDf times(1);
++    times << 0.5;
++
++    EXPECT_FALSE(traj_opt::applyGeometricTimeLowerBound(path, 0.0, times));
++
++    Mat3Df mismatched_path(3, 3);
++    mismatched_path.setZero();
++    EXPECT_FALSE(traj_opt::applyGeometricTimeLowerBound(
++            mismatched_path, 1.0, times));
++}
++
++}  // namespace
++
++int main(int argc, char **argv) {
++    testing::InitGoogleTest(&argc, argv);
++    return RUN_ALL_TESTS();
++}
