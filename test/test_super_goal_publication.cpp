@@ -1,6 +1,8 @@
 #include "mine_uav_control/super_exploration_decider.hpp"
 
 #include <gtest/gtest.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <boost/make_shared.hpp>
 
 #include <chrono>
 #include <mutex>
@@ -48,6 +50,28 @@ class SuperExplorationDeciderTestPeer {
            decider.return_waypoints_.size() == 3 &&
            decider.current_goal_.pose.position.x == 8.0 &&
            decider.return_waypoints_.back().pose.position.x == 0.0;
+  }
+
+  static bool freeRayStopsAtOccupiedCell(SuperExplorationDecider& decider) {
+    decider.enabled_ = true;
+    decider.have_data_ = true;
+    decider.have_home_ = true;
+    decider.current_pose_.header.stamp = ros::Time::now();
+    decider.current_pose_.pose.position.x = 0.0;
+    decider.current_pose_.pose.position.y = 0.0;
+    decider.current_pose_.pose.position.z = 0.0;
+    const auto obstacle = decider.positionToKey(2.0, 0.0, 0.0);
+    decider.markOccupied(obstacle);
+    pcl::PointCloud<pcl::PointXYZ> endpoints;
+    endpoints.points.emplace_back(5.0f, 0.0f, 0.0f);
+    sensor_msgs::PointCloud2 cloud;
+    pcl::toROSMsg(endpoints, cloud);
+    cloud.header.frame_id = decider.world_frame_;
+    cloud.header.stamp = decider.current_pose_.header.stamp;
+    decider.freeRayCallback(boost::make_shared<sensor_msgs::PointCloud2>(cloud));
+    return decider.isKnownFree(decider.positionToKey(1.0, 0.0, 0.0)) &&
+           decider.isOccupied(obstacle) &&
+           !decider.isKnownFree(decider.positionToKey(3.0, 0.0, 0.0));
   }
 
   static void reset(SuperExplorationDecider& decider) {
@@ -140,6 +164,14 @@ TEST(SuperGoalPublication, ReturnDoesNotSendOneLongHomeGoal) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::returnStartsAtObservedBreadcrumb(
       decider));
+}
+
+TEST(SuperGoalPublication, SimulatedNoReturnRayCannotClearBehindWall) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~");
+  private_nh.setParam("goal_command_topic", "/mine_uav/test/free_ray_goal_command");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::freeRayStopsAtOccupiedCell(decider));
 }
 
 }  // namespace mine_uav_control

@@ -7,7 +7,11 @@
     </include>
 
     <link name="mid360_link">
-      <pose>0 0 0.14 0 0 0</pose>
+      <!-- Mount above the simulated Iris rotor disk. At 0.14 m, the lower
+           five scan rings strike the vehicle at 0.24 to 0.31 m and never see
+           the chamber floor/lower walls. This is a SITL mounting fixture,
+           not a real MID360 extrinsic calibration. -->
+      <pose>0 0 0.60 0 0 0</pose>
       <inertial>
         <mass>0.03</mass>
         <inertia>

@@ -10,8 +10,11 @@ by the real Fast-LIO2/SUPER integration.  It is simulation-only.
 
 import math
 import threading
+import xml.etree.ElementTree as ET
+from collections import deque
 
 import rospy
+from gazebo_msgs.msg import LinkStates
 from nav_msgs.msg import Odometry
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud, PointCloud2
@@ -29,6 +32,12 @@ class GazeboMid360FastlioAdapter:
             "~global_topic", "/mine_uav/sitl/global_cloud"
         )
         self.free_ray_topic = rospy.get_param("~free_ray_topic", "")
+        self.world_geometry_file = rospy.get_param("~world_geometry_file", "")
+        self.surface_tolerance = max(
+            0.05, float(rospy.get_param("~surface_tolerance", 0.35))
+        )
+        self._world_boxes = self._load_static_boxes(self.world_geometry_file)
+        self._link_history = deque(maxlen=100)
         self.sensor_offset = rospy.get_param("~sensor_offset", [0.0, 0.0, 0.14])
         if not isinstance(self.sensor_offset, list) or len(self.sensor_offset) != 3:
             raise rospy.ROSInitException("~sensor_offset must contain [x, y, z]")
@@ -77,6 +86,11 @@ class GazeboMid360FastlioAdapter:
             self.global_topic, PointCloud2, queue_size=1, latch=True
         )
         rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
+        if self._world_boxes:
+            rospy.Subscriber(
+                "/gazebo/link_states", LinkStates, self._links_callback,
+                queue_size=20,
+            )
         rospy.Subscriber(
             self.raw_cloud_topic,
             PointCloud,
@@ -96,6 +110,91 @@ class GazeboMid360FastlioAdapter:
     def _odom_callback(self, message):
         with self._lock:
             self._latest_odom = message
+
+    def _links_callback(self, message):
+        try:
+            sensor_index = message.name.index("iris::mid360_link")
+            base_index = message.name.index("iris::iris::base_link")
+        except ValueError:
+            return
+        with self._lock:
+            self._link_history.append(
+                (rospy.Time.now(), message.pose[sensor_index],
+                 message.pose[base_index])
+            )
+
+    @staticmethod
+    def _load_static_boxes(world_file):
+        if not world_file:
+            return []
+        try:
+            root = ET.parse(world_file).getroot()
+        except (OSError, ET.ParseError) as error:
+            raise rospy.ROSInitException("cannot read Gazebo world geometry: %s" % error)
+        boxes = []
+        for model in root.findall(".//world/model"):
+            if model.findtext("static", "false").strip().lower() != "true":
+                continue
+            model_pose = GazeboMid360FastlioAdapter._box_pose(model.findtext("pose"))
+            for link in model.findall("link"):
+                link_pose = GazeboMid360FastlioAdapter._box_pose(link.findtext("pose"))
+                for collision in link.findall("collision"):
+                    size_text = collision.findtext("geometry/box/size")
+                    if not size_text:
+                        continue
+                    collision_pose = GazeboMid360FastlioAdapter._box_pose(
+                        collision.findtext("pose")
+                    )
+                    size = tuple(float(value) for value in size_text.split())
+                    if len(size) != 3:
+                        raise rospy.ROSInitException("invalid Gazebo collision box")
+                    center = tuple(
+                        model_pose[i] + link_pose[i] + collision_pose[i]
+                        for i in range(3)
+                    )
+                    boxes.append((center, tuple(value / 2.0 for value in size)))
+        if not boxes:
+            raise rospy.ROSInitException("world geometry filter found no static boxes")
+        return boxes
+
+    @staticmethod
+    def _box_pose(text):
+        values = [float(value) for value in text.split()] if text else [0.0] * 6
+        if len(values) != 6 or any(abs(value) > 1e-6 for value in values[3:]):
+            raise rospy.ROSInitException(
+                "world geometry filter requires axis-aligned collision boxes"
+            )
+        return values
+
+    def _on_static_surface(self, point):
+        for center, half in self._world_boxes:
+            outside = [abs(point[i] - center[i]) - half[i] for i in range(3)]
+            if all(value <= 0.0 for value in outside):
+                distance = min(-value for value in outside)
+            else:
+                distance = math.sqrt(sum(max(0.0, value) ** 2 for value in outside))
+            if distance <= self.surface_tolerance:
+                return True
+        return False
+
+    def _first_static_hit(self, origin, direction):
+        nearest = float("inf")
+        for center, half in self._world_boxes:
+            t_enter, t_exit = -float("inf"), float("inf")
+            for axis in range(3):
+                low, high = center[axis] - half[axis], center[axis] + half[axis]
+                if abs(direction[axis]) < 1e-9:
+                    if origin[axis] < low or origin[axis] > high:
+                        t_enter = float("inf")
+                        break
+                    continue
+                a = (low - origin[axis]) / direction[axis]
+                b = (high - origin[axis]) / direction[axis]
+                t_enter = max(t_enter, min(a, b))
+                t_exit = min(t_exit, max(a, b))
+            if t_enter <= t_exit and t_exit > 0.0:
+                nearest = min(nearest, t_enter if t_enter > 0.0 else t_exit)
+        return nearest
 
     @staticmethod
     def _rotation_matrix(quaternion):
@@ -134,6 +233,7 @@ class GazeboMid360FastlioAdapter:
     def _cloud_callback(self, cloud):
         with self._lock:
             odom = self._latest_odom
+            link_history = list(self._link_history)
         if odom is None:
             rospy.logwarn_throttle(2.0, "MID360 cloud waiting for /Odometry")
             return
@@ -146,22 +246,44 @@ class GazeboMid360FastlioAdapter:
             )
             return
 
-        rotation = self._rotation_matrix(odom.pose.pose.orientation)
-        if rotation is None:
+        position = odom.pose.pose.position
+        if self._world_boxes:
+            if not link_history:
+                rospy.logwarn_throttle(2.0, "MID360 waiting for Gazebo sensor pose")
+                return
+            stamp, sensor_pose, base_pose = min(
+                link_history,
+                key=lambda item: abs((item[0] - cloud.header.stamp).to_sec()),
+            )
+            if abs((stamp - cloud.header.stamp).to_sec()) > 0.04:
+                rospy.logwarn_throttle(2.0, "MID360 sensor pose is not synchronized")
+                return
+            rotation = self._rotation_matrix(sensor_pose.orientation)
+            sensor_world = sensor_pose.position
+            base_world = base_pose.position
+            world_origin = (sensor_world.x, sensor_world.y, sensor_world.z)
+            origin = (
+                position.x + sensor_world.x - base_world.x,
+                position.y + sensor_world.y - base_world.y,
+                position.z + sensor_world.z - base_world.z,
+            )
+        else:
+            rotation = self._rotation_matrix(odom.pose.pose.orientation)
+            offset_world = self._rotate(rotation, self.sensor_offset) if rotation else None
+            world_origin = None
+            origin = (
+                position.x + offset_world[0],
+                position.y + offset_world[1],
+                position.z + offset_world[2],
+            ) if offset_world else None
+        if rotation is None or origin is None:
             rospy.logwarn_throttle(2.0, "MID360 cloud rejected: invalid attitude")
             return
-
-        offset_world = self._rotate(rotation, self.sensor_offset)
-        position = odom.pose.pose.position
-        origin = (
-            position.x + offset_world[0],
-            position.y + offset_world[1],
-            position.z + offset_world[2],
-        )
 
         registered = []
         free_ray_endpoints = []
         filtered_self = 0
+        filtered_geometry = 0
         for index, raw_point in enumerate(cloud.points):
             if index % self.point_stride:
                 continue
@@ -178,8 +300,19 @@ class GazeboMid360FastlioAdapter:
                 # never contain it, but the traversed portion is useful
                 # free-space evidence for the simulator's decision map.
                 if self.free_ray_pub is not None and index % 4 == 0:
-                    scale = (self.max_range - 0.5) / math.sqrt(range_squared)
-                    rotated = self._rotate(rotation, tuple(scale * v for v in point))
+                    distance = math.sqrt(range_squared)
+                    direction = self._rotate(
+                        rotation, tuple(value / distance for value in point)
+                    )
+                    free_distance = self.max_range - 0.5
+                    if world_origin is not None:
+                        free_distance = min(
+                            free_distance,
+                            self._first_static_hit(world_origin, direction) - 0.35,
+                        )
+                    if free_distance <= self.min_range:
+                        continue
+                    rotated = tuple(free_distance * value for value in direction)
                     free_ray_endpoints.append(tuple(origin[i] + rotated[i] for i in range(3)))
                 continue
             # Gazebo's generic ray sensor can see the Iris fuselage/landing
@@ -197,6 +330,13 @@ class GazeboMid360FastlioAdapter:
                 filtered_self += 1
                 continue
             rotated = self._rotate(rotation, point)
+            if world_origin is not None:
+                world_point = tuple(
+                    world_origin[i] + rotated[i] for i in range(3)
+                )
+                if not self._on_static_surface(world_point):
+                    filtered_geometry += 1
+                    continue
             registered.append(
                 (
                     origin[0] + rotated[0],
@@ -245,6 +385,12 @@ class GazeboMid360FastlioAdapter:
                 5.0,
                 "Gazebo MID360 self-return filter removed %d raw points",
                 filtered_self,
+            )
+        if filtered_geometry:
+            rospy.loginfo_throttle(
+                5.0,
+                "Gazebo static geometry filter rejected %d inconsistent hits",
+                filtered_geometry,
             )
 
     def _accumulate(self, points):
