@@ -2184,3 +2184,16 @@ home为`z=1.51m`，首个及后续前向目标保持`z=1.51m`；日志中没有`
 第二次干净启动成功，Gazebo和RViz正常显示，PX4 SITL完成自动起飞到约1.5 m并悬停，CH7自动触发任务一。日志确认首个目标约`(5.97,-0.37,1.52)`并成功生成三维MINCO轨迹；随后目标约`(11.34,-0.71,1.52)`、`(16.66,-1.05,1.52)`、`(21.96,-1.39,1.52)`连续沿机头方向推进，Fsm保持`FOLLOW_TRAJ`，没有再次出现`Ill corridor`。本轮仍出现一次备份轨迹优化警告，但没有阻断主轨迹；需要继续观察更长距离和障碍场景下的备份轨迹、曲率、yaw rate和最小障碍距离。
 
 当前仿真进程保持运行，用户可直接观察Gazebo/RViz窗口。本轮配置和对话记录需要提交到GitHub。
+## 2026-09-16：返航未触发原因与仿真/真机问题分类
+
+本轮启动清理后的可视化40×40×30 m SITL，任务一完成起飞、悬停、CH7触发和前向探索。当前运行状态持续为SUPER `FOLLOW_TRAJ`，已经发布目标约5.97、11.34、16.66、21.96、27.32、32.71、37.02、42.17、45.69 m，点云累计持续增长。
+
+通过读取`/mine_uav/exploration/model_coverage`确认没有返航的直接原因：`map_closure=incomplete`、`front_closed=false`、`actionable=0`、`no_frontier_s=116.94`、`stable_s=6.49`、`occupied=63283`、`progress=47.64`；同时`three_wall=ready`、`end_seen=true`、`end_depth=47.50`、`left=1.00`、`right=1.00`、`end_span=43.00`、`gaps=0/0`。也就是说已经识别到连续左右墙和端墙，并且没有可行动前沿，唯一未满足的是前边界标志。
+
+代码当前配置为`use_map_closure_completion=true`、`map_closure_require_front_boundary=true`、`require_three_wall_completion=false`。地图闭合判据只使用近距离正前方障碍确认`front_obstacle_streak`生成`front_closed`，没有将三墙分析中的`end_wall_found/end_seen`作为前边界证据。因此即使端墙已经被识别，仍不会累计`closure_confirm=4`，也不会发布`MODEL_COMPLETE`和返航请求。这是本次不返航的代码逻辑原因，不是PX4、MAVROS或SUPER无法返航。合理修复方向是让端墙证据参与front boundary判定，并继续保留进深、无前沿、地图稳定和连续确认条件。
+
+仿真特有或主要由仿真环境放大的问题：Gazebo/PX4残留进程和`px4-sock-0`造成实体重复；ROS日志目录已超过1GB并出现文件写入告警；Gazebo传感器是理想化点云，存在时间同步/负延迟提示；SITL启动阶段会出现无setpoint、failsafe和仿真初始化时序告警；仿真雷达自体过滤、点云稀疏度和实际MID360不完全相同。
+
+仿真和真机都可能遇到的问题：Fast-LIO2点云/里程计时间不同步或断流；`camera_init`、机体、PX4本地坐标系及外参错误；雷达量程、遮挡、反射和点云稀疏导致墙体不连续；机体回波未过滤；机体尺寸和障碍膨胀使三维走廊不可行；MINCO主轨迹或备份轨迹优化失败；目标频繁更新导致局部轨迹抖动；正前障碍误判或端墙漏检；N​​UC计算负载过高；PX4 OFFBOARD setpoint watchdog、外部视觉健康和链路中断触发保护。
+
+本轮没有直接修改返航判据，避免在没有先定义“端墙证据如何参与闭合”的情况下继续叠加补丁。已保留当前仿真运行状态供观察，并同步记录本轮配置和分析。
