@@ -81,6 +81,12 @@ SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只
 长时间反复规划”的现象。详细提交对照、A/B证据和后续隔离顺序见
 [`docs/super_version_audit.md`](docs/super_version_audit.md)。
 
+继续追踪官方核心后，已通过最小 GTest 证实 ROGMap 最近邻查询存在输入/输出别名缺陷：官方
+多个调用点把同一坐标同时作为输入与输出，而查询函数会先把输出写成 `NaN`，从而污染输入并
+绕过 `max_dis`。完整源码证据、复现结果、影响边界和验证计划见
+[`docs/rog_map_nearest_cell_alias_defect_report.md`](docs/rog_map_nearest_cell_alias_defect_report.md)。
+该缺陷目前是“已复现、尚未修复”，不能据此宣称全部轨迹问题已经解决。
+
 在完成隔离回归前，不能仅凭日志中的`ReplanOnce succeed`判定真机可飞，也不能通过扩大高度
 围栏或继续叠加入口过滤来掩盖局部轨迹问题。
 

@@ -147,3 +147,9 @@ SUPER指令终点在膨胀栅格间变化，位置由约`(7.35,-1.15,1.45)`漂�
 因此已形成可复现根因链：10 cm完成门槛使未完全收敛的轨迹反复从静止规划；重规划期间局部
 终点/安全轨迹变化又使实际误差扩大，最终诱发优化器数值失败。证据保存在本机
 `/home/nuc/task1_logs/failure_cases/official_super_baseline/`，大体积bag不提交GitHub。
+
+## ROGMap 别名缺陷后续发现
+
+继续向 ROGMap 内部追踪后，已经通过独立单元测试证实最近邻查询存在输入/输出别名缺陷。
+该问题的源码证据、复现步骤、已证实与待验证结论见
+[`rog_map_nearest_cell_alias_defect_report.md`](rog_map_nearest_cell_alias_defect_report.md)。
