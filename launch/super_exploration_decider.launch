@@ -1,6 +1,8 @@
 <launch>
   <arg name="config" default="$(find mine_uav_control)/config/super_exploration_decider.yaml" />
   <arg name="require_mission_enable_edge" default="false" />
+  <arg name="cloud_topic" default="/mine_uav/task1/cloud_registered" />
+  <arg name="odom_topic" default="/mine_uav/task1/odometry" />
 
   <node pkg="mine_uav_control"
         type="super_exploration_decider"
@@ -8,5 +10,7 @@
         output="screen">
     <rosparam command="load" file="$(arg config)" />
     <param name="require_mission_enable_edge" value="$(arg require_mission_enable_edge)" />
+    <param name="cloud_topic" value="$(arg cloud_topic)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
   </node>
 </launch>

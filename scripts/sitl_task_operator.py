@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+
+"""Emulate the task-one pilot procedure in PX4 SITL only.
+
+The node pre-streams a hover setpoint, enters OFFBOARD, arms, climbs to the
+configured height, holds for one second, and only then raises emulated CH7.
+It does not publish Fast-LIO2 odometry or lidar data.
+"""
+
+import math
+import threading
+
+import rospy
+from geometry_msgs.msg import PoseStamped
+from mavros_msgs.msg import RCIn, State
+from mavros_msgs.srv import CommandBool, SetMode
+from nav_msgs.msg import Odometry
+
+
+class SitlTaskOperator:
+    def __init__(self):
+        self.odom_topic = rospy.get_param(
+            "~odom_topic", "/mavros/local_position/odom"
+        )
+        self.allow_auto_arm = bool(rospy.get_param("~allow_auto_arm", True))
+        self.takeoff_height = max(0.5, float(rospy.get_param("~takeoff_height", 1.5)))
+        self.hover_duration = max(
+            0.5, float(rospy.get_param("~takeoff_hover_duration", 1.0))
+        )
+        self.prestream_duration = max(
+            1.0, float(rospy.get_param("~offboard_prestream_duration", 1.0))
+        )
+        self.auto_enable_delay = max(
+            2.0, float(rospy.get_param("~auto_enable_delay", 8.0))
+        )
+        self.task_channel_index = int(rospy.get_param("~task_channel_index", 5))
+        self.auto_channel_index = int(rospy.get_param("~auto_channel_index", 6))
+        self.rate = max(10.0, float(rospy.get_param("~rate", 20.0)))
+
+        self._lock = threading.Lock()
+        self._state = State()
+        self._odom = None
+        self._start = rospy.Time.now()
+        self._origin = None
+        self._prestream_start = rospy.Time(0)
+        self._hover_start = rospy.Time(0)
+        self._last_mode_request = rospy.Time(0)
+        self._last_arm_request = rospy.Time(0)
+        self._ready = False
+
+        self.rc_pub = rospy.Publisher("/mine_uav/sitl/rc/in", RCIn, queue_size=2)
+        self.setpoint_pub = rospy.Publisher(
+            "/mavros/setpoint_position/local", PoseStamped, queue_size=10
+        )
+        rospy.Subscriber("/mavros/state", State, self._state_callback, queue_size=10)
+        rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
+        self.arm_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
+        self.mode_client = rospy.ServiceProxy("/mavros/set_mode", SetMode)
+        rospy.Timer(rospy.Duration(1.0 / self.rate), self._timer)
+        rospy.logwarn("SITL task operator active; never run against a real FCU")
+
+    def _state_callback(self, message):
+        with self._lock:
+            self._state = message
+
+    def _odom_callback(self, message):
+        with self._lock:
+            self._odom = message
+
+    def _timer(self, _event):
+        with self._lock:
+            state = self._state
+            odom = self._odom
+        now = rospy.Time.now()
+        if self.allow_auto_arm and not self._ready:
+            self._advance_takeoff(now, state, odom)
+        elapsed = (now - self._start).to_sec()
+        self._publish_rc(
+            auto_enabled=(self._ready and state.armed and elapsed >= self.auto_enable_delay)
+        )
+
+    def _publish_rc(self, auto_enabled):
+        channel_count = max(8, self.task_channel_index + 1, self.auto_channel_index + 1)
+        message = RCIn()
+        message.header.stamp = rospy.Time.now()
+        message.channels = [1500] * channel_count
+        message.channels[self.task_channel_index] = 1000
+        message.channels[self.auto_channel_index] = 2000 if auto_enabled else 1000
+        self.rc_pub.publish(message)
+
+    def _advance_takeoff(self, now, state, odom):
+        if odom is None or not state.connected:
+            return
+        if not rospy.get_param("/use_sim_time", False):
+            rospy.logerr_throttle(2.0, "Refusing SITL automation without /use_sim_time")
+            return
+        if self._origin is None:
+            pose = odom.pose.pose
+            self._origin = (
+                pose.position.x,
+                pose.position.y,
+                pose.position.z,
+                pose.orientation,
+            )
+            self._prestream_start = now
+            rospy.loginfo(
+                "SITL pre-task takeoff: ground z=%.2f, target z=%.2f",
+                self._origin[2],
+                self._origin[2] + self.takeoff_height,
+            )
+
+        target = PoseStamped()
+        target.header.stamp = now
+        target.header.frame_id = "map"
+        target.pose.position.x = self._origin[0]
+        target.pose.position.y = self._origin[1]
+        target.pose.position.z = self._origin[2] + self.takeoff_height
+        target.pose.orientation = self._origin[3]
+        self.setpoint_pub.publish(target)
+
+        if (now - self._prestream_start).to_sec() < self.prestream_duration:
+            return
+        if state.mode != "OFFBOARD":
+            self._request_mode(now)
+            return
+        if not state.armed:
+            self._request_arm(now)
+            return
+
+        position = odom.pose.pose.position
+        horizontal_error = math.hypot(
+            position.x - target.pose.position.x,
+            position.y - target.pose.position.y,
+        )
+        vertical_error = abs(position.z - target.pose.position.z)
+        if horizontal_error <= 0.20 and vertical_error <= 0.15:
+            if self._hover_start.is_zero():
+                self._hover_start = now
+                rospy.loginfo("SITL reached pre-task hover")
+            elif (now - self._hover_start).to_sec() >= self.hover_duration:
+                self._ready = True
+                rospy.loginfo("SITL hover stable; emulated CH7 enabled")
+        else:
+            self._hover_start = rospy.Time(0)
+
+    def _request_mode(self, now):
+        if (now - self._last_mode_request).to_sec() < 1.0:
+            return
+        self._last_mode_request = now
+        try:
+            response = self.mode_client(custom_mode="OFFBOARD")
+            if response.mode_sent:
+                rospy.loginfo("PX4 SITL pre-task OFFBOARD request accepted")
+        except rospy.ServiceException as error:
+            rospy.logwarn_throttle(2.0, "SITL mode service failed: %s", error)
+
+    def _request_arm(self, now):
+        if (now - self._last_arm_request).to_sec() < 1.0:
+            return
+        self._last_arm_request = now
+        try:
+            response = self.arm_client(True)
+            if response.success:
+                rospy.loginfo("PX4 SITL armed for pre-task takeoff")
+        except rospy.ServiceException as error:
+            rospy.logwarn_throttle(2.0, "SITL arm service failed: %s", error)
+
+
+if __name__ == "__main__":
+    rospy.init_node("sitl_task_operator")
+    SitlTaskOperator()
+    rospy.spin()

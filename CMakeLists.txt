@@ -60,6 +60,11 @@ add_executable(super_exploration_decider
 )
 target_link_libraries(super_exploration_decider ${catkin_LIBRARIES})
 
+add_executable(task1_perception_gate
+  src/task1_perception_gate.cpp
+)
+target_link_libraries(task1_perception_gate ${catkin_LIBRARIES})
+
 add_executable(mission_scheduler
   src/mission_scheduler.cpp
 )
@@ -77,7 +82,7 @@ endif()
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
                 fastlio_px4_vision_bridge
                 super_px4_command_bridge
-                super_exploration_decider mission_scheduler
+                super_exploration_decider task1_perception_gate mission_scheduler
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -91,7 +96,8 @@ catkin_install_python(PROGRAMS
   scripts/analyze_task1_sitl_bag.py
   scripts/ground_station.py
   scripts/gazebo_mid360_fastlio_adapter.py
-  scripts/task1_sitl_adapter.py
+  scripts/sitl_localization_adapter.py
+  scripts/sitl_task_operator.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

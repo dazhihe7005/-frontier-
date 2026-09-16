@@ -1,9 +1,10 @@
 <launch>
   <!-- Complete task-one dynamic loop on PX4 SITL. Run this on an isolated ROS
-       master; task1_sitl_adapter may arm the simulated vehicle. -->
+       master; sitl_task_operator may arm the simulated vehicle. -->
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
   <arg name="allow_auto_arm" default="true"/>
+  <arg name="auto_enable_delay" default="8.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
   <arg name="vehicle_sdf"
        default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
@@ -51,15 +52,19 @@
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
 
-  <node pkg="mine_uav_control" type="task1_sitl_adapter.py"
-        name="task1_sitl_adapter" output="screen" required="true">
+  <!-- Simulation-only localization contract. This node never arms PX4 or
+       emulates RC input. -->
+  <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
+        name="sitl_localization_adapter" output="screen" required="true"/>
+
+  <!-- Simulation-only pilot procedure. Sensor and planner data do not pass
+       through this node. -->
+  <node pkg="mine_uav_control" type="sitl_task_operator.py"
+        name="sitl_task_operator" output="screen" required="true">
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
-    <param name="simulate_manual_takeoff" value="true"/>
     <param name="takeoff_height" value="1.5"/>
     <param name="takeoff_hover_duration" value="1.0"/>
-    <param name="sensor_range" value="10.0"/>
-    <param name="publish_analytic_cloud" value="false"/>
-    <param name="auto_enable_delay" value="8.0"/>
+    <param name="auto_enable_delay" value="$(arg auto_enable_delay)"/>
   </node>
 
   <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
@@ -87,9 +92,16 @@
     <param name="force_goaf_task" value="true"/>
   </node>
 
+  <!-- Planning-map lifecycle follows CH7. /Odometry remains continuously
+       available to the scheduler and PX4-facing localization path. -->
+  <node pkg="mine_uav_control" type="task1_perception_gate"
+        name="task1_perception_gate" output="screen" required="true"/>
+
   <node pkg="mine_uav_control" type="super_exploration_decider"
         name="super_exploration_decider" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
+    <param name="cloud_topic" value="/mine_uav/task1/cloud_registered"/>
+    <param name="odom_topic" value="/mine_uav/task1/odometry"/>
     <param name="frontier_search_radius" value="$(arg frontier_search_radius)"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
     <param name="max_map_radius" value="$(arg decider_max_map_radius)"/>
@@ -134,7 +146,7 @@
   <node pkg="super_planner" type="fsm_node" name="fsm_node"
         output="screen" required="true">
     <param name="config_path"
-           value="$(find super_planner)/config/click_smooth_ros1.yaml"/>
+           value="$(find mine_uav_control)/config/super_task1.yaml"/>
   </node>
 
   <!-- POSCTL requires live RC/manual-control input. AUTO.LOITER provides a

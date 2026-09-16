@@ -55,6 +55,22 @@ CH340/MAVROS链路的波特率。QGC、MAVROS或串口终端同一时间只能�
 
 ## 任务一真实闭环
 
+### 代码职责边界
+
+任务一现在将原始定位链路和任务规划感知链路分开。`task1_perception_gate` 只在任务一
+由CH7开启且视觉定位健康时，把 `/cloud_registered`、`/Odometry` 转发到
+`/mine_uav/task1/cloud_registered`、`/mine_uav/task1/odometry`；原始 `/Odometry` 仍持续
+供 `fastlio_px4_vision_bridge` 和调度器使用。这样任务开始前的起飞平台/机体回波不会
+污染SUPER的ROG-Map，但不会中断PX4定位。
+
+SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只做定位适配）、
+`sitl_task_operator.py`（只模拟飞手起飞/CH7）和 `gazebo_mid360_fastlio_adapter.py`
+（只做仿真雷达点云）。详细职责和数据流见
+[`docs/task1_architecture.md`](docs/task1_architecture.md)。
+
+任务一的SUPER参数现在由项目自己的 `config/super_task1.yaml` 管理，真机和SITL不再依赖
+直接修改SUPER上游的 `click_smooth_ros1.yaml`。
+
 ### MID360 与 NUC 的固定地址
 
 MID360 雷达地址固定为 `192.168.1.157`，NUC 专用雷达网口 `enp89s0` 已建立

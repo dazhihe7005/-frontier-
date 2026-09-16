@@ -28,6 +28,13 @@
          enable/start switch. Restore false when task two is brought back. -->
     <arg name="force_goaf_task" value="true"/>
   </include>
+
+  <!-- Raw Fast-LIO2 remains available to PX4 localization at all times. Only
+       task-gated samples enter the decision/planning map, so ground takeoff
+       returns cannot contaminate a new exploration mission. -->
+  <node pkg="mine_uav_control" type="task1_perception_gate"
+        name="task1_perception_gate" output="screen" required="true"/>
+
   <include file="$(find mine_uav_control)/launch/super_exploration_decider.launch">
     <!-- Laboratory procedure: manual hover first, then CH7 low->high starts
          a fresh task and captures home from the synchronized pose. -->
@@ -38,7 +45,7 @@
     <node pkg="super_planner" type="fsm_node" name="fsm_node"
           output="screen" required="true">
       <param name="config_path"
-             value="$(find super_planner)/config/click_smooth_ros1.yaml"/>
+             value="$(find mine_uav_control)/config/super_task1.yaml"/>
     </node>
   </group>
 
