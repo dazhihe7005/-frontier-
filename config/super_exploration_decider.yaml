@@ -71,6 +71,7 @@ forward_goal_handover_distance: 1.2
 forward_lookahead_distance: 8.0
 forward_lookahead_step: 0.5
 cruise_height_above_home: 0.0
+return_breadcrumb_spacing: 4.0
 # Only points near the vehicle height count as wall-direction evidence. This
 # prevents a low-flying vehicle from classifying the mine ceiling as a frontal
 # obstacle while preserving side-wall returns around the lidar horizon.

@@ -28,6 +28,7 @@ class GazeboMid360FastlioAdapter:
         self.global_topic = rospy.get_param(
             "~global_topic", "/mine_uav/sitl/global_cloud"
         )
+        self.free_ray_topic = rospy.get_param("~free_ray_topic", "")
         self.sensor_offset = rospy.get_param("~sensor_offset", [0.0, 0.0, 0.14])
         if not isinstance(self.sensor_offset, list) or len(self.sensor_offset) != 3:
             raise rospy.ROSInitException("~sensor_offset must contain [x, y, z]")
@@ -67,6 +68,10 @@ class GazeboMid360FastlioAdapter:
 
         self.registered_pub = rospy.Publisher(
             self.output_topic, PointCloud2, queue_size=2
+        )
+        self.free_ray_pub = (
+            rospy.Publisher(self.free_ray_topic, PointCloud2, queue_size=2)
+            if self.free_ray_topic else None
         )
         self.global_pub = rospy.Publisher(
             self.global_topic, PointCloud2, queue_size=1, latch=True
@@ -155,6 +160,7 @@ class GazeboMid360FastlioAdapter:
         )
 
         registered = []
+        free_ray_endpoints = []
         filtered_self = 0
         for index, raw_point in enumerate(cloud.points):
             if index % self.point_stride:
@@ -166,6 +172,15 @@ class GazeboMid360FastlioAdapter:
             if range_squared < self.min_range * self.min_range:
                 continue
             if range_squared > self.max_range * self.max_range:
+                # Gazebo's block-laser plugin encodes a no-return beam as a
+                # finite point beyond the configured sensor range (typically
+                # 70 m for this 30 m sensor). The regular obstacle cloud must
+                # never contain it, but the traversed portion is useful
+                # free-space evidence for the simulator's decision map.
+                if self.free_ray_pub is not None and index % 4 == 0:
+                    scale = (self.max_range - 0.5) / math.sqrt(range_squared)
+                    rotated = self._rotate(rotation, tuple(scale * v for v in point))
+                    free_ray_endpoints.append(tuple(origin[i] + rotated[i] for i in range(3)))
                 continue
             # Gazebo's generic ray sensor can see the Iris fuselage/landing
             # gear because it has no Livox-style self-return suppression.  A
@@ -207,6 +222,10 @@ class GazeboMid360FastlioAdapter:
             self.registered_pub.publish(
                 point_cloud2.create_cloud_xyz32(header, registered)
             )
+            if self.free_ray_pub is not None and free_ray_endpoints:
+                self.free_ray_pub.publish(
+                    point_cloud2.create_cloud_xyz32(header, free_ray_endpoints)
+                )
         except rospy.ROSException as error:
             # A sensor callback can finish after roslaunch has already closed
             # publishers. Suppress only that normal shutdown race.

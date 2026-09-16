@@ -405,6 +405,13 @@ roslaunch mine_uav_control mission_scheduler.launch
 
 #### 任务一 PX4/Gazebo 完整动态闭环
 
+当前 40×40×30 m 入口平台场景的最新版 **尚未通过安全验收**。仿真自由射线修复后，
+run03 完成了地图闭合、返航及 AUTO.LOITER，但返航横向偏移达 9.27 m；按实际
+去程反向分段的 run04 偏移降到 2.30 m，却在入口附近触发 `HEIGHT_GEOFENCE`，
+未完成返航。下方较早轮次的“闭环通过”仅是当时不同场景的历史结果，不能作为
+当前 40 m 场景或真机放飞依据。证据与未解决项见
+[`docs/task1_40m_sitl_ab_report_2026-09-16.md`](docs/task1_40m_sitl_ab_report_2026-09-16.md)。
+
 `task1_px4_sitl.launch` 已将采空区世界、带 MID360 风格三维雷达的 Iris、PX4 SITL、
 Gazebo、MAVROS、任务调度器、自主决策器、SUPER 和 PX4 指令桥合并为一条动态闭环。
 Gazebo Ray 传感器输出机体系 `/mine_uav/sitl/mid360/points`，注册适配器根据PX4实时姿态

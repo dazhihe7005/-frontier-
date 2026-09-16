@@ -73,6 +73,7 @@
     <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
     <param name="odom_topic" value="/Odometry"/>
     <param name="output_topic" value="/cloud_registered"/>
+    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
     <param name="world_frame" value="camera_init"/>
     <rosparam param="sensor_offset">[0.0, 0.0, 0.14]</rosparam>
     <param name="self_filter_enable" value="true"/>
@@ -102,6 +103,7 @@
         name="super_exploration_decider" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
     <param name="cloud_topic" value="/mine_uav/task1/cloud_registered"/>
+    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
     <param name="odom_topic" value="/mine_uav/task1/odometry"/>
     <param name="frontier_search_radius" value="$(arg frontier_search_radius)"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
