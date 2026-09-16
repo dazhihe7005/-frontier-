@@ -261,16 +261,18 @@ git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid3
 git apply --unidiff-zero /path/to/frontier-upload/patches/fast_lio2_sensor_restart.patch
 ```
 
-当前SUPER工作区还需要应用ROS1/Fast-LIO2任务门控补丁和优化器诊断补丁：
+当前SUPER工作区以港大官方提交 `2ad3419` 为核心基线，只应用指令坐标帧适配补丁：
 
 ```bash
 cd /path/to/SUPER
 git apply /path/to/frontier-upload/patches/super_ros1_fastlio_task_gate.patch
-git apply /path/to/frontier-upload/patches/super_optimizer_diagnostics.patch
 ```
 
-第二个补丁修正备用轨迹采样时间变量，并把优化失败细分为位置、速度、加速度、角速度和
-推力残差。它不放宽动力学限制，也不改变已验证的二次备用轨迹优化流程。
+任务点云、里程计话题、三维目标高度及任务动力学参数全部由项目自己的
+`config/super_task1.yaml` 注入，不修改SUPER官方示例配置。以下三个历史补丁只保留作审计，
+默认不得应用：`super_optimizer_diagnostics.patch`、`super_preserve_reachable_goal.patch`、
+`super_remove_duplicate_backup_optimize.patch`。其中诊断补丁还混有 `out_t → eval_t` 的算法变化，
+后续必须拆分后才能单变量验证。
 
 注意：在正式飞行前仍必须通过移动机体验证 PX4 确实融合外部视觉、标定
 雷达 IMU 坐标与飞行器 FRD 机体系安装关系，并确认 `EKF2_EV_CTRL` 的高度源选择。
