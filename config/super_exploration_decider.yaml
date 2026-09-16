@@ -65,7 +65,7 @@ forward_progress_weight: 2.0
 forward_lateral_penalty: 2.0
 forward_height_penalty: 1.0
 # Hand the next look-ahead goal to SUPER before reaching a full stop.
-forward_goal_handover_distance: 3.0
+forward_goal_handover_distance: 1.2
 # Forward mode samples a known-free task-level target this far ahead. The
 # planner remains responsible for collision-free local deviations.
 forward_lookahead_distance: 8.0

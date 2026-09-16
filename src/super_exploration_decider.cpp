@@ -1348,6 +1348,8 @@ void SuperExplorationDecider::publishGoal(
   current_goal_.header.stamp = ros::Time::now();
   goal_publisher_.publish(current_goal_);
   goal_sent_time_ = current_goal_.header.stamp;
+  active_goal_initial_distance_ = std::sqrt(squaredDistance(
+      current_pose_.pose.position, current_goal_.pose.position));
   have_active_goal_ = true;
   exploration_started_ = true;
   ROS_INFO("New SUPER goal (%s): %.2f %.2f %.2f", reason.c_str(),
@@ -1654,7 +1656,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const bool forward_goal_handover =
         exploration_phase_ == ExplorationPhase::kForwardPriority &&
         !front_obstacle_confirmed && !active_goal_is_end_approach_ &&
-        distance <= forward_goal_handover_distance_;
+        distance <= forward_goal_handover_distance_ &&
+        distance <= active_goal_initial_distance_ - 0.5;
     const bool preempt_blocked_forward_goal =
         exploration_phase_ == ExplorationPhase::kFrontierFallback &&
         front_obstacle_confirmed && !active_goal_is_end_approach_ &&
@@ -1775,6 +1778,7 @@ void SuperExplorationDecider::clearMissionState() {
   voxels_.clear();
   covered_goals_.clear();
   current_goal_ = geometry_msgs::PoseStamped();
+  active_goal_initial_distance_ = 0.0;
   have_data_ = false;
   have_home_ = false;
   have_active_goal_ = false;

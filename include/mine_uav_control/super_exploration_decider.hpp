@@ -178,6 +178,7 @@ class SuperExplorationDecider {
   geometry_msgs::PoseStamped current_pose_;
   geometry_msgs::PoseStamped home_pose_;
   geometry_msgs::PoseStamped current_goal_;
+  double active_goal_initial_distance_{0.0};
   ros::Time last_sync_time_;
   ros::Time first_data_time_;
   ros::Time last_frontier_time_;
@@ -265,7 +266,7 @@ class SuperExplorationDecider {
   double forward_progress_weight_{2.0};
   double forward_lateral_penalty_{2.0};
   double forward_height_penalty_{1.0};
-  double forward_goal_handover_distance_{3.0};
+  double forward_goal_handover_distance_{1.2};
   double forward_lookahead_distance_{8.0};
   double forward_lookahead_step_{0.5};
   double cruise_height_above_home_{0.0};
