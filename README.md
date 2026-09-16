@@ -73,16 +73,16 @@ SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只
 
 ### SITL局部轨迹优化说明
 
-仿真中发现的局部轨迹问题分为两类处理：`fsm.cpp` 只在目标点确实落入占据栅格或地图外时
-进行最近可行栅格修正；对已经由任务决策器验证过的目标保留连续坐标，避免每次重规划把例如
-`z=1.495 m` 吸附成 `z=1.25 m`。同时删除备份轨迹优化在同一轮中的重复调用，避免无效的
-L-BFGS 计算放大日志、延迟和轨迹切换。对应源码补丁见
+当前运行版在官方SUPER `2ad3419` 上叠加了接口适配、诊断、参数和核心行为改动。
 `patches/super_preserve_reachable_goal.patch` 与
-`patches/super_remove_duplicate_backup_optimize.patch`。
+`patches/super_remove_duplicate_backup_optimize.patch` 会改变官方目标修正和备份轨迹优化语义，
+目前没有充分A/B证据证明应长期保留，不能再直接称为已验证修复。公平对照还发现SUPER在轨迹
+结束但实际位置距目标超过硬编码的0.1 m时，会对同一目标再次从静止规划，这更符合“接近目标后
+长时间反复规划”的现象。详细提交对照、A/B证据和后续隔离顺序见
+[`docs/super_version_audit.md`](docs/super_version_audit.md)。
 
-这两项修正不改变PX4定位、任务完成/返航判据和真实机安全限幅。备份轨迹仍然保留，主轨迹
-优化失败时仍按SUPER原有安全逻辑处理；后续应继续用带障碍的SITL检查轨迹曲率、速度、加速度
-和最小障碍距离，不能仅凭日志中的`ReplanOnce succeed`判定真机可飞。
+在完成隔离回归前，不能仅凭日志中的`ReplanOnce succeed`判定真机可飞，也不能通过扩大高度
+围栏或继续叠加入口过滤来掩盖局部轨迹问题。
 
 ### MID360 与 NUC 的固定地址
 
