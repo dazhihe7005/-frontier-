@@ -21,7 +21,7 @@ max_map_radius: 40.0
 raycast_max_range: 30.0
 raycast_enable: true
 max_points_per_cloud: 5000
-vehicle_radius: 0.35
+vehicle_radius: 0.40
 
 # Home在CH7允许任务时的空中悬停点捕获。默认保持该高度，只允许小幅向上
 # 调整；不得把“相对home高度”误当成“相对地面高度”再叠加一次起飞高度。
