@@ -109,10 +109,11 @@ rog_map:
   map_size: [50, 50, 6]
   fix_map_origin: [0, 0, 0]
   frontier_extraction_en: false
-  # PX4 command geofence limits the vehicle reference point to z<=1.8 m.
-  # ROG-Map's virtual surface includes inflation internally; 2.5 m keeps a
-  # planning ceiling above the 1.5 m hover without inviting a large climb.
-  # Keep clearance inflation from collapsing the 1.5--1.8 m task flight band.
+  # WARNING: This is a map bound in camera_init, not the PX4 flight fence.
+  # With the current inflation settings, input 4.0 allows getGridType(Vec3f)
+  # up to roughly z=2.5; the bridge separately caps aligned PX4-local z=1.8.
+  # A 3.2 trial kept this room flyable but raised optimizer warnings (run12).
+  # Keep the run10/11 baseline until planner and bridge share a dynamic bound.
   virtual_ceil_height: 4.0
   virtual_ground_height: -3.5
   load_pcd_en: false
