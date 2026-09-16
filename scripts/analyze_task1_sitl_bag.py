@@ -13,7 +13,7 @@ import rosbag
 
 
 TOPICS = [
-    "/goal",
+    "/mine_uav/super/goal_command",
     "/mavros/local_position/pose",
     "/mavros/local_position/velocity_local",
     "/mavros/state",
@@ -110,29 +110,99 @@ def longest_below(samples, threshold):
     return longest
 
 
+def analyze_goal_lifecycle_events(events, grace=0.02):
+    """Count outputs after a matching cancel and before the next SET.
+
+    Events are (receipt_time, kind, goal_id) in bag order. The only tolerated
+    post-cancel command is one already in flight within the 20 ms grace.
+    PlanFromRest logs never have grace: starting a new plan after cancellation
+    is precisely the regression this metric is meant to expose.
+    """
+    active_goal_id = None
+    cancel_time = None
+    grace_used = False
+    stale_commands = 0
+    stale_plans = 0
+    cancel_count = 0
+    ignored_stale_cancels = 0
+    silence_latency = 0.0
+    for stamp, kind, goal_id in events:
+        if kind == "set":
+            if goal_id:
+                active_goal_id = goal_id
+                cancel_time = None
+                grace_used = False
+        elif kind == "cancel":
+            if active_goal_id is not None and (
+                goal_id == 0 or goal_id == active_goal_id
+            ):
+                active_goal_id = None
+                cancel_time = stamp
+                grace_used = False
+                cancel_count += 1
+            elif goal_id != 0:
+                ignored_stale_cancels += 1
+        elif kind in ("pos_cmd", "plan_from_rest") and cancel_time is not None:
+            silence_latency = max(silence_latency, stamp - cancel_time)
+            if kind == "plan_from_rest":
+                stale_plans += 1
+            elif stamp - cancel_time >= grace or grace_used:
+                stale_commands += 1
+            else:
+                grace_used = True
+    return {
+        "active_goal_id": active_goal_id,
+        "cancel_count": cancel_count,
+        "ignored_stale_cancels": ignored_stale_cancels,
+        "stale_position_commands": stale_commands,
+        "stale_plan_from_rest_calls": stale_plans,
+        "cancel_to_silence_latency": silence_latency,
+    }
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Analyze task-one SITL completion, safety and fluidity"
     )
     parser.add_argument("bag", help="task-one rosbag path")
     parser.add_argument("--json-output", help="optional JSON report path")
-    parser.add_argument("--min-median-speed", type=float, default=1.5)
-    parser.add_argument("--max-low-speed-duration", type=float, default=1.0)
+    parser.add_argument(
+        "--profile", choices=("legacy_fast", "lab_1m"), default="legacy_fast",
+        help="lab_1m evaluates moving phases at the configured 1 m/s ceiling",
+    )
+    parser.add_argument("--min-median-speed", type=float)
+    parser.add_argument("--max-low-speed-duration", type=float)
     parser.add_argument("--max-cross-track", type=float, default=1.5)
+    parser.add_argument("--max-mission-altitude", type=float,
+                        help="maximum local-frame z during task-one mission")
     parser.add_argument("--max-return-error", type=float, default=1.0)
     parser.add_argument("--max-planned-speed", type=float, default=2.05)
     parser.add_argument("--max-planned-acceleration", type=float, default=1.60)
     parser.add_argument("--max-actual-speed", type=float, default=3.0)
     parser.add_argument("--min-odom-rate", type=float, default=5.0)
     parser.add_argument("--min-path-length", type=float, default=45.0)
-    parser.add_argument("--max-offboard-duration", type=float, default=90.0)
+    parser.add_argument("--max-offboard-duration", type=float)
     parser.add_argument(
         "--max-super-failures",
         type=int,
         default=-1,
         help="fail above this /rosout_agg warning count; -1 only reports it",
     )
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    defaults = {
+        "legacy_fast": (1.5, 1.0, 90.0),
+        "lab_1m": (0.7, 1.5, 180.0),
+    }
+    median_speed, low_duration, offboard_duration = defaults[arguments.profile]
+    if arguments.min_median_speed is None:
+        arguments.min_median_speed = median_speed
+    if arguments.max_low_speed_duration is None:
+        arguments.max_low_speed_duration = low_duration
+    if arguments.max_offboard_duration is None:
+        arguments.max_offboard_duration = offboard_duration
+    if arguments.max_mission_altitude is None and arguments.profile == "lab_1m":
+        arguments.max_mission_altitude = 1.8
+    return arguments
 
 
 def analyze(path):
@@ -154,6 +224,8 @@ def analyze(path):
     odom_stamps = []
     super_failures = []
     super_failure_breakdown = Counter()
+    lifecycle_events = []
+    lifecycle_command_count = 0
     rosout_message_count = 0
     finished_true = False
     last_state = None
@@ -170,6 +242,7 @@ def analyze(path):
                     (stamp, vector_norm(linear.x, linear.y, linear.z))
                 )
             elif topic == "/planning/pos_cmd":
+                lifecycle_events.append((stamp, "pos_cmd", 0))
                 velocity = message.velocity
                 acceleration = message.acceleration
                 planned_speeds.append(
@@ -183,9 +256,14 @@ def analyze(path):
                         ),
                     )
                 )
-            elif topic == "/goal":
-                point = message.pose.position
-                goals.append((stamp, point.x, point.y, point.z))
+            elif topic == "/mine_uav/super/goal_command":
+                lifecycle_command_count += 1
+                if message.command == message.SET_GOAL:
+                    point = message.goal.position
+                    goals.append((stamp, point.x, point.y, point.z))
+                    lifecycle_events.append((stamp, "set", message.goal_id))
+                elif message.command == message.CANCEL_GOAL:
+                    lifecycle_events.append((stamp, "cancel", message.goal_id))
             elif topic == "/mavros/state":
                 state = (message.mode, bool(message.armed))
                 if state != last_state:
@@ -208,6 +286,8 @@ def analyze(path):
             elif topic == "/rosout_agg":
                 rosout_message_count += 1
                 text = getattr(message, "msg", "")
+                if "PlanFromRest" in text:
+                    lifecycle_events.append((stamp, "plan_from_rest", 0))
                 for category, marker in SUPER_FAILURE_CATEGORY_MARKERS:
                     if marker in text:
                         super_failures.append((stamp, text))
@@ -279,9 +359,33 @@ def analyze(path):
             )
 
     speed_values = [value for _stamp, value in active_velocities]
+    first_goal_time = goals[0][0] if goals else None
+    mission_heights = [
+        sample[3] for sample in active_poses
+        if first_goal_time is not None and sample[0] >= first_goal_time
+    ]
+    closure_wait_time = next(
+        (stamp for stamp, text in statuses
+         if first_goal_time is not None and stamp > first_goal_time
+         and text.startswith("WAIT_MAP_CLOSURE")), None
+    )
+    return_start_time = next(
+        (stamp for stamp, text in statuses if text.startswith("RETURNING")), None
+    )
+    exploration_velocities = [
+        sample for sample in velocities
+        if first_goal_time is not None and closure_wait_time is not None
+        and first_goal_time + 2.0 <= sample[0] < closure_wait_time
+    ]
+    return_velocities = [
+        sample for sample in velocities
+        if return_start_time is not None and complete_time is not None
+        and return_start_time + 2.0 <= sample[0] <= complete_time - 2.0
+    ]
     planned_speed_values = [value for _stamp, value in planned_speeds]
     planned_acceleration_values = [value for _stamp, value in planned_accelerations]
     final_coverage = coverage[-1][1] if coverage else ""
+    lifecycle = analyze_goal_lifecycle_events(lifecycle_events)
 
     return {
         "bag": path,
@@ -302,11 +406,23 @@ def analyze(path):
         "final_coverage": final_coverage,
         "goal_count": len(goals),
         "goals": goals,
+        "goal_lifecycle_available": lifecycle_command_count > 0,
+        "goal_lifecycle": lifecycle,
         "path_length": path_length,
         "return_horizontal_error": return_error,
         "cross_track_max": cross_track_max,
+        "mission_altitude_max": max(mission_heights) if mission_heights else None,
+        "mission_altitude_min": min(mission_heights) if mission_heights else None,
         "speed_mean": mean(speed_values),
         "speed_median": percentile(speed_values, 0.5),
+        "exploration_speed_median": percentile(
+            [value for _stamp, value in exploration_velocities], 0.5
+        ),
+        "return_speed_median": percentile(
+            [value for _stamp, value in return_velocities], 0.5
+        ),
+        "exploration_low_speed_max": longest_below(exploration_velocities, 0.2),
+        "return_low_speed_max": longest_below(return_velocities, 0.2),
         "speed_p90": percentile(speed_values, 0.9),
         "speed_max": max(speed_values) if speed_values else None,
         "low_speed_fraction": (
@@ -336,6 +452,22 @@ def analyze(path):
 
 
 def evaluate(report, arguments):
+    if arguments.profile == "lab_1m":
+        phase_speeds = (
+            report["exploration_speed_median"],
+            report["return_speed_median"],
+        )
+        moving_speed_median = (
+            min(phase_speeds) if all(value is not None for value in phase_speeds)
+            else None
+        )
+        unexpected_low_speed = max(
+            report["exploration_low_speed_max"], report["return_low_speed_max"]
+        )
+    else:
+        moving_speed_median = report["speed_median"]
+        unexpected_low_speed = report["longest_speed_below_0_2"]
+    report["profile"] = arguments.profile
     checks = {
         "entered_offboard": report["entered_offboard"],
         "mission_complete": report["mission_complete"],
@@ -345,15 +477,18 @@ def evaluate(report, arguments):
         ],
         "no_command_faults": not report["command_faults"],
         "at_least_three_goals": report["goal_count"] >= 3,
+        "goal_lifecycle_recorded": report["goal_lifecycle_available"],
+        "goal_cancel_observed": report["goal_lifecycle"]["cancel_count"] > 0,
+        "no_stale_position_commands": report["goal_lifecycle"]["stale_position_commands"] == 0,
+        "no_stale_plan_from_rest": report["goal_lifecycle"]["stale_plan_from_rest_calls"] == 0,
         "minimum_path_length": report["path_length"] >= arguments.min_path_length,
         "return_horizontal_error": report["return_horizontal_error"] is not None
         and report["return_horizontal_error"] <= arguments.max_return_error,
         "cross_track_limit": report["cross_track_max"] is not None
         and report["cross_track_max"] <= arguments.max_cross_track,
-        "median_cruise_speed": report["speed_median"] is not None
-        and report["speed_median"] >= arguments.min_median_speed,
-        "low_speed_duration": report["longest_speed_below_0_2"]
-        <= arguments.max_low_speed_duration,
+        "median_cruise_speed": moving_speed_median is not None
+        and moving_speed_median >= arguments.min_median_speed,
+        "low_speed_duration": unexpected_low_speed <= arguments.max_low_speed_duration,
         "actual_speed_limit": report["speed_max"] is not None
         and report["speed_max"] <= arguments.max_actual_speed,
         "odometry_rate": report["odom_rate"] is not None
@@ -366,6 +501,11 @@ def evaluate(report, arguments):
         "offboard_duration": report["offboard_duration"] is not None
         and report["offboard_duration"] <= arguments.max_offboard_duration,
     }
+    if arguments.max_mission_altitude is not None:
+        checks["mission_altitude_limit"] = (
+            report["mission_altitude_max"] is not None
+            and report["mission_altitude_max"] <= arguments.max_mission_altitude
+        )
     if arguments.max_super_failures >= 0:
         checks["super_failure_logs_available"] = report["rosout_available"]
         checks["super_failure_limit"] = report["rosout_available"] and (
@@ -386,7 +526,7 @@ def format_value(value, suffix=""):
 
 
 def print_summary(report):
-    print(f"TASK1_SITL_ACCEPTANCE: {report['verdict']}")
+    print(f"TASK1_SITL_ACCEPTANCE [{report['profile']}]: {report['verdict']}")
     print(
         "completion: offboard=%s complete=%s map_closure=%s auto_loiter=%s"
         % (
@@ -397,12 +537,14 @@ def print_summary(report):
         )
     )
     print(
-        "motion: duration=%s path=%s return_error=%s cross_track=%s"
+        "motion: duration=%s path=%s return_error=%s cross_track=%s "
+        "mission_z_max=%s"
         % (
             format_value(report["offboard_duration"], "s"),
             format_value(report["path_length"], "m"),
             format_value(report["return_horizontal_error"], "m"),
             format_value(report["cross_track_max"], "m"),
+            format_value(report["mission_altitude_max"], "m"),
         )
     )
     print(
@@ -415,6 +557,17 @@ def print_summary(report):
             format_value(report["longest_speed_below_0_2"], "s"),
         )
     )
+    if report["profile"] == "lab_1m":
+        print(
+            "moving_phases: exploration_median=%s return_median=%s "
+            "exploration_low<0.2=%s return_low<0.2=%s"
+            % (
+                format_value(report["exploration_speed_median"], "m/s"),
+                format_value(report["return_speed_median"], "m/s"),
+                format_value(report["exploration_low_speed_max"], "s"),
+                format_value(report["return_low_speed_max"], "s"),
+            )
+        )
     super_failure_text = (
         str(report["super_failure_log_count"])
         if report["rosout_available"]
@@ -429,6 +582,18 @@ def print_summary(report):
             format_value(report["odom_rate"], "Hz"),
             len(report["command_faults"]),
             super_failure_text,
+        )
+    )
+    lifecycle = report["goal_lifecycle"]
+    print(
+        "goal_lifecycle: recorded=%s cancels=%d stale_pos_cmd=%d "
+        "stale_plan_from_rest=%d cancel_to_silence=%s"
+        % (
+            report["goal_lifecycle_available"],
+            lifecycle["cancel_count"],
+            lifecycle["stale_position_commands"],
+            lifecycle["stale_plan_from_rest_calls"],
+            format_value(lifecycle["cancel_to_silence_latency"], "s"),
         )
     )
     if report["super_failure_breakdown"]:

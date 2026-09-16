@@ -8,6 +8,11 @@
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="world_geometry_filter" value="true"/>
+    <arg name="sensor_offset_z" value="0.60"/>
+    <!-- This is only the latched display/export cloud. Planning still sees
+         every accepted /cloud_registered scan at its original resolution. -->
+    <arg name="global_cloud_voxel_size" value="0.30"/>
     <arg name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <arg name="world"
          value="$(find mine_uav_control)/worlds/goaf_40x40x30_platform.world"/>
@@ -46,7 +51,7 @@
     <arg name="map_closure_stable_time" value="4.0"/>
     <arg name="map_closure_growth_voxels" value="700"/>
     <arg name="lidar_max_range" value="30.0"/>
-    <arg name="max_global_points" value="250000"/>
+    <arg name="max_global_points" value="400000"/>
 
     <arg name="bridge_max_horizontal_radius" value="58.0"/>
     <arg name="bridge_min_height" value="-2.0"/>

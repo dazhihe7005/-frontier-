@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <geometry_msgs/PoseStamped.h>
+#include <super_planner/GoalCommand.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -52,6 +53,7 @@ class SuperExplorationDecider {
                           const ros::NodeHandle& private_nh);
 
  private:
+  friend class SuperExplorationDeciderTestPeer;
   using Cloud = sensor_msgs::PointCloud2;
   using Odom = nav_msgs::Odometry;
   using SyncPolicy =
@@ -98,6 +100,7 @@ class SuperExplorationDecider {
 
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
+  void freeRayCallback(const Cloud::ConstPtr& cloud);
   void decisionTimerCallback(const ros::TimerEvent& event);
   void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
@@ -133,6 +136,7 @@ class SuperExplorationDecider {
   bool selectAndPublishFrontier(
       const std::vector<FrontierCandidate>& candidates);
   bool publishForwardLookaheadGoal(const VoxelSet& reachable);
+  bool tryForwardHandover(const VoxelSet& reachable);
   bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
   bool isForwardCandidate(const FrontierCandidate& candidate) const;
   double candidateHeadingAlignment(const FrontierCandidate& candidate) const;
@@ -145,6 +149,8 @@ class SuperExplorationDecider {
   const char* explorationPhaseName() const;
   void publishGoal(const geometry_msgs::PoseStamped& goal,
                    const std::string& reason);
+  void cancelActiveGoal(const std::string& reason,
+                        bool unconditional = false);
   void beginReturnHome(const std::string& reason);
   void publishStatus(const std::string& state,
                      const std::string& detail = std::string());
@@ -161,6 +167,7 @@ class SuperExplorationDecider {
   ros::Subscriber return_request_subscriber_;
   ros::Subscriber mission_enable_subscriber_;
   ros::Subscriber battery_subscriber_;
+  ros::Subscriber free_ray_subscriber_;
   ros::Publisher goal_publisher_;
   ros::Publisher status_publisher_;
   ros::Publisher finished_publisher_;
@@ -174,10 +181,15 @@ class SuperExplorationDecider {
 
   std::unordered_map<VoxelKey, uint8_t, VoxelKeyHash> voxels_;
   std::vector<geometry_msgs::Point> covered_goals_;
+  std::vector<geometry_msgs::PoseStamped> outbound_breadcrumbs_;
+  std::vector<geometry_msgs::PoseStamped> return_waypoints_;
+  std::size_t return_waypoint_index_{0};
 
   geometry_msgs::PoseStamped current_pose_;
   geometry_msgs::PoseStamped home_pose_;
   geometry_msgs::PoseStamped current_goal_;
+  uint64_t next_goal_id_{1};
+  uint64_t active_goal_id_{0};
   double active_goal_initial_distance_{0.0};
   ros::Time last_sync_time_;
   ros::Time first_data_time_;
@@ -218,7 +230,7 @@ class SuperExplorationDecider {
 
   std::string cloud_topic_;
   std::string odom_topic_;
-  std::string goal_topic_;
+  std::string goal_command_topic_;
   std::string world_frame_;
   std::string return_request_topic_;
   std::string mission_enable_topic_;
@@ -249,6 +261,7 @@ class SuperExplorationDecider {
   double sync_slop_{0.08};
   double battery_return_threshold_{0.20};
   double return_home_height_offset_{0.0};
+  double return_breadcrumb_spacing_{4.0};
   double distance_weight_{0.35};
   double information_weight_{1.0};
   double heading_priority_weight_{4.0};
@@ -303,6 +316,7 @@ class SuperExplorationDecider {
   int max_reachable_voxels_{150000};
   int max_frontier_candidates_{500};
   bool raycast_enable_{true};
+  std::string free_ray_topic_;
   bool strict_cloud_frame_{true};
   bool require_three_wall_completion_{false};
   bool use_map_closure_completion_{true};

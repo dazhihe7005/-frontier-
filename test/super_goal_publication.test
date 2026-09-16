@@ -1,0 +1,4 @@
+<launch>
+  <test test-name="super_goal_publication" pkg="mine_uav_control"
+        type="test_super_goal_publication" time-limit="30"/>
+</launch>

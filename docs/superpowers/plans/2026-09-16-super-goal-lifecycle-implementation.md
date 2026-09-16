@@ -205,6 +205,8 @@ git commit -m "test: guard SUPER goal epochs"
 **Files:**
 - Modify: `super_planner/include/fsm/fsm.h`
 - Modify: `super_planner/src/super_core/fsm.cpp`
+- Modify: `super_planner/include/super_core/super_planner.h`
+- Modify: `super_planner/src/super_core/super_planner.cpp`
 - Create: `super_planner/test/fsm_goal_cancellation_test.cpp`
 - Modify: both ROS1 CMake files
 
@@ -249,9 +251,9 @@ machine_state_ = WAIT_GOAL;
 
 Then clear the visualized path. A stale specific ID returns `false` without state mutation.
 
-- [ ] **Step 5: Gate expensive planner results by epoch**
+- [ ] **Step 5: Gate the planner's actual trajectory commit by epoch**
 
-In `callMainFsmOnce` and `callReplanOnce`: snapshot token and goal; run `PlanFromRest` or `ReplanOnce` outside the guard; place every result-driven state update and `publishPolyTraj()` inside `commitIfCurrent`. A rejected stale commit logs one throttled diagnostic and performs no mutation.
+In `callMainFsmOnce` and `callReplanOnce`: atomically snapshot the active token and its matching FSM goal; run expensive planning outside the lifecycle guard. Official `PlanFromRest` and `ReplanOnce` call `cmd_traj_info_.setTrajectory(...)` *before returning*; a post-return FSM check alone is unsafe. Extend the planner API with a narrowly scoped commit gate so its locally computed trajectory and corresponding committed state are installed only while the current token is validated under the lifecycle guard. If rejected, do not alter the shared command trajectory and do not publish it. After planner return, guard all result-driven FSM state changes and `publishPolyTraj()`. Record the epoch of the actually committed trajectory; the command timer must not sample or publish while no active goal exists or while the active epoch differs from the committed trajectory epoch. Keep lock order lifecycle → CmdTraj consistent; do not hold lifecycle during optimization. Add deterministic interleaving tests for cancel-during-plan and cancel-then-new-goal-before-old-plan-completes. A rejected stale commit logs one throttled diagnostic and performs no mutation.
 
 - [ ] **Step 6: Run SUPER lifecycle and guide-time tests**
 
@@ -260,7 +262,7 @@ Expected: cancellation and seven geometric-time tests pass. The documented ROGMa
 - [ ] **Step 7: Commit**
 
 ```bash
-git add super_planner/include/fsm/fsm.h super_planner/src/super_core/fsm.cpp   super_planner/test/fsm_goal_cancellation_test.cpp   super_planner/ros/ros1.CMakeLists.txt super_planner/CMakeLists.txt
+git add super_planner/include/fsm/fsm.h super_planner/src/super_core/fsm.cpp super_planner/include/super_core/super_planner.h super_planner/src/super_core/super_planner.cpp   super_planner/test/fsm_goal_cancellation_test.cpp   super_planner/ros/ros1.CMakeLists.txt super_planner/CMakeLists.txt
 git commit -m "fix: cancel stale SUPER planning epochs"
 ```
 

@@ -3,6 +3,9 @@
        master; sitl_task_operator may arm the simulated vehicle. -->
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
+  <arg name="world_geometry_filter" default="false"/>
+  <arg name="sensor_offset_z" default="0.14"/>
+  <arg name="global_cloud_voxel_size" default="0.20"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="8.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
@@ -73,15 +76,17 @@
     <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
     <param name="odom_topic" value="/Odometry"/>
     <param name="output_topic" value="/cloud_registered"/>
+    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
+    <param if="$(arg world_geometry_filter)" name="world_geometry_file" value="$(arg world)"/>
     <param name="world_frame" value="camera_init"/>
-    <rosparam param="sensor_offset">[0.0, 0.0, 0.14]</rosparam>
+    <rosparam param="sensor_offset" subst_value="true">[0.0, 0.0, $(arg sensor_offset_z)]</rosparam>
     <param name="self_filter_enable" value="true"/>
     <param name="self_filter_xy_radius" value="1.00"/>
     <param name="self_filter_z_min" value="-0.65"/>
     <param name="self_filter_z_max" value="0.25"/>
     <param name="min_range" value="0.30"/>
     <param name="max_range" value="$(arg lidar_max_range)"/>
-    <param name="voxel_size" value="0.20"/>
+    <param name="voxel_size" value="$(arg global_cloud_voxel_size)"/>
     <param name="max_global_points" value="$(arg max_global_points)"/>
   </node>
 
@@ -102,6 +107,7 @@
         name="super_exploration_decider" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/super_exploration_decider.yaml"/>
     <param name="cloud_topic" value="/mine_uav/task1/cloud_registered"/>
+    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
     <param name="odom_topic" value="/mine_uav/task1/odometry"/>
     <param name="frontier_search_radius" value="$(arg frontier_search_radius)"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
