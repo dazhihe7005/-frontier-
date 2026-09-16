@@ -35,6 +35,7 @@
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
   <arg name="bridge_min_height" default="-0.5"/>
   <arg name="bridge_max_height" default="1.8"/>
+  <arg name="bridge_height_clamp_tolerance" default="0.25"/>
   <arg name="require_mission_enable_edge" default="true"/>
 
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
@@ -160,6 +161,7 @@
     <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
     <arg name="min_height" value="$(arg bridge_min_height)"/>
     <arg name="max_height" value="$(arg bridge_max_height)"/>
+    <arg name="height_clamp_tolerance" value="$(arg bridge_height_clamp_tolerance)"/>
   </include>
 
   <group if="$(arg rviz)">

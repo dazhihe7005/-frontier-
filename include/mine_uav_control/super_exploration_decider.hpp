@@ -231,7 +231,7 @@ class SuperExplorationDecider {
 
   double voxel_resolution_{0.5};
   double max_map_radius_{40.0};
-  double raycast_max_range_{40.0};
+  double raycast_max_range_{30.0};
   double frontier_search_radius_{30.0};
   double max_exploration_radius_from_home_{35.0};
   double min_goal_distance_{2.0};
@@ -240,9 +240,9 @@ class SuperExplorationDecider {
   double no_frontier_timeout_{15.0};
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
-  double vehicle_radius_{0.35};
-  double min_observation_height_above_home_{0.5};
-  double max_observation_height_above_home_{2.5};
+  double vehicle_radius_{0.4};
+  double min_observation_height_above_home_{0.0};
+  double max_observation_height_above_home_{0.3};
   double data_timeout_{1.0};
   double decision_rate_{2.0};
   double sync_slop_{0.08};
@@ -268,17 +268,17 @@ class SuperExplorationDecider {
   double forward_goal_handover_distance_{3.0};
   double forward_lookahead_distance_{8.0};
   double forward_lookahead_step_{0.5};
-  double cruise_height_above_home_{0.8};
-  double directional_vertical_tolerance_{4.0};
+  double cruise_height_above_home_{0.0};
+  double directional_vertical_tolerance_{1.5};
   double directional_floor_exclusion_{0.5};
   double wall_coverage_bin_size_{1.0};
   double wall_coverage_min_depth_{8.0};
   double wall_coverage_end_min_depth_{12.0};
   double wall_coverage_min_ratio_{0.80};
-  double wall_coverage_side_min_distance_{2.0};
+  double wall_coverage_side_min_distance_{1.5};
   double wall_coverage_side_max_distance_{8.0};
   double wall_coverage_min_height_{0.3};
-  double wall_coverage_max_height_{3.2};
+  double wall_coverage_max_height_{3.0};
   double wall_coverage_end_min_span_{4.0};
   double wall_coverage_end_center_half_width_{1.0};
   double wall_coverage_end_approach_distance_{6.0};
@@ -302,9 +302,9 @@ class SuperExplorationDecider {
   int max_reachable_voxels_{150000};
   int max_frontier_candidates_{500};
   bool raycast_enable_{true};
-  bool strict_cloud_frame_{false};
-  bool require_three_wall_completion_{true};
-  bool use_map_closure_completion_{false};
+  bool strict_cloud_frame_{true};
+  bool require_three_wall_completion_{false};
+  bool use_map_closure_completion_{true};
   bool map_closure_require_front_boundary_{true};
 };
 
