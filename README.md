@@ -71,6 +71,19 @@ SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只
 任务一的SUPER参数现在由项目自己的 `config/super_task1.yaml` 管理，真机和SITL不再依赖
 直接修改SUPER上游的 `click_smooth_ros1.yaml`。
 
+### SITL局部轨迹优化说明
+
+仿真中发现的局部轨迹问题分为两类处理：`fsm.cpp` 只在目标点确实落入占据栅格或地图外时
+进行最近可行栅格修正；对已经由任务决策器验证过的目标保留连续坐标，避免每次重规划把例如
+`z=1.495 m` 吸附成 `z=1.25 m`。同时删除备份轨迹优化在同一轮中的重复调用，避免无效的
+L-BFGS 计算放大日志、延迟和轨迹切换。对应源码补丁见
+`patches/super_preserve_reachable_goal.patch` 与
+`patches/super_remove_duplicate_backup_optimize.patch`。
+
+这两项修正不改变PX4定位、任务完成/返航判据和真实机安全限幅。备份轨迹仍然保留，主轨迹
+优化失败时仍按SUPER原有安全逻辑处理；后续应继续用带障碍的SITL检查轨迹曲率、速度、加速度
+和最小障碍距离，不能仅凭日志中的`ReplanOnce succeed`判定真机可飞。
+
 ### MID360 与 NUC 的固定地址
 
 MID360 雷达地址固定为 `192.168.1.157`，NUC 专用雷达网口 `enp89s0` 已建立

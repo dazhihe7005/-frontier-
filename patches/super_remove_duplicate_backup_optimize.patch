@@ -1,0 +1,43 @@
+diff --git a/super_planner/src/super_core/super_planner.cpp b/super_planner/src/super_core/super_planner.cpp
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -1000,7 +1000,6 @@ RET_CODE SuperPlanner::generateBackupTrajectory(ExpTraj &ref_exp_traj, BackupTraj
+         double heu_dur = te - heu_ts;
+         Vec3f heu_p = seed_point;
+         time_consuming_[BACK_TRAJ_FRONTEND] = t_back_frontend.stop();
+-        auto sfc0 = back_traj_info.getSFC();
+         TimeConsuming t_back_opt("t_back_opt", false);
+         double opt_ts = heu_ts;
+         Trajectory temp_pos_traj;
+@@ -1013,30 +1012,6 @@ RET_CODE SuperPlanner::generateBackupTrajectory(ExpTraj &ref_exp_traj, BackupTraj
+                                                  back_traj_info.getSFC(),
+                                                  temp_pos_traj,
+                                                  opt_ts);
+         time_consuming_[BACK_TRAJ_OPT] = t_back_opt.stop();
+-
+-        {
+-            double init_ts;
+-            VecDf init_times;
+-            vec_Vec3f init_ps;
+-            back_traj_opt_->getInitValue(init_ts, init_times, init_ps);
+-            latest_replan.setBackupCondition(init_ts, init_times, init_ps,
+-                                             t0, te,
+-                                             back_traj_info.getSFC());
+-            // This second pass refreshes the optimizer's internal warm-start
+-            // state used by subsequent replans. Its output is diagnostic and
+-            // intentionally not committed as the active backup trajectory.
+-            Trajectory traj;
+-            double out_ts;
+-            back_traj_opt_->optimize(ref_exp_traj.posTraj(),
+-                                     t0,
+-                                     te,
+-                                     init_ts,
+-                                     sfc0,
+-                                     init_times,
+-                                     init_ps,
+-                                     traj,
+-                                     out_ts
+-            );
+-        }
+ 
+         if (!temp_ret) {

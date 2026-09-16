@@ -2159,3 +2159,10 @@ home为`z=1.51m`，首个及后续前向目标保持`z=1.51m`；日志中没有`
 `HEIGHT_GEOFENCE`；最终出现`map closure confirmed`，指令桥执行`TASK1_COMPLETE`并请求
 `AUTO.LOITER`。因此本轮已验证起飞阶段点云污染导致的高度异常得到隔离。仿真仍有较多SUPER
 局部轨迹优化失败和重复重规划，属于仿真点云/走廊平滑性待优化项，尚未宣称真机可带桨运行。
++## 2026-09-16：继续优化SUPER局部轨迹
+
+用户要求把仿真问题单独归类为“局部轨迹优化”，不再同时改任务闭环、返航条件和PX4定位链路。本轮根据40×40×30 m SITL日志确认：SUPER的Fsm原先每次收到高层目标都会无条件调用最近可行栅格搜索，导致已经可达的连续目标被量化，例如决策器目标高度约1.495 m被改成约1.25 m，产生不必要的局部轨迹阶梯。运行工作区已修改为：只有目标落入占据栅格或地图外时才进行可行栅格修正，否则保留任务决策器的连续目标；如果重规划过程中目标后来变为占据，则等待新的目标，避免穿障碍。
+
+本轮还发现备份轨迹优化在同一轮被重复调用，放大L-BFGS失败日志和计算延迟。已删除这次无效的第二次调用，保留原有备份轨迹作为安全回退。SUPER工作区`catkin_make --pkg super_planner -j2`编译通过。限时回归中出现了`Preserve reachable goal at ... z=1.494958`和连续的`GenerateExpTrajectory SUCCESS`，说明目标高度量化问题已修正；但仍有部分`BackOpt Opt failed`及少量`Yaw rate too large`，因此局部轨迹平滑性还未达到可以宣称真机带桨的程度，下一步应继续针对备份优化收敛、yaw平滑和障碍走廊有效性做带障碍SITL验证。
+
+本轮未改变真实PX4定位、任务完成/返航判据、速度/高度安全限幅。仓库新增补丁：`patches/super_preserve_reachable_goal.patch`、`patches/super_remove_duplicate_backup_optimize.patch`，README同步增加局部轨迹优化说明。

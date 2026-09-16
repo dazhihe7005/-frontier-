@@ -1,0 +1,49 @@
+diff --git a/super_planner/src/super_core/fsm.cpp b/super_planner/src/super_core/fsm.cpp
+--- a/super_planner/src/super_core/fsm.cpp
++++ b/super_planner/src/super_core/fsm.cpp
+@@ -60,7 +60,15 @@ namespace fsm {
+             return;
+         }
+ 
+-        planner_ptr_->getMap()->getNearestInfCellNot(GridType::OCCUPIED, gi_.goal_p, gi_.goal_p, 3.0);
++        // Replans must not repeatedly quantize an already valid target. Only
++        // recover a target if new map evidence makes it occupied or out of map.
++        const GridType target_type = planner_ptr_->getMap()->getGridType(gi_.goal_p);
++        if ((target_type == GridType::OCCUPIED || target_type == GridType::OUT_OF_MAP) &&
++            !planner_ptr_->getMap()->getNearestInfCellNot(
++                GridType::OCCUPIED, gi_.goal_p, gi_.goal_p, 3.0)) {
++            ros_ptr_->warn(" -- [Fsm] Active goal became occupied, waiting for a new goal.");
++            return;
++        }
+ 
+         TimeConsuming replan_once_time("replan_once_time", false);
+ 
+@@ -188,11 +196,24 @@ namespace fsm {
+             click_point.z() = cfg_.click_height;
+         }
+ 
+-        if (planner_ptr_->getMap()->getNearestInfCellNot(GridType::OCCUPIED, click_point, gi_.goal_p, 3.0)) {
+-            cout << GREEN << " -- [Fsm] Get goal at " << RESET << gi_.goal_p.transpose() << endl;
++        // High-level task planners already validate their target against their
++        // reachable/free map. Preserve that continuous target when SUPER's
++        // inflation map does not report a collision. The old implementation
++        // always snapped every target to an inflation-grid cell, which changed
++        // e.g. z=1.51 m into z=1.25 m and introduced avoidable trajectory steps.
++        const GridType goal_type = planner_ptr_->getMap()->getGridType(click_point);
++        if (goal_type == GridType::OCCUPIED || goal_type == GridType::OUT_OF_MAP) {
++            if (!planner_ptr_->getMap()->getNearestInfCellNot(
++                    GridType::OCCUPIED, click_point, gi_.goal_p, 3.0)) {
++                fmt::print(fg(fmt::color::indian_red), "Goal is deeply occupied, skip this goal.\n");
++                return;
++            }
++            cout << GREEN << " -- [Fsm] Shift occupied goal to " << RESET
++                 << gi_.goal_p.transpose() << endl;
+         } else {
+-            fmt::print(fg(fmt::color::indian_red), "Goal is deeply occupied, skip this goal.\n");
+-            return;
++            gi_.goal_p = click_point;
++            cout << GREEN << " -- [Fsm] Preserve reachable goal at " << RESET
++                 << gi_.goal_p.transpose() << endl;
+         }
+ 
+         if ((robot_state_.p - gi_.goal_p).norm() <
