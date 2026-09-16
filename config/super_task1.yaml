@@ -110,8 +110,9 @@ rog_map:
   # PX4 command geofence limits the vehicle reference point to z<=1.8 m.
   # ROG-Map's virtual surface includes inflation internally; 2.5 m keeps a
   # planning ceiling above the 1.5 m hover without inviting a large climb.
-  virtual_ceil_height: 2.5
-  virtual_ground_height: -2.0
+  # Keep clearance inflation from collapsing the 1.5--1.8 m task flight band.
+  virtual_ceil_height: 4.0
+  virtual_ground_height: -3.5
   load_pcd_en: false
   map_sliding:
     enable: true

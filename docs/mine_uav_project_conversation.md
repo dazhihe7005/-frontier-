@@ -2175,3 +2175,12 @@ home为`z=1.51m`，首个及后续前向目标保持`z=1.51m`；日志中没有`
 本轮尝试限时SITL。第一次因Gazebo实体残留`entity already exists`，清理明确的gzserver、gzclient、px4、roscore进程及`/tmp/px4-sock-0`后重新启动；第二次启动时仿真服务未能完成，`super_exploration_decider`在任务阶段前退出，未产生有效的轨迹回归数据。因此本轮不把仿真失败当作轨迹算法结论；需要下一轮先解决仿真启动/日志残留，再比较备份优化失败率、轨迹曲率、yaw rate和最小障碍距离。
 
 当前可调参数主要包括：`robot_r`机体包络半径、`inflation_resolution/inflation_step`障碍膨胀、`corridor_bound_dis`走廊边界、`planning_horizon/receding_dis`局部规划视野、`max_vel/max_acc/max_jerk/max_omg`动力学边界、`yaw_dot_max`偏航速度、`opt_accuracy/integral_reso`优化精度、任务决策器的前向走廊/目标间距/完成判据，以及PX4桥的高度/速度/水平半径硬安全限幅。真机参数不能只按SITL现象放宽。
+## 2026-09-16：清理仿真进程并验证三维局部轨迹
+
+用户要求清理所有干扰仿真的进程并重新启动显示。仅清理仿真相关的gzserver、gzclient、PX4 SITL、MAVROS、SUPER、任务调度器、SITL适配器、ROS Master及`/tmp/px4-sock-0`，未影响QGC、网络服务或真实设备驱动。
+
+首次干净启动后发现将障碍膨胀步数改为3时，ROG-Map同时在z轴收缩虚拟边界，实际顶面约1.7 m，任务悬停高度约1.53 m，SUPER报`Ill corridor`。已将项目配置虚拟规划高度边界调整为`virtual_ground_height=-3.5`、`virtual_ceil_height=4.0`，不改变PX4桥实际`max_height=1.8 m`限制。
+
+第二次干净启动成功，Gazebo和RViz正常显示，PX4 SITL完成自动起飞到约1.5 m并悬停，CH7自动触发任务一。日志确认首个目标约`(5.97,-0.37,1.52)`并成功生成三维MINCO轨迹；随后目标约`(11.34,-0.71,1.52)`、`(16.66,-1.05,1.52)`、`(21.96,-1.39,1.52)`连续沿机头方向推进，Fsm保持`FOLLOW_TRAJ`，没有再次出现`Ill corridor`。本轮仍出现一次备份轨迹优化警告，但没有阻断主轨迹；需要继续观察更长距离和障碍场景下的备份轨迹、曲率、yaw rate和最小障碍距离。
+
+当前仿真进程保持运行，用户可直接观察Gazebo/RViz窗口。本轮配置和对话记录需要提交到GitHub。
