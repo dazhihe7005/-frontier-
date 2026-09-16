@@ -79,6 +79,10 @@ SUPER 核心新增一个最小、与 ROS 无关的 `cancelGoal()` 状态转换�
 - 清除可视化路径；
 - 不修改地图，不重启规划器，不伪造当前位置目标。
 
+SUPER ROS1 节点使用 `ros::AsyncSpinner(0)`，目标、主 FSM、重规划和指令定时器可以并发执行。因此 FSM 还必须维护一个内部单调递增的 `goal_epoch`：每次设置或取消目标都推进 epoch；一次规划开始时保存 epoch，规划结束准备提交状态或轨迹前重新检查。若 epoch 已变化，该结果属于被取消或替换的旧目标，必须丢弃，不能把 FSM 从 `WAIT_GOAL` 改回 `FOLLOW_TRAJ`，也不能发布旧轨迹。
+
+目标信息、epoch、活动标志和状态转换由一个短临界区保护。`PlanFromRest` 与 `ReplanOnce` 等耗时计算在临界区外执行，只在读取输入快照和提交结果时加锁，避免为修复取消竞争而阻塞 100 Hz 指令输出。指令回调发布前也必须校验活动 epoch；允许取消回调之前已经完成的一条在途消息，不允许取消提交完成后再生成旧目标消息。
+
 ROS1 包装层订阅统一命令：
 
 - 收到合法 `SET_GOAL` 时调用现有 `setGoalPosiAndYaw()`；
@@ -95,7 +99,8 @@ ROS1 包装层在接受取消时同时把本地 `traj_finish_` 复位为 `false`
 - 不用“当前位置伪目标”模拟取消，因为它仍会触发规划并掩盖生命周期缺失。
 - 不通过调大 0.1 m 到点阈值、延长超时或过滤更多规划指令修复此问题。
 - PX4 桥接器的状态悬停逻辑不删除；它是下游失效保护，而不是协议实现。
-- SUPER 收到取消时不发布一次旧轨迹的末端命令；ROS1 当前单线程回调队列保证取消状态转换和指令定时器回调串行执行。
+- 不假设 ROS 回调串行执行。取消提交后，任何携带旧 `goal_epoch` 的规划结果、状态转换和位置指令都必须被拒绝。
+- 不把整个规划调用包在全局互斥锁内；否则一次耗时重规划会阻塞 100 Hz 指令发布，形成新的控制时序问题。
 - `goal_id` 只用于防止误取消当前目标，不代替 ROS 时间戳，也不改变 SUPER 内部 `trajectory_id`。
 
 ## 7. 测试顺序与验收标准
@@ -105,6 +110,8 @@ ROS1 包装层在接受取消时同时把本地 `traj_finish_` 复位为 `false`
 ### 7.1 RED：状态机失败测试
 
 先增加 SUPER FSM 单元测试，构造 `FOLLOW_TRAJ` 且保留旧目标的状态。测试要求调用尚不存在的 `cancelGoal()` 后进入 `WAIT_GOAL`、清除 `new_goal`、禁止继续规划。实现前测试应因接口不存在或断言失败而处于 RED。
+
+再增加 epoch 并发回归测试：开始一次旧目标规划，规划完成前执行取消，随后模拟旧规划结果提交。测试必须证明旧 epoch 无法恢复 `FOLLOW_TRAJ` 或获得发布许可；新目标的新 epoch 可以正常提交。该测试不依赖 ROS 线程调度，使用确定性的开始令牌、取消和提交顺序复现竞争。
 
 ### 7.2 GREEN：最小状态转换
 
@@ -117,6 +124,7 @@ ROS1 包装层在接受取消时同时把本地 `traj_finish_` 复位为 `false`
 - `CANCEL(old) → SET(new)` 的发布顺序固定。
 - 非当前编号取消不能终止新目标。
 - 无条件取消能够清除重启前残留目标。
+- 取消期间正在计算的旧目标规划结果不能在取消后提交。
 
 ### 7.4 构建与静态检查
 
@@ -143,6 +151,7 @@ ROS1 包装层在接受取消时同时把本地 `traj_finish_` 复位为 `false`
 - `SUPER/super_planner/ros/ros1.package.xml`
 - 当前选定 ROS1 后的 `super_planner/CMakeLists.txt`、`package.xml`
 - `SUPER/super_planner/include/fsm/fsm.h`
+- `SUPER/super_planner/include/fsm/goal_lifecycle_guard.h`
 - `SUPER/super_planner/src/super_core/fsm.cpp`
 - `SUPER/super_planner/include/ros_interface/ros1/fsm_ros1.hpp`
 - SUPER FSM 单元测试
