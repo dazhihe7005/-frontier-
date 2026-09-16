@@ -17,6 +17,7 @@ max_horizontal_radius: 40.0
 min_height: -0.5
 max_height: 1.8
 height_clamp_tolerance: 0.25
+exploration_status_topic: "/mine_uav/exploration/status"
 use_acceleration: true
 
 # Automatic control authorization comes from the mission scheduler (physical

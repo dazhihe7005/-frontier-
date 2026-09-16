@@ -70,6 +70,8 @@ class SuperPx4CommandBridge {
     private_nh_.param("use_acceleration", use_acceleration_, true);
     private_nh_.param("auto_enable_topic", auto_enable_topic_,
                       std::string("/mine_uav/mission/auto_enable"));
+    private_nh_.param("exploration_status_topic", exploration_status_topic_,
+                      std::string("/mine_uav/exploration/status"));
     private_nh_.param("automatic_mode_switch", automatic_mode_switch_, true);
     private_nh_.param("require_armed_for_offboard",
                       require_armed_for_offboard_, true);
@@ -110,6 +112,9 @@ class SuperPx4CommandBridge {
     finished_subscriber_ = nh_.subscribe(
         "/mine_uav/exploration/finished", 1,
         &SuperPx4CommandBridge::finishedCallback, this);
+    exploration_status_subscriber_ = nh_.subscribe(
+        exploration_status_topic_, 1,
+        &SuperPx4CommandBridge::explorationStatusCallback, this);
     state_subscriber_ = nh_.subscribe(
         "/mavros/state", 10, &SuperPx4CommandBridge::stateCallback, this);
     local_pose_subscriber_ = nh_.subscribe(
@@ -190,6 +195,20 @@ class SuperPx4CommandBridge {
       resetPrestream();
     }
     updateStatus();
+  }
+
+  void explorationStatusCallback(
+      const std_msgs::String::ConstPtr& status) {
+    const std::string state = status->data.substr(
+        0, status->data.find(':'));
+    const bool should_hold =
+        state == "WAIT_DATA" || state == "WAIT_GOAL" ||
+        state == "WAIT_FRONTIER" || state == "WAIT_MAP_CLOSURE" ||
+        state == "WAIT_MODEL_COVERAGE" || state == "DISABLED";
+    exploration_status_hold_ = should_hold;
+    if (should_hold) {
+      valid_command_ = false;
+    }
   }
 
   void stateCallback(const mavros_msgs::State::ConstPtr& state) {
@@ -343,6 +362,10 @@ class SuperPx4CommandBridge {
       } else {
         latchFault(reason);
       }
+      return;
+    }
+    if (exploration_status_hold_) {
+      valid_command_ = false;
       return;
     }
     const auto output = convert(*command);
@@ -572,6 +595,7 @@ class SuperPx4CommandBridge {
   ros::Subscriber auto_enable_subscriber_;
   ros::Subscriber vision_subscriber_;
   ros::Subscriber finished_subscriber_;
+  ros::Subscriber exploration_status_subscriber_;
   ros::Subscriber state_subscriber_;
   ros::Subscriber local_pose_subscriber_;
   ros::Publisher command_publisher_;
@@ -587,6 +611,7 @@ class SuperPx4CommandBridge {
   std::string output_topic_;
   std::string expected_frame_;
   std::string auto_enable_topic_;
+  std::string exploration_status_topic_;
   std::string offboard_mode_{"OFFBOARD"};
   std::string fallback_mode_{"POSCTL"};
   std::string px4_mode_;
@@ -618,6 +643,7 @@ class SuperPx4CommandBridge {
   bool auto_enabled_{false};
   bool vision_healthy_{false};
   bool mission_complete_{false};
+  bool exploration_status_hold_{true};
   bool mavros_connected_{false};
   bool mavros_armed_{false};
   bool software_enabled_{true};
