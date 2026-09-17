@@ -2430,3 +2430,7 @@ run07/run08 连续完成深入、地图闭合、反向面包屑返航和 AUTO.LO
 ## 2026-09-17：用户要求打开任务一仿真观看
 
 用户说“开启仿真让我看看”。助手确认 11312 端口 ROS master 已存在且无残留 Gazebo/PX4 仿真进程，X11 `:0` 可以显示窗口，然后用已验收的 `task1_40m_platform_sitl.launch gui:=true rviz:=true` 启动完整 40×40×30 m 场景。Gazebo 与 RViz 都正常打开；关闭 RViz 的 ROS1 停止维护提示，把 Gazebo 放在左屏、RViz 放在右屏。RViz 固定坐标系 `camera_init`，同时展示 `/cloud_registered` 与 `/mine_uav/sitl/global_cloud`。检查到 PX4 `connected=true`、`armed=true`、`OFFBOARD`，任务从 `EXPLORING` 进入 `RETURNING`，最终 `COMPLETE` 且 PX4 切回 `AUTO.LOITER`；最终累计点云约 185286 点。为便于用户观看最终模型，Gazebo/RViz/仿真进程保持运行，没有关闭。此轮没有更改规划或飞行源码。
+
+## 2026-09-17：RViz 窗口看不到
+
+用户反馈 RViz 窗口打不开、看不到。检查发现 RViz 进程仍在运行，窗口处于可见状态，没有报错；上一轮将它放在 X11 第二块显示器（横坐标约 1950），这可能导致只看主屏的用户找不到窗口。将 RViz 移至主显示器 `(250,75)` 并置顶，窗口大小 1366×900，ROS 仿真和累计点云保持运行，没有重新启动或关闭进程。若用户仍无法看到，需要确认实际观看的是 NUC 本机图形桌面、远程桌面还是仅 SSH/聊天终端；X11 窗口不会出现在纯终端中。
