@@ -2476,3 +2476,7 @@ run16 前墙等待约 6.11 s，PX4 实际高度下降 0.515 m、x 前移 0.925 m
 对未来规划越过 1.8 m 的原因，确认 SUPER 的局部安全走廊未接入 PX4 任务高度包络；新增规划坐标系 flight_min_z/max_z 参数，限制点/线/起点补充多面体中心可行域。run18 完成任务且多项式最高 1.7996 m；独立重复 run19 仍有 7 条未来轨迹软优化超界，最大 1.8022 m，证明仅修走廊不够。于是 SUPER 四个新轨迹提交路径都加入 Bernstein 控制点包络＋de Casteljau 细分硬检查：整条多项式无法证明位于高度界内就拒绝候选，不逐点夹紧输出；4 项单测通过。run20 再次探索、返航、TASK1_COMPLETE/AUTO.LOITER，无桥接故障，已发布未来多项式最高 1.7818 m、越界 0；本次没有候选被硬校验拒绝，故动态拒绝频率尚未由场景覆盖。
 
 审计脚本还修正了 rosbag 在仿真时可能以系统墙钟记录接收时间的问题，改以消息头仿真时间比较轨迹和位姿。run20 bag 因录制停止后仍是 .active，已 reindex，证据保留未删除。代码和复现实验详见 `docs/task1_vertical_flight_contract_fix_2026-09-17.md`；SUPER 增量保存在 `patches/super_task1_flight_z_corridor.patch` 与 `patches/super_task1_flight_z_contract.patch`。本 SITL alignment_z=0；真实 Fast-LIO2→PX4 若有非零高度偏移，必须先换算规划界限并重验，不能把上述固定场景结果当实机验收。
+
+## 2026-09-17：用户询问当前进度
+
+只读复核：任务一在固定 40×40×30 m SITL 中已完成探索、返航、AUTO.LOITER；run20 多项式最高 1.7818 m、无越 1.8 m、前墙等待约 7 s 时下沉 0.068 m。该结果只覆盖本场景零对齐偏移的 PX4 本地定位；真实 MID360/Fast-LIO2、未知尺寸/复杂采空区、有桨真机和动态高度对齐尚未验收。任务二仍未实施（`shaft_task_available=false`）；CH7/CH11 电平变化触发的新遥控调度要求也尚未改入当前源码。此刻没有运行 11312 专用 SITL/Gazebo/PX4 进程。主仓库工作树在此复核前干净，最新本地提交 `8e47076`，相对 `origin/main` 超前 5 个提交；NUC 仍因无法解析 github.com 未上传这些提交。用户本轮仅询问进度，没有新改飞行逻辑。
