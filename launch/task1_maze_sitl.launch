@@ -1,0 +1,50 @@
+<launch>
+  <!-- Stress scenario: alternating full-height baffles inside the 40 m chamber.
+       This is deliberately different from the open goaf acceptance scenario. -->
+  <arg name="gui" default="true"/>
+  <arg name="rviz" default="true"/>
+  <arg name="allow_auto_arm" default="true"/>
+
+  <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
+    <arg name="world_geometry_filter" value="true"/>
+    <arg name="sensor_offset_z" value="0.60"/>
+    <arg name="global_cloud_voxel_size" value="0.30"/>
+    <arg name="world" value="$(find mine_uav_control)/worlds/goaf_serpentine_maze.world"/>
+    <arg name="vehicle_sdf" value="$(find mine_uav_control)/models/iris_mid360_long_range/iris_mid360_long_range.sdf"/>
+    <arg name="spawn_x" value="-8.0"/>
+    <arg name="spawn_y" value="0.0"/>
+    <arg name="spawn_z" value="16.15"/>
+    <arg name="spawn_yaw" value="0.0"/>
+
+    <arg name="max_exploration_radius" value="55.0"/>
+    <arg name="frontier_search_radius" value="20.0"/>
+    <arg name="decider_max_map_radius" value="65.0"/>
+    <arg name="decider_raycast_max_range" value="30.0"/>
+    <arg name="decider_sync_slop" value="0.15"/>
+    <arg name="decider_data_timeout" value="3.0"/>
+    <arg name="decider_max_points_per_cloud" value="2200"/>
+    <arg name="side_wall_max_range" value="30.0"/>
+    <arg name="wall_coverage_side_max_distance" value="24.0"/>
+    <arg name="wall_coverage_end_min_depth" value="12.0"/>
+    <arg name="wall_coverage_end_max_gap_bins" value="8"/>
+    <arg name="wall_coverage_end_min_span" value="30.0"/>
+
+    <!-- The vehicle must be free to travel to alternating side openings. -->
+    <arg name="forward_corridor_half_width" value="18.0"/>
+    <arg name="max_task_lateral_offset" value="18.0"/>
+    <!-- Keep the original unknown-environment completion threshold for this
+         stress test; do not encode the known far-wall distance as an answer. -->
+    <arg name="map_closure_min_progress" value="12.0"/>
+    <arg name="map_closure_no_frontier_time" value="4.0"/>
+    <arg name="map_closure_stable_time" value="4.0"/>
+    <arg name="map_closure_growth_voxels" value="700"/>
+    <arg name="lidar_max_range" value="30.0"/>
+    <arg name="max_global_points" value="400000"/>
+    <arg name="bridge_max_horizontal_radius" value="58.0"/>
+    <arg name="bridge_min_height" value="-2.0"/>
+    <arg name="bridge_max_height" value="1.8"/>
+  </include>
+</launch>

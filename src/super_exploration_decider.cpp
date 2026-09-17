@@ -967,6 +967,7 @@ SuperExplorationDecider::evaluateThreeWallCoverage() const {
 SuperExplorationDecider::MapClosureStatus
 SuperExplorationDecider::evaluateMapClosure(
     const std::vector<FrontierCandidate>& candidates,
+    const VoxelSet& reachable,
     bool end_wall_seen) {
   MapClosureStatus result;
   if (!have_home_) {
@@ -985,6 +986,29 @@ SuperExplorationDecider::evaluateMapClosure(
       front_obstacle_streak_ >= front_obstacle_confirm_frames_ ||
       end_wall_seen;
 
+  // A transverse wall is not a terminal boundary if observed free space is
+  // connected around it. Use the same vehicle-clear reachable component as
+  // frontier selection, not raw free voxels behind a solid wall.
+  result.max_reachable_progress = result.vehicle_progress;
+  for (const auto& key : reachable) {
+    const geometry_msgs::Point point = keyToPoint(key);
+    const double lateral = -s * (point.x - home_pose_.pose.position.x) +
+                           c * (point.y - home_pose_.pose.position.y);
+    if (std::abs(lateral) > max_task_lateral_offset_ ||
+        std::abs(point.z - home_pose_.pose.position.z -
+                 cruise_height_above_home_) > voxel_resolution_ ||
+        !isClearForVehicle(key)) {
+      continue;
+    }
+    const double progress = c * (point.x - home_pose_.pose.position.x) +
+                            s * (point.y - home_pose_.pose.position.y);
+    result.max_reachable_progress =
+        std::max(result.max_reachable_progress, progress);
+  }
+  result.reachable_forward_passage =
+      result.max_reachable_progress >
+      result.vehicle_progress + front_obstacle_range_;
+
   for (const auto& entry : voxels_) {
     if (entry.second == kOccupied) {
       ++result.occupied_voxels;
@@ -992,9 +1016,10 @@ SuperExplorationDecider::evaluateMapClosure(
   }
 
   for (const auto& candidate : candidates) {
-    if (isForwardCandidate(candidate) &&
-        candidateMissionProgress(candidate) >=
-            result.vehicle_progress + 0.5 * min_goal_distance_ &&
+    // Sideways reachable frontiers at a transverse wall are still actionable:
+    // they can lead around the wall even without immediate forward progress.
+    if (candidateMissionProgress(candidate) >=
+            result.vehicle_progress - min_goal_distance_ &&
         std::abs(candidateMissionLateral(candidate)) <=
             max_task_lateral_offset_) {
       ++result.actionable_frontiers;
@@ -1032,7 +1057,8 @@ SuperExplorationDecider::evaluateMapClosure(
   const bool front_boundary_ok =
       !map_closure_require_front_boundary_ || result.front_boundary_seen;
   result.complete = result.vehicle_progress >= map_closure_min_progress_ &&
-                    front_boundary_ok && frontier_closed &&
+                    front_boundary_ok && !result.reachable_forward_passage &&
+                    frontier_closed &&
                     result.stable_map_duration >= map_closure_stable_time_;
   return result;
 }
@@ -1044,6 +1070,9 @@ void SuperExplorationDecider::publishCoverageStatus(
          << "map_closure=" << (closure.complete ? "ready" : "incomplete")
          << " front_closed="
          << (closure.front_boundary_seen ? "true" : "false")
+         << " reachable_passage="
+         << (closure.reachable_forward_passage ? "true" : "false")
+         << " reachable_depth=" << closure.max_reachable_progress
          << " actionable=" << closure.actionable_frontiers
          << " no_frontier_s=" << closure.no_frontier_duration
          << " stable_s=" << closure.stable_map_duration
@@ -1771,7 +1800,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
         isClearForVehicle(current_key), candidates.size());
   }
   const MapClosureStatus closure =
-      evaluateMapClosure(candidates, coverage.end_wall_found);
+      evaluateMapClosure(candidates, reachable, coverage.end_wall_found);
   const bool completion_prerequisites =
       exploration_started_ &&
       reached_goal_count_ >= min_goals_before_complete_ &&
@@ -1877,7 +1906,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   }
 
   if (!have_active_goal_ && use_map_closure_completion_ &&
-      closure.front_boundary_seen) {
+      closure.front_boundary_seen && !closure.reachable_forward_passage &&
+      closure.actionable_frontiers == 0) {
     publishStatus("WAIT_MAP_CLOSURE",
                   "front boundary closed; waiting for frontier and map convergence");
     return;

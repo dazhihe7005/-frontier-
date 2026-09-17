@@ -91,7 +91,9 @@ class SuperExplorationDecider {
   struct MapClosureStatus {
     bool complete{false};
     bool front_boundary_seen{false};
+    bool reachable_forward_passage{false};
     double vehicle_progress{0.0};
+    double max_reachable_progress{0.0};
     double no_frontier_duration{0.0};
     double stable_map_duration{0.0};
     std::size_t actionable_frontiers{0};
@@ -119,6 +121,7 @@ class SuperExplorationDecider {
   ThreeWallCoverage evaluateThreeWallCoverage() const;
   MapClosureStatus evaluateMapClosure(
       const std::vector<FrontierCandidate>& candidates,
+      const VoxelSet& reachable,
       bool end_wall_seen);
   void publishCoverageStatus(const ThreeWallCoverage& coverage,
                              const MapClosureStatus& closure);
