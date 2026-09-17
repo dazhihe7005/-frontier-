@@ -658,6 +658,8 @@ roslaunch mine_uav_control task1_40m_platform_sitl.launch gui:=true rviz:=true
 本轮进一步确认该仿真高度来自 PX4 本地估计而非真实 Fast-LIO2：最新闭环的执行指令无大幅瞬时高度跳变，但 SUPER 的两条未执行到峰值的未来轨迹超过 1.8 m 上限；前墙等待期也出现随实际高度下移的“移动式悬停”。证据、复算命令和风险边界见[高度来源与轨迹审计](docs/task1_vertical_trajectory_audit_2026-09-17.md)。
 
 后续按因果链修复：桥接器在等待开始时锁存固定悬停目标；SUPER 的任务一走廊使用规划坐标系高度包络，并在提交前校验整条多项式，超界候选整体拒绝。40 m SITL run20 完成探索与返航，已发布多项式最高 1.782 m，等待下沉约 0.068 m；复现实验和实机坐标偏移限制见[高度合同修复报告](docs/task1_vertical_flight_contract_fix_2026-09-17.md)。SUPER 改动保存在 `patches/super_task1_flight_z_corridor.patch` 和 `patches/super_task1_flight_z_contract.patch`，应按顺序应用；真实 Fast-LIO2/有桨飞行仍未验收。
+
+迷宫 SITL 已能在原 0.4 m 机体半径配置下穿过三道隔墙并返航，但第三墙实际机体外最小余量仅约 0.136 m，**未达到 1 m 安全验收**。直接放大 SUPER 半径或让 CIRI 查询三维膨胀地图的隔离探针均在第一墙前停滞。追查并修正了 CIRI 在竖直相切时的 NaN 与切平面朝向错误，确定性单测 3/3 通过，但后续 SITL 仍因严格净距下的走廊/侧向目标不可行而未穿第一墙。详见[迷宫审计](docs/task1_maze_sitl_audit_2026-09-17.md)和[CIRI 根因报告](docs/super_ciri_tangent_plane_root_cause_2026-09-17.md)。保留原任务配置；任务一不能据此用于有桨真机，任务二仍未开始。
 SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先有目标生命周期协议基线 `71eddfd`，不能直接应用到港大官方 `2ad3419`。
 
 当前安全状态：SITL先建立1.5 m稳定悬停，再模拟CH7启动并在空中捕获home。run07～run10 已消除该场景先前入口返航高度越界，桥接器 1.8 m 围栏始终保留；但规划器内部虚拟高度上界与桥接围栏仍未完全统一，且 40 m 仿真使用理想化雷达和世界真值几何过滤，任务一不得直接用于有桨真机自主飞行。

@@ -1,0 +1,15 @@
+diff --git a/super_planner/CMakeLists.txt b/super_planner/CMakeLists.txt
+--- a/super_planner/CMakeLists.txt
++++ b/super_planner/CMakeLists.txt
+@@ -116,5 +116,11 @@
+     catkin_add_gtest(flight_z_contract_test test/flight_z_contract_test.cpp)
+     if(TARGET flight_z_contract_test)
+         target_link_libraries(flight_z_contract_test ${GTEST_MAIN_LIBRARIES})
+     endif()
++    catkin_add_gtest(ciri_tangent_plane_test test/ciri_tangent_plane_test.cpp)
++    if(TARGET ciri_tangent_plane_test)
++        target_link_libraries(ciri_tangent_plane_test super ${THIRD_PARTY} ${GTEST_MAIN_LIBRARIES})
++        target_link_options(ciri_tangent_plane_test PRIVATE -fuse-ld=lld)
++        add_dependencies(ciri_tangent_plane_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
++    endif()
+ endif()

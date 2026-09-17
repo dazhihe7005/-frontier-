@@ -1,0 +1,130 @@
+diff --git a/super_planner/include/super_core/ciri.h b/super_planner/include/super_core/ciri.h
+index fcd3cf9..6501486 100755
+--- a/super_planner/include/super_core/ciri.h
++++ b/super_planner/include/super_core/ciri.h
+@@ -65,6 +65,7 @@ namespace super_planner {
+     using geometry_utils::Polytope;
+ 
+     class CIRI {
++        friend class CiriTangentPlaneTestPeer;
+         ros_interface::RosInterface::Ptr ros_ptr_;
+         double robot_r_{0};
+         int iter_num_{1};
+@@ -91,7 +92,7 @@ namespace super_planner {
+                 const Eigen::Vector3d &b,
+                 Ellipsoid &out_ell);
+ 
+-        static void findTangentPlaneOfSphere(const Eigen::Vector3d &center, const double &r,
++        static bool findTangentPlaneOfSphere(const Eigen::Vector3d &center, const double &r,
+                                              const Eigen::Vector3d &pass_point,
+                                              const Eigen::Vector3d &seed_p,
+                                              Eigen::Vector4d &outter_plane);
+@@ -142,4 +143,4 @@ namespace super_planner {
+ 
+         void getPolytope(Polytope &optimized_poly);
+     };
+-}
+\ No newline at end of file
++}
+diff --git a/super_planner/src/super_core/ciri.cpp b/super_planner/src/super_core/ciri.cpp
+index e23b104..5a7de37 100755
+--- a/super_planner/src/super_core/ciri.cpp
++++ b/super_planner/src/super_core/ciri.cpp
+@@ -153,11 +153,12 @@ namespace super_planner {
+                         /// Cut line with sphere A and B,
+                         if (temp_plane_w.head(3).dot(a) + temp_plane_w(3) > -epsilon_) {
+                             // Case the plan make seed out, the plane should be modified in world frame
+-                            findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w);
++                            if (!findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w)) return FAILED;
+                         } else if (temp_plane_w.head(3).dot(b) + temp_plane_w(3) > -epsilon_) {
+                             // Case the plan make seed out, the plane should be modified in world frame
+-                            findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w);
++                            if (!findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w)) return FAILED;
+                         }
++                        if (!temp_plane_w.allFinite()) return FAILED;
+                     }
+                     pcFlags(pcMinId) = 0;
+                     tmp_nn_pt = pc.col(pcMinId);
+@@ -256,7 +257,7 @@ namespace super_planner {
+         //        split_thresh_ = split_thresh;
+     }
+ 
+-    void CIRI::findTangentPlaneOfSphere(const Eigen::Vector3d& center, const double& r,
++    bool CIRI::findTangentPlaneOfSphere(const Eigen::Vector3d& center, const double& r,
+                                         const Eigen::Vector3d& pass_point,
+                                         const Eigen::Vector3d& seed_p,
+                                         Eigen::Vector4d& outter_plane) {
+@@ -287,27 +288,35 @@ namespace super_planner {
+         //     outter_plane = -outter_plane;
+         // }
+ 
++        const Eigen::Vector3d P_world = pass_point - center;
++        const double radius_squared = r * r;
++        const double tolerance = 1e-9 * std::max(1.0, radius_squared);
++        if (!P_world.allFinite() || !seed_p.allFinite() || !std::isfinite(r) ||
++            r <= 0.0 || P_world.squaredNorm() < radius_squared - tolerance) {
++            return false;
++        }
+         Vec3f seed = seed_p;
+-        Vec3f dif = pass_point - pass_point;
+-        if (dif.norm() < 1e-3) {
+-            if ((pass_point - center).head(2).norm() > 1e-3) {
+-                Vec3f v1 = (pass_point - center).normalized();
+-                v1(2) = 0;
+-                seed = seed_p + 0.01 * v1.cross(Vec3f(0, 0, 1)).normalized();
+-            }
+-            else {
+-                seed = seed_p + 0.01 * (pass_point - center).cross(Vec3f(1, 0, 0)).normalized();
+-            }
++        Eigen::Vector3d cross = P_world.cross(seed - center);
++        if (cross.norm() < 1e-9) {
++            // The seed may coincide with the endpoint or lie on the radial
++            // line. Move it sideways, never along a normalized zero vector.
++            seed += 0.01 * P_world.unitOrthogonal();
++            cross = P_world.cross(seed - center);
+         }
+-        Eigen::Vector3d P = pass_point - center;
+-        Eigen::Vector3d norm_ = (pass_point - center).cross(seed - center).normalized();
++        if (cross.norm() < 1e-12) return false;
++        Eigen::Vector3d norm_ = cross.normalized();
+         Eigen::Matrix3d R = Eigen::Quaterniond::FromTwoVectors(norm_, Vec3f(0, 0, 1)).matrix();
+-        P = R * P;
++        Eigen::Vector3d P = R * P_world;
+         Eigen::Vector3d C = R * (seed - center);
+         Eigen::Vector3d Q;
+-        double r2 = r * r;
++        double r2 = radius_squared;
+         double p1p2n = P.head(2).squaredNorm();
+-        double d = sqrt(p1p2n - r2);
++        const double discriminant = p1p2n - r2;
++        if (!std::isfinite(p1p2n) || p1p2n <= 1e-12 ||
++            discriminant < -tolerance) return false;
++        // An endpoint exactly tangent to the obstacle can round a few ULPs
++        // inside the sphere after rotation. That is not an infeasible path.
++        double d = sqrt(std::max(0.0, discriminant));
+         double rp1p2n = r / p1p2n;
+         double q11 = rp1p2n * (P(0) * r - P(1) * d);
+         double q21 = rp1p2n * (P(1) * r + P(0) * d);
+@@ -327,9 +336,21 @@ namespace super_planner {
+         outter_plane.head(3) = R.transpose() * Q;
+         Q = outter_plane.head(3) + center;
+         outter_plane(3) = -Q.dot(outter_plane.head(3));
+-        if (outter_plane.head(3).dot(seed) + outter_plane(3) > epsilon_) {
++        // Polytope planes use n·x+d <= 0 for the free side. The obstacle
++        // center must be on the opposite side of the tangent plane; choosing
++        // orientation from the seed alone is ambiguous at exact tangency.
++        if (outter_plane.head(3).dot(center) + outter_plane(3) < 0.0) {
+             outter_plane = -outter_plane;
+         }
++        const double normal_length = outter_plane.head(3).norm();
++        if (!outter_plane.allFinite() || normal_length < 1e-12) return false;
++        outter_plane /= normal_length;
++        const auto signed_distance = [&outter_plane](const Eigen::Vector3d& pt) {
++            return outter_plane.head(3).dot(pt) + outter_plane(3);
++        };
++        return signed_distance(center) >= r - 1e-8 &&
++               signed_distance(pass_point) <= 1e-8 &&
++               signed_distance(seed_p) <= 1e-8;
+     }
+ 
+     void CIRI::findEllipsoid(const Eigen::Matrix3Xd& pc,
