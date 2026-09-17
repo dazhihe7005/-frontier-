@@ -32,6 +32,20 @@ class MazeClearanceTest(unittest.TestCase):
         self.assertEqual(MODULE.nearest(samples, 0.0), samples[0])
         self.assertEqual(MODULE.nearest(samples, 2.0), samples[-1])
 
+    def test_partial_run_cannot_pass_wall_clearance(self):
+        report = {"max_local_x_m": 5.55, "mission_complete": False,
+                  "baffles": {"baffle_1": {"planned_surface_margin_m": 11.0,
+                                           "actual_surface_margin_m": 11.0}}}
+        self.assertEqual(MODULE.acceptance_failures(report, 1.0, 1.0, 45.0, True),
+                         ["insufficient_forward_progress", "mission_not_complete"])
+
+    def test_close_wall_fails_even_after_completion(self):
+        report = {"max_local_x_m": 47.0, "mission_complete": True,
+                  "baffles": {"baffle_3": {"planned_surface_margin_m": 0.05,
+                                           "actual_surface_margin_m": 0.13}}}
+        self.assertEqual(MODULE.acceptance_failures(report, 1.0, 1.0, 45.0, True),
+                         ["baffle_3:planned_margin", "baffle_3:actual_margin"])
+
 
 if __name__ == "__main__":
     unittest.main()

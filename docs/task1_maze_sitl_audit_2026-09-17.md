@@ -43,6 +43,14 @@
 
 复核命令：`source /opt/ros/noetic/setup.bash && python3 scripts/analyze_maze_clearance.py /home/nuc/task1_logs/failure_cases/maze_2026-09-17/task1_maze_fix2_20260917.bag worlds/goaf_serpentine_maze.world`；几何和时间匹配的三项单元测试使用 `python3 test/test_analyze_maze_clearance.py`，本轮 3/3 通过。先前为 GUI 查看临时改变的镜头姿态尚未验证，已恢复原样，未混入这次审计。
 
+### 膨胀地图直接送入 CIRI 的隔离探针：入口/墙角处退化
+
+为区分“地图膨胀未进入连续走廊”与“高层目标不可行”，仅在运行副本临时让 `GeneratePolytopeFromPoint/Line` 查询 `boxSearchInflate`，保持物理 `robot_r=0.4 m`，并在 SITL 探针配置中将 `inflation_step` 从 3 提至 5（0.2 m 膨胀分辨率，名义约 1 m）。默认真机配置和仓库基线没有替换。第一轮 `task1_maze_inflated_corridor_probe_20260917.bag`（90 s）在局部 x=5.63 m 后未再前进，第一目标 `(7.95,-0.71)` 30 s 超时；最后两次目标均未完成，任务未返航。由于仅看“不靠近墙”会误判为安全，审计脚本新增最低深入距离、任务完成状态和规划/实际净距的联合验收。旧成功闭环 bag 因六项墙边净距不合格返回码 2；本探针因未深入到局部 x=45 m 且未完成任务返回码 2。
+
+第二轮定点录制 `task1_maze_inflated_entry_geometry_20260917.bag`（81 s，原始 bag 约 190 MB）记录原始/膨胀占据点及前端路径。该轮到局部 x≈12.83 m，仍未穿过第一道隔墙；SITL 存在运行差异，不能把第一次停在 x=5.63 m 归咎为唯一固定障碍。约 47.15 s 时终端反复记录 CIRI `ERROR! maxVolInsEllipsoid failed`、`GeneratePolytopeFromLine failed`，失败种子线为 `(15.7,4.3,1.3)→(16.1,5.1,1.3)`，搜索盒 `(14.7,3.3,0.7)→(17.1,6.1,1.8)`。从相邻 47.523/47.527 s 点云用 `scripts/analyze_corridor_seed_clearance.py` 复算：原始占据点最近距离 1.4517 m，膨胀占据点最近距离恰好约 0.4000 m，与 CIRI 半径 0.4 m 几乎相切。源码核对表明这条日志实际对应 `hPoly` 中出现 NaN 后返回 `FAILED`，消息名虽称 `maxVolInsEllipsoid failed`，并不能据此断言 MVIE 调用本身失败。近乎零严格裕度与 NaN 退化相符，但未单独定位 NaN 来自哪条切平面数学分支；这是下一步的定位点。
+
+两轮证据共同否定了“仅切换到全三维膨胀占据点即可得到 1 m 安全净距”的简化修复。还需把水平与垂向净距解耦，给 CIRI 几何和数值容差留正裕度，并使任务层目标/过渡路径满足相同约束；必要时在 CIRI 生成 NaN 前记录具体障碍点和切平面分支。所有临时运行副本源码与探针配置已撤回并重编译原基线，仿真进程已关闭，两个新 bag 只留 NUC，不上传仓库。脚本单元测试本轮为净距验收 5/5、种子线距离 3/3；**任务一仍未达到 1 m 迷宫安全验收，任务二尚未启动**。
+
 ## 当前结论及下一步
 
 空旷 40 m 场景先前已完成闭环；本轮迷宫的“探到尽头再返航”功能也跑通，但**1 m 墙边安全余量未达标**。按用户要求，任务二仿真开发仍后置。下一步应在统一安全距离合同下，生成明确的“先横移到安全开口、再前进”的已知自由过渡点，而不是只放大半径或盲选 frontier；并复跑空旷和迷宫两场景，验收最低墙边余量、实际高度、无持续停滞及回 home。七个原始 bag 保存在 NUC `/home/nuc/task1_logs/failure_cases/maze_2026-09-17`，不上传 GitHub。

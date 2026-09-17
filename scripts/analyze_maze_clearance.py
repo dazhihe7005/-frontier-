@@ -10,6 +10,7 @@ import argparse
 import bisect
 import json
 import math
+import sys
 import xml.etree.ElementTree as ET
 
 import rosbag
@@ -58,9 +59,14 @@ def minimum_record(samples, box):
 def analyze(bag_path, boxes, vehicle_radius):
     planned = []
     actual = []
+    complete = False
     with rosbag.Bag(bag_path) as bag:
         for topic, message, receipt in bag.read_messages(
-                topics=["/planning/pos_cmd", "/mavros/local_position/pose"]):
+                topics=["/planning/pos_cmd", "/mavros/local_position/pose",
+                        "/mine_uav/exploration/status"]):
+            if topic == "/mine_uav/exploration/status":
+                complete |= message.data.startswith("COMPLETE:")
+                continue
             stamp = message.header.stamp.to_sec() or receipt.to_sec()
             if topic == "/planning/pos_cmd":
                 point = message.position
@@ -72,6 +78,7 @@ def analyze(bag_path, boxes, vehicle_radius):
         raise ValueError("bag requires both /planning/pos_cmd and /mavros/local_position/pose")
     planned.sort()
     actual.sort()
+    max_local_x = max(sample[1] for sample in actual)
     # Ignore preflight and post-task PX4 poses; compare the same active interval.
     actual = [sample for sample in actual if planned[0][0] <= sample[0] <= planned[-1][0]]
     if not actual:
@@ -99,7 +106,25 @@ def analyze(bag_path, boxes, vehicle_radius):
             },
         }
     return {"vehicle_radius_m": vehicle_radius, "planned_samples": len(planned),
-            "actual_samples": len(actual), "baffles": results}
+            "actual_samples": len(actual), "max_local_x_m": max_local_x,
+            "mission_complete": complete, "baffles": results}
+
+
+def acceptance_failures(report, min_planned_margin=None, min_actual_margin=None,
+                        min_local_x=None, require_complete=False):
+    failures = []
+    if min_local_x is not None and report["max_local_x_m"] < min_local_x:
+        failures.append("insufficient_forward_progress")
+    if require_complete and not report["mission_complete"]:
+        failures.append("mission_not_complete")
+    for name, result in report["baffles"].items():
+        if (min_planned_margin is not None and
+                result["planned_surface_margin_m"] < min_planned_margin):
+            failures.append(name + ":planned_margin")
+        if (min_actual_margin is not None and
+                result["actual_surface_margin_m"] < min_actual_margin):
+            failures.append(name + ":actual_margin")
+    return failures
 
 
 def main():
@@ -108,9 +133,19 @@ def main():
     parser.add_argument("world")
     parser.add_argument("--spawn-x", type=float, default=-8.0)
     parser.add_argument("--vehicle-radius", type=float, default=0.4)
+    parser.add_argument("--min-planned-margin", type=float)
+    parser.add_argument("--min-actual-margin", type=float)
+    parser.add_argument("--min-local-x", type=float)
+    parser.add_argument("--require-complete", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(analyze(args.bag, baffles_from_world(args.world, args.spawn_x),
-                             args.vehicle_radius), indent=2, sort_keys=True))
+    report = analyze(args.bag, baffles_from_world(args.world, args.spawn_x),
+                     args.vehicle_radius)
+    report["acceptance_failures"] = acceptance_failures(
+        report, args.min_planned_margin, args.min_actual_margin,
+        args.min_local_x, args.require_complete)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if report["acceptance_failures"]:
+        sys.exit(2)
 
 
 if __name__ == "__main__":
