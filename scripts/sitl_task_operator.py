@@ -15,6 +15,7 @@ from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import RCIn, State
 from mavros_msgs.srv import CommandBool, SetMode
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 
 
 class SitlTaskOperator:
@@ -47,6 +48,7 @@ class SitlTaskOperator:
         self._last_mode_request = rospy.Time(0)
         self._last_arm_request = rospy.Time(0)
         self._ready = False
+        self._bridge_handoff_complete = False
 
         self.rc_pub = rospy.Publisher("/mine_uav/sitl/rc/in", RCIn, queue_size=2)
         self.setpoint_pub = rospy.Publisher(
@@ -54,6 +56,8 @@ class SitlTaskOperator:
         )
         rospy.Subscriber("/mavros/state", State, self._state_callback, queue_size=10)
         rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
+        rospy.Subscriber("/mine_uav/task1/command_ready", Bool,
+                         self._bridge_ready_callback, queue_size=2)
         self.arm_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
         self.mode_client = rospy.ServiceProxy("/mavros/set_mode", SetMode)
         rospy.Timer(rospy.Duration(1.0 / self.rate), self._timer)
@@ -67,6 +71,11 @@ class SitlTaskOperator:
         with self._lock:
             self._odom = message
 
+    def _bridge_ready_callback(self, message):
+        if message.data:
+            with self._lock:
+                self._bridge_handoff_complete = True
+
     def _timer(self, _event):
         with self._lock:
             state = self._state
@@ -74,6 +83,12 @@ class SitlTaskOperator:
         now = rospy.Time.now()
         if self.allow_auto_arm and not self._ready:
             self._advance_takeoff(now, state, odom)
+        elif self.allow_auto_arm and not self._bridge_handoff_complete:
+            # Keep the pre-task hover setpoint alive until the task bridge has
+            # produced its first valid OFFBOARD command. Otherwise PX4 may
+            # leave OFFBOARD before SUPER finishes its first plan. Never
+            # resume this publisher after the bridge has taken ownership.
+            self._publish_takeoff_target(now)
         elapsed = (now - self._start).to_sec()
         self._publish_rc(
             auto_enabled=(self._ready and state.armed and elapsed >= self.auto_enable_delay)
@@ -109,14 +124,7 @@ class SitlTaskOperator:
                 self._origin[2] + self.takeoff_height,
             )
 
-        target = PoseStamped()
-        target.header.stamp = now
-        target.header.frame_id = "map"
-        target.pose.position.x = self._origin[0]
-        target.pose.position.y = self._origin[1]
-        target.pose.position.z = self._origin[2] + self.takeoff_height
-        target.pose.orientation = self._origin[3]
-        self.setpoint_pub.publish(target)
+        target = self._publish_takeoff_target(now)
 
         if (now - self._prestream_start).to_sec() < self.prestream_duration:
             return
@@ -142,6 +150,17 @@ class SitlTaskOperator:
                 rospy.loginfo("SITL hover stable; emulated CH7 enabled")
         else:
             self._hover_start = rospy.Time(0)
+
+    def _publish_takeoff_target(self, now):
+        target = PoseStamped()
+        target.header.stamp = now
+        target.header.frame_id = "map"
+        target.pose.position.x = self._origin[0]
+        target.pose.position.y = self._origin[1]
+        target.pose.position.z = self._origin[2] + self.takeoff_height
+        target.pose.orientation = self._origin[3]
+        self.setpoint_pub.publish(target)
+        return target
 
     def _request_mode(self, now):
         if (now - self._last_mode_request).to_sec() < 1.0:
