@@ -233,6 +233,11 @@ class SuperPx4CommandBridge {
     exploration_status_hold_ = should_hold;
     if (should_hold) {
       valid_command_ = false;
+      if (px4_mode_ == offboard_mode_ && !hold_target_latched_ &&
+          localPoseFresh(ros::Time::now())) {
+        latched_hold_target_ = makeHoldTarget(ros::Time::now());
+        hold_target_latched_ = true;
+      }
     }
   }
 
@@ -244,6 +249,9 @@ class SuperPx4CommandBridge {
     mavros_armed_ = state->armed;
     const std::string previous_mode = px4_mode_;
     px4_mode_ = state->mode;
+    if (px4_mode_ != offboard_mode_) {
+      hold_target_latched_ = false;
+    }
     if (mine_uav_control::externalOffboardExit(
             previous_mode, px4_mode_, offboard_mode_, offboard_owned_,
             exit_requested_)) {
@@ -435,6 +443,7 @@ class SuperPx4CommandBridge {
       return;
     }
     valid_command_ = true;
+    hold_target_latched_ = false;
     latest_target_ = bounded_output;
     updateStatus();
   }
@@ -456,6 +465,16 @@ class SuperPx4CommandBridge {
     return hold;
   }
 
+  mavros_msgs::PositionTarget makeFixedHoldTarget(const ros::Time& now) {
+    if (!hold_target_latched_) {
+      latched_hold_target_ = makeHoldTarget(now);
+      hold_target_latched_ = true;
+    }
+    auto hold = latched_hold_target_;
+    hold.header.stamp = now;
+    return hold;
+  }
+
   void outputTimerCallback(const ros::TimerEvent&) {
     const ros::Time now = ros::Time::now();
     if (exit_requested_ ||
@@ -464,6 +483,7 @@ class SuperPx4CommandBridge {
       return;
     }
     if (!gatesReady()) {
+      hold_target_latched_ = false;
       resetPrestream();
       publishReady(false);
       updateStatus();
@@ -483,6 +503,7 @@ class SuperPx4CommandBridge {
     }
 
     if (px4_mode_ != offboard_mode_) {
+      hold_target_latched_ = false;
       command_publisher_.publish(makeHoldTarget(now));
       publishReady(false);
       if (require_armed_for_offboard_ && !mavros_armed_) {
@@ -502,13 +523,14 @@ class SuperPx4CommandBridge {
 
     offboard_owned_ = offboard_owned_ || automatic_mode_switch_;
     if (command_fresh) {
+      hold_target_latched_ = false;
       latest_target_.header.stamp = now;
       command_publisher_.publish(latest_target_);
       publishReady(true);
       publishStatus("STREAMING");
     } else {
       valid_command_ = false;
-      command_publisher_.publish(makeHoldTarget(now));
+      command_publisher_.publish(makeFixedHoldTarget(now));
       publishReady(true);
       publishStatus("HOLD_COMMAND_TIMEOUT");
     }
@@ -525,6 +547,7 @@ class SuperPx4CommandBridge {
   }
 
   void beginOffboardExit(const std::string& reason) {
+    hold_target_latched_ = false;
     if (!exit_requested_ && offboard_owned_ && px4_mode_ == offboard_mode_) {
       exit_requested_ = true;
       ROS_WARN("Leaving managed OFFBOARD: %s", reason.c_str());
@@ -643,6 +666,7 @@ class SuperPx4CommandBridge {
 
   geometry_msgs::PoseStamped latest_local_pose_;
   mavros_msgs::PositionTarget latest_target_;
+  mavros_msgs::PositionTarget latched_hold_target_;
   std::string command_topic_;
   std::string output_topic_;
   std::string expected_frame_;
@@ -690,6 +714,7 @@ class SuperPx4CommandBridge {
   bool exit_requested_{false};
   bool valid_command_{false};
   bool have_local_pose_{false};
+  bool hold_target_latched_{false};
   bool ready_published_{false};
   bool last_ready_{false};
 };

@@ -88,17 +88,21 @@ def audit(path, jump_threshold, alignment_z, min_height, max_height):
             "/mavros/local_position/pose", "/mine_uav/exploration/status",
             "/mine_uav/super/goal_command",
         ]):
-            stamp = receipt.to_sec()
+            receipt_time = receipt.to_sec()
+            header = getattr(message, "header", None)
+            stamp = (header.stamp.to_sec() if header is not None and
+                     header.stamp.to_sec() > 0 else receipt_time)
             if topic == "/planning/pos_cmd" and message.trajectory_flag in (1, 2):
                 commands.append((stamp, message.position.z,
-                                 message.velocity.z, message.acceleration.z))
+                                 message.velocity.z, message.acceleration.z,
+                                 receipt_time))
             elif topic.endswith("/pose"):
                 poses.append((stamp, message.pose.position.x,
                               message.pose.position.y, message.pose.position.z))
             elif topic.endswith("poly_traj") and message.type & 2:
                 polynomials.append((stamp, message))
             elif topic.endswith("/status"):
-                statuses.append((stamp, message.data))
+                statuses.append((receipt_time, message.data))
             elif topic.endswith("goal_command") and message.command == 1:
                 goal_heights.append(message.goal.position.z)
 
@@ -114,7 +118,7 @@ def audit(path, jump_threshold, alignment_z, min_height, max_height):
         if dt > 0.1:
             before = nearest_pose(poses, pose_times, previous[0])
             after = nearest_pose(poses, pose_times, current[0])
-            phase_index = bisect.bisect_right(status_times, previous[0]) - 1
+            phase_index = bisect.bisect_right(status_times, previous[4]) - 1
             gaps.append({
                 "start_s": previous[0], "end_s": current[0], "duration_s": dt,
                 "status_at_start": statuses[phase_index][1] if phase_index >= 0 else None,

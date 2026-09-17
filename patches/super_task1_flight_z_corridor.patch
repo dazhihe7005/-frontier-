@@ -1,0 +1,164 @@
+diff --git a/super_planner/include/super_core/config.hpp b/super_planner/include/super_core/config.hpp
+index 7577f81..8bed889 100755
+--- a/super_planner/include/super_core/config.hpp
++++ b/super_planner/include/super_core/config.hpp
+@@ -25,6 +25,8 @@
+ #ifndef SUPER_PLANNER_CONFIG_HPP
+ #define SUPER_PLANNER_CONFIG_HPP
+ 
++#include <stdexcept>
++
+ #include <rog_map/rog_map_core/config.hpp>
+ #include <traj_opt/config.hpp>
+ #include <utils/header/yaml_loader.hpp>
+@@ -65,6 +67,7 @@ namespace super_planner {
+         double replan_forward_dt;
+         double sample_traj_dt;
+         double robot_r;
++        double flight_min_z, flight_max_z;
+         int iris_iter_num;
+ 
+         int mpc_horizon{};
+@@ -99,6 +102,11 @@ namespace super_planner {
+             loader.LoadParam("super_planner/planning_horizon", planning_horizon, 10.0);
+             loader.LoadParam("super_planner/receding_dis", receding_dis, 5.0);
+             loader.LoadParam("super_planner/robot_r", robot_r, 0.3);
++            loader.LoadParam("super_planner/flight_min_z", flight_min_z, -1.0e6);
++            loader.LoadParam("super_planner/flight_max_z", flight_max_z, 1.0e6);
++            if (!(flight_min_z < flight_max_z)) {
++                throw std::invalid_argument("super_planner flight z bounds must increase");
++            }
+             loader.LoadParam("super_planner/iris_iter_num", iris_iter_num, 1);
+             loader.LoadParam("super_planner/yaw_mode", yaw_mode, 1);
+             loader.LoadParam("super_planner/mpc_horizon", mpc_horizon, 1);
+diff --git a/super_planner/include/super_core/corridor_generator.h b/super_planner/include/super_core/corridor_generator.h
+index 81992a6..8d4c593 100755
+--- a/super_planner/include/super_core/corridor_generator.h
++++ b/super_planner/include/super_core/corridor_generator.h
+@@ -59,6 +59,8 @@ namespace super_planner {
+         int iris_iter_num_;
+         double virtual_groud_height_ = 0.0;
+         double virtual_ceil_height_ = 0.0;
++        double flight_min_z_ = -1.0e6;
++        double flight_max_z_ = 1.0e6;
+         rog_map::ROGMapROS::Ptr map_ptr_;
+         vec_E<Vec3i> line_seed_neighbor_list;
+         CIRI::Ptr ciri_;
+@@ -84,7 +86,9 @@ namespace super_planner {
+                           const double virtual_ceil_height,
+                           const double robot_r,
+                           const int box_search_skip_num,
+-                          const int iris_iter_num);
++                          const int iris_iter_num,
++                          const double flight_min_z,
++                          const double flight_max_z);
+ 
+         ~CorridorGenerator() = default;
+ 
+diff --git a/super_planner/src/super_core/corridor_generator.cpp b/super_planner/src/super_core/corridor_generator.cpp
+index f74c0f6..c20c31d 100755
+--- a/super_planner/src/super_core/corridor_generator.cpp
++++ b/super_planner/src/super_core/corridor_generator.cpp
+@@ -31,7 +31,8 @@ namespace super_planner {
+                                          const rog_map::ROGMapROS::Ptr &map_ptr, const double bound_dis,
+                                          const double seed_line_max_dis, const double min_overlap_threshold,
+                                          const double virtual_groud_height, const double virtual_ceil_height,
+-                                         const double robot_r, const int box_search_skip_num, const int iris_iter_num)
++                                         const double robot_r, const int box_search_skip_num, const int iris_iter_num,
++                                         const double flight_min_z, const double flight_max_z)
+             : ros_ptr_(ros_ptr), map_ptr_(map_ptr) {
+         ciri_ = std::make_shared<CIRI>(ros_ptr_);
+         ciri_->setupParams(robot_r, iris_iter_num);
+@@ -43,6 +44,8 @@ namespace super_planner {
+         iris_iter_num_ = iris_iter_num;
+         virtual_ceil_height_ = virtual_ceil_height - robot_r;
+         virtual_groud_height_ = virtual_groud_height + robot_r;
++        flight_min_z_ = flight_min_z;
++        flight_max_z_ = flight_max_z;
+ //        failed_traj_log.open(DEBUG_FILE_DIR("sfc.csv"), std::ios::out | std::ios::trunc);
+     }
+ 
+@@ -80,7 +83,7 @@ namespace super_planner {
+         if(first_id!=0){
+             shifted_start_pt = path[first_id];
+             double dis = (path[first_id] - path[0]).norm() * 1.2;
+-            GenerateEmptyPolytope(path[0], dis, temp_poly);
++            if (!GenerateEmptyPolytope(path[0], dis, temp_poly)) return false;
+             sfcs.emplace_back(temp_poly);
+         }
+ 
+@@ -200,11 +203,16 @@ namespace super_planner {
+         box_max = p1.cwiseMax(p2);
+         box_min -= Vec3f(bound_dis_, bound_dis_, bound_dis_);
+         box_max += Vec3f(bound_dis_, bound_dis_, bound_dis_);
++        // Search obstacle geometry with robot-radius padding, but keep the
++        // resulting centre-space corridor inside the task flight envelope.
++        box_min.z() = std::max(box_min.z(), flight_min_z_ - robot_r_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_ + robot_r_);
+ //        box_min.z() = std::max(box_min.z(), virtual_groud_height_);
+ //        box_max.z() = std::min(box_max.z(), virtual_ceil_height_);
+     }
+ 
+     bool CorridorGenerator::GeneratePolytopeFromPoint(const Vec3f &pt, Polytope &polytope) {
++        if (pt.z() < flight_min_z_ || pt.z() > flight_max_z_) return false;
+         Eigen::Vector3d box_max, box_min;
+         vec_E<Vec3f> pc;
+         getSeedBBox(pt, pt, box_min, box_max);
+@@ -213,6 +221,9 @@ namespace super_planner {
+         map_ptr_->boxSearch(box_min, box_max, OCCUPIED, pc);
+         box_min.z() += robot_r_;
+         box_max.z() -= robot_r_;
++        box_min.z() = std::max(box_min.z(), flight_min_z_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_);
++        if (box_min.z() >= box_max.z()) return false;
+         MatD4f planes;
+         Eigen::Vector3d a = pt, b = pt;
+         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+@@ -273,6 +284,10 @@ namespace super_planner {
+         box_max = pt;
+         box_min -= Vec3f(dis, dis, dis);
+         box_max += Vec3f(dis, dis, dis);
++        if (pt.z() < flight_min_z_ || pt.z() > flight_max_z_) return false;
++        box_min.z() = std::max(box_min.z(), flight_min_z_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_);
++        if (box_min.z() >= box_max.z()) return false;
+         MatD4f planes;
+         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+         bd(0, 0) = 1.0;
+@@ -302,6 +317,8 @@ namespace super_planner {
+     }
+ 
+     bool CorridorGenerator::GeneratePolytopeFromLine(Line &line, Polytope &polytope) {
++        if (std::min(line.first.z(), line.second.z()) < flight_min_z_ ||
++            std::max(line.first.z(), line.second.z()) > flight_max_z_) return false;
+         Eigen::Vector3d box_max, box_min;
+         vec_E<Vec3f> pc, pts{line.first, line.second};
+         getSeedBBox(line.first, line.second, box_min, box_max);
+@@ -309,6 +326,9 @@ namespace super_planner {
+         map_ptr_->boxSearch(box_min, box_max, OCCUPIED, pc);
+         box_min.z() += robot_r_;
+         box_max.z() -= robot_r_;
++        box_min.z() = std::max(box_min.z(), flight_min_z_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_);
++        if (box_min.z() >= box_max.z()) return false;
+         MatD4f planes;
+         Eigen::Vector3d a = line.first, b = line.second;
+         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+@@ -374,4 +394,4 @@ namespace super_planner {
+         }
+ 
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/super_planner/src/super_core/super_planner.cpp b/super_planner/src/super_core/super_planner.cpp
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -49,4 +49,6 @@
+                                                       cfg_.robot_r,
+                                                       cfg_.obs_skip_num,
+-                                                      cfg_.iris_iter_num);
++                                                      cfg_.iris_iter_num,
++                                                      cfg_.flight_min_z,
++                                                      cfg_.flight_max_z);
+         cg_ptr_->SetLineNeighborList(cfg_.seed_line_neighbour);

@@ -1,0 +1,189 @@
+diff --git a/super_planner/include/super_core/flight_z_contract.h b/super_planner/include/super_core/flight_z_contract.h
+new file mode 100644
+index 0000000..be1484c
+--- /dev/null
++++ b/super_planner/include/super_core/flight_z_contract.h
+@@ -0,0 +1,80 @@
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++#include <vector>
++
++#include <data_structure/base/trajectory.h>
++
++namespace super_planner {
++
++inline double binomial(int n, int k) {
++    double result = 1.0;
++    for (int i = 1; i <= k; ++i) {
++        result *= static_cast<double>(n - k + i) / i;
++    }
++    return result;
++}
++
++inline bool bernsteinInside(const std::vector<double>& controls,
++                            double min_z, double max_z, int depth) {
++    constexpr double kRoundoff = 1e-9;
++    if (std::all_of(controls.begin(), controls.end(), [&](double value) {
++            return std::isfinite(value) && value >= min_z - kRoundoff &&
++                   value <= max_z + kRoundoff;
++        })) return true;
++    if (controls.front() < min_z - kRoundoff || controls.front() > max_z + kRoundoff ||
++        controls.back() < min_z - kRoundoff || controls.back() > max_z + kRoundoff ||
++        depth == 0) return false;
++
++    // de Casteljau subdivision. Each child control hull still encloses the
++    // entire polynomial over its half-interval; no time sampling is assumed.
++    const int n = static_cast<int>(controls.size());
++    std::vector<double> left(n), right(n), row = controls;
++    left[0] = row[0];
++    right[n - 1] = row[n - 1];
++    for (int level = 1; level < n; ++level) {
++        for (int i = 0; i < n - level; ++i) {
++            row[i] = 0.5 * (row[i] + row[i + 1]);
++        }
++        left[level] = row[0];
++        right[n - level - 1] = row[n - level - 1];
++    }
++    return bernsteinInside(left, min_z, max_z, depth - 1) &&
++           bernsteinInside(right, min_z, max_z, depth - 1);
++}
++
++inline bool polynomialInsideFlightZ(const Eigen::MatrixXd& matrix,
++                                    double duration, double min_z,
++                                    double max_z) {
++    const int n = static_cast<int>(matrix.cols()) - 1;
++    if (!(std::isfinite(min_z) && std::isfinite(max_z) && min_z < max_z) ||
++        matrix.rows() < 3 || n < 0 || n > 20 ||
++        !std::isfinite(duration) || duration <= 0.0) return false;
++    std::vector<double> controls(n + 1, 0.0);
++    double time_power = 1.0;
++    for (int j = 0; j <= n; ++j) {
++        const double power_coefficient = matrix(2, n - j) * time_power;
++        if (!std::isfinite(power_coefficient)) return false;
++        for (int k = j; k <= n; ++k) {
++            controls[k] += power_coefficient * binomial(k, j) /
++                           binomial(n, j);
++        }
++        time_power *= duration;
++    }
++    if (!std::all_of(controls.begin(), controls.end(),
++                     [](double value) { return std::isfinite(value); })) return false;
++    return bernsteinInside(controls, min_z, max_z, 14);
++}
++
++inline bool trajectoryInsideFlightZ(const geometry_utils::Trajectory& trajectory,
++                                    double min_z, double max_z) {
++    if (trajectory.empty()) return false;
++    for (const auto& piece : trajectory) {
++        if (!polynomialInsideFlightZ(piece.getCoeffMat(), piece.getDuration(),
++                                     min_z, max_z)) return false;
++    }
++    return true;
++}
++
++}  // namespace super_planner
+diff --git a/super_planner/test/flight_z_contract_test.cpp b/super_planner/test/flight_z_contract_test.cpp
+new file mode 100644
+index 0000000..ab72863
+--- /dev/null
++++ b/super_planner/test/flight_z_contract_test.cpp
+@@ -0,0 +1,37 @@
++#include <gtest/gtest.h>
++
++#include <super_core/flight_z_contract.h>
++
++namespace {
++
++Eigen::MatrixXd makePolynomial(double constant, double linear,
++                               double quadratic) {
++    Eigen::MatrixXd coefficients = Eigen::MatrixXd::Zero(3, 8);
++    coefficients(2, 5) = quadratic;
++    coefficients(2, 6) = linear;
++    coefficients(2, 7) = constant;
++    return coefficients;
++}
++
++TEST(FlightZContract, AcceptsInteriorSafeTrajectory) {
++    const auto polynomial = makePolynomial(1.5, 0.1, -0.1);
++    EXPECT_TRUE(super_planner::polynomialInsideFlightZ(polynomial, 1.0, -2.0, 1.8));
++}
++
++TEST(FlightZContract, RejectsHiddenInteriorPeak) {
++    // Endpoints are 1.6 m, but the middle reaches 1.85 m.
++    const auto polynomial = makePolynomial(1.6, 1.0, -1.0);
++    EXPECT_FALSE(super_planner::polynomialInsideFlightZ(polynomial, 1.0, -2.0, 1.8));
++}
++
++TEST(FlightZContract, RejectsSmallOptimizerOvershoot) {
++    const auto polynomial = makePolynomial(1.7522, 0.2, -0.2);
++    EXPECT_FALSE(super_planner::polynomialInsideFlightZ(polynomial, 1.0, -2.0, 1.8));
++}
++
++TEST(FlightZContract, RejectsInvalidDuration) {
++    const auto polynomial = makePolynomial(1.5, 0.0, 0.0);
++    EXPECT_FALSE(super_planner::polynomialInsideFlightZ(polynomial, 0.0, -2.0, 1.8));
++}
++
++}  // namespace
+diff --git a/super_planner/CMakeLists.txt b/super_planner/CMakeLists.txt
+--- a/super_planner/CMakeLists.txt
++++ b/super_planner/CMakeLists.txt
+@@ -112,4 +112,8 @@
+                 super
+                 ${THIRD_PARTY})
+     endif()
++    catkin_add_gtest(flight_z_contract_test test/flight_z_contract_test.cpp)
++    if(TARGET flight_z_contract_test)
++        target_link_libraries(flight_z_contract_test ${GTEST_MAIN_LIBRARIES})
++    endif()
+ endif()
+diff --git a/super_planner/ros/ros1.CMakeLists.txt b/super_planner/ros/ros1.CMakeLists.txt
+--- a/super_planner/ros/ros1.CMakeLists.txt
++++ b/super_planner/ros/ros1.CMakeLists.txt
+@@ -133,5 +133,9 @@
+     if(TARGET fsm_goal_cancellation_test)
+         target_link_libraries(fsm_goal_cancellation_test super ${THIRD_PARTY})
+         add_dependencies(fsm_goal_cancellation_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+     endif()
++    catkin_add_gtest(flight_z_contract_test test/flight_z_contract_test.cpp)
++    if(TARGET flight_z_contract_test)
++        target_link_libraries(flight_z_contract_test ${GTEST_MAIN_LIBRARIES})
++    endif()
+ endif()
+diff --git a/super_planner/src/super_core/super_planner.cpp b/super_planner/src/super_core/super_planner.cpp
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -24,2 +24,3 @@
+ #include <super_core/super_planner.h>
++#include <super_core/flight_z_contract.h>
+ #include <memory>
+@@ -150,2 +151,6 @@
+             if (!prepared.setTrajectory(exp_traj_info, back_traj_info)) return FAILED;
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
+             ExpTraj committed_exp = exp_traj_info;
+@@ -172,2 +177,6 @@
+             prepared.setTrajectory(exp_traj_info);
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
+             ExpTraj committed_exp = exp_traj_info;
+@@ -284,2 +293,6 @@
+             if (!prepared.setTrajectory(exp_traj_info, back_traj_info)) return FAILED;
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
+             ExpTraj committed_exp = exp_traj_info;
+@@ -329,2 +342,6 @@
+             prepared.setTrajectory(exp_traj_info);
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
+             ExpTraj committed_exp = exp_traj_info;

@@ -33,6 +33,10 @@ super_planner:
   receding_dis: 4.0
   # Assumes 800 mm motor-to-motor span; 800 cm would be a different scale.
   robot_r: 0.40
+  # Planner camera_init bounds for the 40 m SITL profile (alignment_z=0).
+  # Real flights require bounds converted from the measured PX4 alignment.
+  flight_min_z: -2.0
+  flight_max_z: 1.8
   yaw_dot_max: 1.0
   yaw_mode: 1
   mpc_horizon: 15

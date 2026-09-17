@@ -8,7 +8,7 @@ import unittest
 import rospy
 import rostest
 from geometry_msgs.msg import PoseStamped, TransformStamped
-from mavros_msgs.msg import State
+from mavros_msgs.msg import PositionTarget, State
 from mavros_msgs.srv import SetMode, SetModeResponse
 from quadrotor_msgs.msg import PositionCommand
 from std_msgs.msg import Bool, String
@@ -20,6 +20,10 @@ class ManualOverrideTest(unittest.TestCase):
         self._mode = "POSCTL"
         self._auto = False
         self._alignment_z = 0.0
+        self._pose_z = 1.5
+        self._command_z = 1.5
+        self._exploration_status = "EXPLORING"
+        self._setpoints = []
         self._requests = []
         self._status = ""
         self._stop = threading.Event()
@@ -50,6 +54,9 @@ class ManualOverrideTest(unittest.TestCase):
         self._status_sub = rospy.Subscriber(
             "/mine_uav/task1/command_status", String, self._status_callback
         )
+        self._setpoint_sub = rospy.Subscriber(
+            "/mine_uav/setpoint_cmd", PositionTarget, self._setpoint_callback
+        )
         self._worker = threading.Thread(target=self._publish_loop, daemon=True)
         self._worker.start()
 
@@ -60,6 +67,7 @@ class ManualOverrideTest(unittest.TestCase):
         self._stop.set()
         self._worker.join(timeout=2)
         self._status_sub.unregister()
+        self._setpoint_sub.unregister()
         self._service.shutdown("test complete")
 
     def _set_mode(self, request):
@@ -71,12 +79,20 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self._status = message.data
 
+    def _setpoint_callback(self, message):
+        with self._lock:
+            self._setpoints.append((message.position.z, message.type_mask))
+            self._setpoints = self._setpoints[-100:]
+
     def _publish_loop(self):
         while not self._stop.is_set() and not rospy.is_shutdown():
             with self._lock:
                 mode = self._mode
                 auto = self._auto
                 alignment_z = self._alignment_z
+                pose_z = self._pose_z
+                command_z = self._command_z
+                exploration_status = self._exploration_status
             stamp = rospy.Time.now()
             state = State()
             state.header.stamp = stamp
@@ -87,13 +103,13 @@ class ManualOverrideTest(unittest.TestCase):
             pose = PoseStamped()
             pose.header.stamp = stamp
             pose.header.frame_id = "map"
-            pose.pose.position.z = 1.5
+            pose.pose.position.z = pose_z
             pose.pose.orientation.w = 1.0
             self._pose_pub.publish(pose)
             command = PositionCommand()
             command.header.stamp = stamp
             command.header.frame_id = "camera_init"
-            command.position.z = 1.5
+            command.position.z = command_z
             command.trajectory_flag = PositionCommand.TRAJECTORY_STATUS_READY
             self._command_pub.publish(command)
             alignment = TransformStamped()
@@ -104,7 +120,7 @@ class ManualOverrideTest(unittest.TestCase):
             self._mission_pub.publish(Bool(data=True))
             self._auto_pub.publish(Bool(data=auto))
             self._vision_pub.publish(Bool(data=True))
-            self._exploration_pub.publish(String(data="EXPLORING"))
+            self._exploration_pub.publish(String(data=exploration_status))
             self._stop.wait(0.033)
 
     def _wait_for(self, predicate, timeout=5):
@@ -130,6 +146,26 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self._mode = "OFFBOARD"
         self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        # Front-wall/map-closure waiting must hold the entry pose, not chase
+        # a subsequently drifting localization estimate downward.
+        with self._lock:
+            self._exploration_status = "WAIT_MAP_CLOSURE"
+        self.assertTrue(self._wait_for(lambda: self._status == "HOLD_COMMAND_TIMEOUT"))
+        with self._lock:
+            self._pose_z = 1.0
+            self._setpoints.clear()
+        self.assertTrue(self._wait_for(lambda: len(self._setpoints) >= 8))
+        with self._lock:
+            held = list(self._setpoints[-8:])
+        self.assertTrue(all(abs(z - 1.5) < 0.01 for z, _ in held), held)
+        with self._lock:
+            self._exploration_status = "EXPLORING"
+            self._command_z = 1.6
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._setpoints) and
+            abs(self._setpoints[-1][0] - 1.6) < 0.01
+        ))
         with self._lock:
             self._mode = "POSCTL"
         self.assertTrue(self._wait_for(
