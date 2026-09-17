@@ -12,12 +12,16 @@ TEST(ShaftMission, RequiresIndependentDepthAndFreshRange) {
   in.enabled = true;
   in.dt = 0.1;
   in.range_fresh = true;
-  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kFault);
+  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kIdle);
   in.depth_valid = true;
-  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kFault);
+  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kDescending);
   in.enabled = false;
   mission.step(in);
   in.enabled = true;
+  in.range_fresh = false;
+  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kIdle);
+  in.range_fresh = true;
+  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kDescending);
   in.range_fresh = false;
   EXPECT_EQ(mission.step(in).state, ShaftMission::State::kFault);
 }

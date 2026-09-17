@@ -103,6 +103,14 @@ class ShaftRosLogicTest(unittest.TestCase):
         self.enable_pub.publish(Bool(data=False))
         self.wait_for(lambda: self.status == "IDLE", "reset")
         self.enable_pub.publish(Bool(data=True))
+        time.sleep(0.1)
+        with self.lock:
+            self.assertEqual(self.status, "IDLE")
+            self.publish_range = True
+            self.bottom_range = float("inf")
+        self.wait_for(lambda: self.status == "DESCENDING", "restart")
+        with self.lock:
+            self.publish_range = False
         self.wait_for(lambda: self.status == "FAULT_NO_SAFE_AUTONOMOUS_RECOVERY",
                       "stale-range fault")
 

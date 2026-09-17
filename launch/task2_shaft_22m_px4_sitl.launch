@@ -1,0 +1,47 @@
+<launch>
+  <!-- Isolated ROS master only: this launch arms a simulated PX4. Both sensor
+       adapter and router refuse to operate without /use_sim_time. The 22 m
+       range is synthetic, not a Gazebo ray sensor or real laser. -->
+  <arg name="gui" default="false"/>
+  <arg name="world" default="$(find mine_uav_control)/worlds/shaft_22m_logic_sitl.world"/>
+  <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="interactive" value="false"/>
+    <arg name="vehicle" value="iris"/>
+    <arg name="sdf" value="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
+    <arg name="world" value="$(arg world)"/>
+    <arg name="x" value="0"/>
+    <arg name="y" value="0"/>
+    <arg name="z" value="1.15"/>
+    <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
+  </include>
+  <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
+        name="sitl_localization_adapter" output="screen" required="true"/>
+  <node pkg="mine_uav_control" type="sitl_shaft_sensor_adapter.py"
+        name="sitl_shaft_sensor_adapter" output="screen" required="true">
+    <param name="bottom_top_world_z" value="-20.85"/>
+    <param name="entrance_world_z" value="0.25"/>
+  </node>
+  <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
+        name="sitl_shaft_release_pad" output="screen" required="true"/>
+  <node pkg="mine_uav_control" type="sitl_task_operator.py"
+        name="sitl_task_operator" output="screen" required="true">
+    <param name="allow_auto_arm" value="true"/>
+    <param name="auto_enable_delay" value="8.0"/>
+    <param name="task_switch_pwm" value="2000"/>
+    <param name="bridge_ready_topic" value="/mine_uav/task2/command_ready"/>
+  </node>
+  <node pkg="mine_uav_control" type="mission_scheduler"
+        name="mission_scheduler" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/mission_scheduler.yaml"/>
+    <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
+    <param name="shaft_task_available" value="true"/>
+    <param name="force_goaf_task" value="false"/>
+  </node>
+  <node pkg="mine_uav_control" type="shaft_mission_node"
+        name="shaft_mission_node" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+  </node>
+  <node pkg="mine_uav_control" type="sitl_shaft_px4_router.py"
+        name="sitl_shaft_px4_router" output="screen" required="true"/>
+</launch>

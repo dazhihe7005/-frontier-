@@ -59,6 +59,12 @@ class ShaftMission {
       state_ = State::kFault;
       return {state_, 0.0, false};
     }
+    if (state_ == State::kIdle &&
+        (!in.depth_valid || !in.range_fresh)) {
+      // An enable edge may precede first sensor frames. Wait without motion;
+      // only an already active mission treats loss of data as a fault.
+      return {state_, 0.0, false};
+    }
     if (!std::isfinite(in.dt) || in.dt <= 0.0 || in.dt > 1.0 ||
         !in.depth_valid || !std::isfinite(in.depth) ||
         !in.range_fresh || !validRange(in)) {

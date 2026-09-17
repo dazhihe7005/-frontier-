@@ -36,6 +36,10 @@ class SitlTaskOperator:
         )
         self.task_channel_index = int(rospy.get_param("~task_channel_index", 5))
         self.auto_channel_index = int(rospy.get_param("~auto_channel_index", 6))
+        self.task_switch_pwm = int(rospy.get_param("~task_switch_pwm", 1000))
+        self.bridge_ready_topic = rospy.get_param(
+            "~bridge_ready_topic", "/mine_uav/task1/command_ready"
+        )
         self.rate = max(10.0, float(rospy.get_param("~rate", 20.0)))
 
         self._lock = threading.Lock()
@@ -56,7 +60,7 @@ class SitlTaskOperator:
         )
         rospy.Subscriber("/mavros/state", State, self._state_callback, queue_size=10)
         rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
-        rospy.Subscriber("/mine_uav/task1/command_ready", Bool,
+        rospy.Subscriber(self.bridge_ready_topic, Bool,
                          self._bridge_ready_callback, queue_size=2)
         self.arm_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
         self.mode_client = rospy.ServiceProxy("/mavros/set_mode", SetMode)
@@ -99,7 +103,7 @@ class SitlTaskOperator:
         message = RCIn()
         message.header.stamp = rospy.Time.now()
         message.channels = [1500] * channel_count
-        message.channels[self.task_channel_index] = 1000
+        message.channels[self.task_channel_index] = self.task_switch_pwm
         message.channels[self.auto_channel_index] = 2000 if auto_enabled else 1000
         self.rc_pub.publish(message)
 
