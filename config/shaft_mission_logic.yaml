@@ -1,0 +1,14 @@
+# Task 2 logic-only prototype. No PX4 publisher is connected.
+# Positive relative depth is downward; velocity intent uses ROS ENU (+z up).
+descent_speed: 0.5
+return_speed: 0.5
+bottom_trigger: 2.0
+bottom_stop_margin: 0.8
+bottom_confirm_seconds: 0.3
+max_depth: 450.0
+max_duration: 1800.0
+entrance_tolerance: 0.5
+max_depth_jump: 2.0
+max_acceleration: 0.5
+input_timeout: 0.4
+control_rate: 20.0

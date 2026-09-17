@@ -1,0 +1,8 @@
+<launch>
+  <!-- Logic-only prototype: intentionally does NOT launch MAVROS, arm PX4,
+       change mode, or route velocity intent to a flight controller. -->
+  <node pkg="mine_uav_control" type="shaft_mission_node"
+        name="shaft_mission_node" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+  </node>
+</launch>

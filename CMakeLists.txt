@@ -79,6 +79,11 @@ add_executable(mission_scheduler
 )
 target_link_libraries(mission_scheduler ${catkin_LIBRARIES})
 
+add_executable(shaft_mission_node
+  src/shaft_mission_node.cpp
+)
+target_link_libraries(shaft_mission_node ${catkin_LIBRARIES})
+
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   add_rostest(test/super_bridge_manual_override.test)
@@ -110,13 +115,17 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_outbound_goal_contract)
     target_link_libraries(test_outbound_goal_contract ${GTEST_MAIN_LIBRARIES})
   endif()
+  catkin_add_gtest(test_shaft_mission test/test_shaft_mission.cpp)
+  if(TARGET test_shaft_mission)
+    target_link_libraries(test_shaft_mission ${GTEST_MAIN_LIBRARIES})
+  endif()
 endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
                 fastlio_px4_vision_bridge
                 super_px4_command_bridge
                 super_exploration_decider_lib super_exploration_decider
-                task1_perception_gate mission_scheduler
+                task1_perception_gate mission_scheduler shaft_mission_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
