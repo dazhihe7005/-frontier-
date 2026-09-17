@@ -9,6 +9,7 @@
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="8.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
+  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
   <arg name="vehicle_sdf"
        default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
   <arg name="spawn_x" default="0"/>
@@ -153,7 +154,7 @@
   <node pkg="super_planner" type="fsm_node" name="fsm_node"
         output="screen" required="true">
     <param name="config_path"
-           value="$(find mine_uav_control)/config/super_task1.yaml"/>
+           value="$(arg super_config_path)"/>
   </node>
 
   <!-- POSCTL requires live RC/manual-control input. AUTO.LOITER provides a
