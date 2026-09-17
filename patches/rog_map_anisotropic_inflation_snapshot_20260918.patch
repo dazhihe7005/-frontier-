@@ -1,0 +1,131 @@
+diff --git a/rog_map/CMakeLists.txt b/rog_map/CMakeLists.txt
+index 4118cc7..054a3be 100755
+--- a/rog_map/CMakeLists.txt
++++ b/rog_map/CMakeLists.txt
+@@ -67,4 +67,22 @@ add_library(rog_map STATIC ${srcs})
+ 
+ target_include_directories(rog_map PUBLIC include)
+ target_link_libraries(rog_map PUBLIC
+-        ${THIRD_PARTY})
+\ No newline at end of file
++        ${THIRD_PARTY})
++
++if(CATKIN_ENABLE_TESTING)
++    catkin_add_gtest(rog_map_nearest_cell_alias_test
++            test/nearest_cell_alias_test.cpp)
++    if(TARGET rog_map_nearest_cell_alias_test)
++        target_compile_definitions(rog_map_nearest_cell_alias_test PRIVATE
++                ROG_MAP_TEST_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/nearest_cell_alias.yaml")
++        target_link_libraries(rog_map_nearest_cell_alias_test
++                rog_map
++                ${THIRD_PARTY})
++    endif()
++    catkin_add_gtest(rog_map_inflation_geometry_test
++            test/inflation_geometry_test.cpp)
++    if(TARGET rog_map_inflation_geometry_test)
++        target_link_libraries(rog_map_inflation_geometry_test
++                ${GTEST_MAIN_LIBRARIES})
++    endif()
++endif()
+diff --git a/rog_map/include/rog_map/rog_map_core/config.hpp b/rog_map/include/rog_map/rog_map_core/config.hpp
+index a2e33f0..de641cc 100755
+--- a/rog_map/include/rog_map/rog_map_core/config.hpp
++++ b/rog_map/include/rog_map/rog_map_core/config.hpp
+@@ -24,6 +24,7 @@
+ #pragma once
+ 
+ #include <rog_map/rog_map_core/common_lib.hpp>
++#include <rog_map/rog_map_core/inflation_geometry.h>
+ #include <super_utils/yaml_loader.hpp>
+ 
+ #ifndef ORIGIN_AT_CORNER
+@@ -156,6 +157,10 @@ namespace rog_map {
+             loader.LoadParam(name_space + "/unk_inflation_step", unk_inflation_step, 1);
+ 
+             loader.LoadParam(name_space + "/inflation_step", inflation_step, 1);
++            loader.LoadParam(name_space + "/inflation_vertical_step", inflation_vertical_step, -1);
++            if (inflation_step < 0 || inflation_vertical_step < -1) {
++                throw std::invalid_argument("inflation steps must be nonnegative (-1 preserves spherical vertical inflation)");
++            }
+             loader.LoadParam(name_space + "/intensity_thresh", intensity_thresh, -1);
+ 
+             vector<double> temp_map_size;
+@@ -238,9 +243,11 @@ namespace rog_map {
+             // init spherical neighbor
+             for (int dx = -inflation_step; dx <= inflation_step; dx++) {
+                 for (int dy = -inflation_step; dy <= inflation_step; dy++) {
+-                    for (int dz = -inflation_step; dz <= inflation_step; dz++) {
+-                        if (inflation_step == 1 ||
+-                            dx * dx + dy * dy + dz * dz <= inflation_step * inflation_step) {
++                    const int vertical_step = inflation_vertical_step < 0
++                        ? inflation_step : inflation_vertical_step;
++                    for (int dz = -vertical_step; dz <= vertical_step; dz++) {
++                        if (includeInflationOffset(dx, dy, dz,
++                                                   inflation_step, inflation_vertical_step)) {
+                             inf_spherical_neighbor.emplace_back(dx, dy, dz);
+                         }
+                     }
+@@ -298,6 +305,7 @@ namespace rog_map {
+ 
+         double resolution{}, inflation_resolution{};
+         int inflation_step{};
++        int inflation_vertical_step{-1};
+         Vec3f local_update_box_d, half_local_update_box_d{};
+         Vec3i local_update_box_i, half_local_update_box_i{};
+         Vec3f map_size_d, half_map_size_d{};
+@@ -405,9 +413,9 @@ namespace rog_map {
+ 
+ #ifdef ORIGIN_AT_CORNER
+             inf_virtual_ceil_height_id_g = static_cast<int>(floor(virtual_ceil_height / inflation_resolution)) -
+-                                           inflation_step;
++                                           (inflation_vertical_step < 0 ? inflation_step : inflation_vertical_step);
+             inf_virtual_ground_height_id_g = static_cast<int>(floor(virtual_ground_height / inflation_resolution)) +
+-                                             inflation_step;
++                                             (inflation_vertical_step < 0 ? inflation_step : inflation_vertical_step);
+ 
+             fmt::print(" -- [ROG-Map] Init, resetMapSize: ORIGIN_AT_CORNER.\n");
+ #endif
+diff --git a/rog_map/include/rog_map/rog_map_core/inflation_geometry.h b/rog_map/include/rog_map/rog_map_core/inflation_geometry.h
+new file mode 100644
+--- /dev/null
++++ b/rog_map/include/rog_map/rog_map_core/inflation_geometry.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <cstdlib>
++
++namespace rog_map {
++
++// A negative vertical step preserves the upstream spherical inflation.
++// An explicit vertical step uses a horizontal disk extruded only through
++// the vehicle's vertical body height; it does not turn floor stand-off into
++// a horizontal wall stand-off.
++inline bool includeInflationOffset(int dx, int dy, int dz,
++                                   int horizontal_step, int vertical_step) {
++    if (vertical_step < 0) {
++        return horizontal_step == 1 ||
++               dx * dx + dy * dy + dz * dz <= horizontal_step * horizontal_step;
++    }
++    return dx * dx + dy * dy <= horizontal_step * horizontal_step &&
++           std::abs(dz) <= vertical_step;
++}
++
++}  // namespace rog_map
+diff --git a/rog_map/test/inflation_geometry_test.cpp b/rog_map/test/inflation_geometry_test.cpp
+new file mode 100644
+--- /dev/null
++++ b/rog_map/test/inflation_geometry_test.cpp
+@@ -0,0 +1,13 @@
++#include <gtest/gtest.h>
++#include <rog_map/rog_map_core/inflation_geometry.h>
++
++TEST(InflationGeometry, DefaultPreservesSphere) {
++    EXPECT_TRUE(rog_map::includeInflationOffset(2, 2, 1, 3, -1));
++    EXPECT_FALSE(rog_map::includeInflationOffset(3, 3, 0, 3, -1));
++}
++
++TEST(InflationGeometry, ExplicitVerticalExtentKeepsWallAndExcludesFarFloor) {
++    EXPECT_TRUE(rog_map::includeInflationOffset(7, 0, 2, 7, 2));
++    EXPECT_FALSE(rog_map::includeInflationOffset(7, 0, 3, 7, 2));
++    EXPECT_FALSE(rog_map::includeInflationOffset(6, 6, 0, 7, 2));
++}

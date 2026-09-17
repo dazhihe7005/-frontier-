@@ -1,4 +1,5 @@
 #include "mine_uav_control/super_exploration_decider.hpp"
+#include "mine_uav_control/anisotropic_clearance.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -89,6 +90,9 @@ SuperExplorationDecider::SuperExplorationDecider(
   return_request_subscriber_ = nh_.subscribe(
       return_request_topic_, 1,
       &SuperExplorationDecider::returnRequestCallback, this);
+  rejected_goal_subscriber_ = nh_.subscribe(
+      "/mine_uav/super/rejected_goal_id", 10,
+      &SuperExplorationDecider::rejectedGoalCallback, this);
   mission_enable_subscriber_ = nh_.subscribe(
       mission_enable_topic_, 1,
       &SuperExplorationDecider::missionEnableCallback, this);
@@ -162,6 +166,8 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("min_data_duration", min_data_duration_, min_data_duration_);
   private_nh_.param("candidate_spacing", candidate_spacing_, candidate_spacing_);
   private_nh_.param("vehicle_radius", vehicle_radius_, vehicle_radius_);
+  private_nh_.param("vertical_vehicle_radius", vertical_vehicle_radius_,
+                    vertical_vehicle_radius_);
   private_nh_.param("min_observation_height_above_home",
                     min_observation_height_above_home_,
                     min_observation_height_above_home_);
@@ -314,6 +320,8 @@ bool SuperExplorationDecider::loadParameters() {
                     max_frontier_candidates_);
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
+      !std::isfinite(vertical_vehicle_radius_) ||
+      (vertical_vehicle_radius_ != -1.0 && vertical_vehicle_radius_ <= 0.0) ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
       !std::isfinite(max_exploration_radius_from_home_) ||
       max_exploration_radius_from_home_ <= 0.0 ||
@@ -1108,6 +1116,25 @@ void SuperExplorationDecider::pruneMap() {
 }
 
 bool SuperExplorationDecider::isClearForVehicle(const VoxelKey& key) const {
+  if (vertical_vehicle_radius_ > 0.0) {
+    const double search_xy = vehicle_radius_ + voxel_resolution_ * 0.7071067811865476;
+    const double search_z = vertical_vehicle_radius_ + voxel_resolution_ * 0.5;
+    const int xy_cells = static_cast<int>(std::ceil(search_xy / voxel_resolution_));
+    const int z_cells = static_cast<int>(std::ceil(search_z / voxel_resolution_));
+    for (int dx = -xy_cells; dx <= xy_cells; ++dx) {
+      for (int dy = -xy_cells; dy <= xy_cells; ++dy) {
+        for (int dz = -z_cells; dz <= z_cells; ++dz) {
+          if (insideAnisotropicClearance(
+                  dx, dy, dz, voxel_resolution_, vehicle_radius_,
+                  vertical_vehicle_radius_) &&
+              isOccupied({key.x + dx, key.y + dy, key.z + dz})) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
   const int radius = std::max(
       1, static_cast<int>(std::ceil(vehicle_radius_ / voxel_resolution_)));
   for (int dx = -radius; dx <= radius; ++dx) {
@@ -1898,6 +1925,18 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     }
   }
 
+  if (!have_active_goal_ && !rejected_goal_retry_after_.isZero()) {
+    if (ros::Time::now() < rejected_goal_retry_after_) {
+      publishStatus("WAIT_SUPER_MAP", "goal rejected while SUPER map catches up");
+      return;
+    }
+    rejected_goal_retry_after_ = ros::Time(0);
+    if (publishForwardLookaheadGoal(reachable) || selectAndPublishFrontier(candidates)) {
+      publishStatus("EXPLORING", "retrying a reachable goal after SUPER rejection");
+      return;
+    }
+  }
+
   if (!have_active_goal_ && require_three_wall_completion_ &&
       publishEndApproachGoal(coverage)) {
     publishStatus("APPROACHING_END_WALL",
@@ -1949,6 +1988,17 @@ void SuperExplorationDecider::returnRequestCallback(
   }
 }
 
+void SuperExplorationDecider::rejectedGoalCallback(
+    const std_msgs::UInt64::ConstPtr& message) {
+  if (!have_active_goal_ || message->data != active_goal_id_) return;
+  ROS_WARN("SUPER rejected goal %llu; waiting for a fresh map before retry",
+           static_cast<unsigned long long>(message->data));
+  have_active_goal_ = false;
+  active_goal_id_ = 0;
+  rejected_goal_retry_after_ = ros::Time::now() + ros::Duration(1.0);
+  publishStatus("GOAL_REJECTED", "SUPER rejected unavailable target; not counted as explored");
+}
+
 void SuperExplorationDecider::missionEnableCallback(
     const std_msgs::Bool::ConstPtr& message) {
   if (enabled_ == message->data) {
@@ -1995,6 +2045,7 @@ void SuperExplorationDecider::clearMissionState() {
   return_waypoint_index_ = 0;
   current_goal_ = geometry_msgs::PoseStamped();
   active_goal_initial_distance_ = 0.0;
+  rejected_goal_retry_after_ = ros::Time();
   have_data_ = false;
   have_home_ = false;
   have_active_goal_ = false;

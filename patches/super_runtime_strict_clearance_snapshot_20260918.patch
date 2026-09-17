@@ -1,0 +1,1202 @@
+diff --git a/super_planner/CMakeLists.txt b/super_planner/CMakeLists.txt
+index 226f253..76ecc42 100755
+--- a/super_planner/CMakeLists.txt
++++ b/super_planner/CMakeLists.txt
+@@ -35,14 +35,17 @@ find_package(catkin REQUIRED COMPONENTS
+         yaml-cpp
+         tf
+ )
++
++add_message_files(FILES GoalCommand.msg)
++generate_messages(DEPENDENCIES std_msgs geometry_msgs)
+ find_package(yaml-cpp REQUIRED)
+ find_package(Boost REQUIRED COMPONENTS system filesystem regex iostreams)
+ find_package(Eigen3 REQUIRED)
+ find_package(PCL REQUIRED)
+ catkin_package(
+         INCLUDE_DIRS
+-        LIBRARIES super_planner
+-        CATKIN_DEPENDS roscpp rospy std_msgs
++        LIBRARIES super
++        CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs message_runtime
+         #  DEPENDS system_lib
+ )
+ 
+@@ -71,6 +74,7 @@ target_include_directories(super PUBLIC
+         include)
+ target_link_libraries(super PUBLIC
+ )
++add_dependencies(super ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+ 
+ 
+ add_executable(fsm_node
+@@ -80,6 +84,54 @@ target_link_libraries(fsm_node
+         super
+         ${THIRD_PARTY}
+ )
++add_dependencies(fsm_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
++
++if(CATKIN_ENABLE_TESTING)
++    catkin_add_gtest(goal_command_validation_test test/goal_command_validation_test.cpp)
++    if(TARGET goal_command_validation_test)
++        target_link_libraries(goal_command_validation_test ${GTEST_MAIN_LIBRARIES})
++        add_dependencies(goal_command_validation_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
++    endif()
++    catkin_add_gtest(goal_command_message_test test/goal_command_message_test.cpp)
++    if(TARGET goal_command_message_test)
++        target_link_libraries(goal_command_message_test ${GTEST_MAIN_LIBRARIES})
++        add_dependencies(goal_command_message_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
++    endif()
++    catkin_add_gtest(goal_lifecycle_guard_test test/goal_lifecycle_guard_test.cpp)
++    if(TARGET goal_lifecycle_guard_test)
++        target_link_libraries(goal_lifecycle_guard_test ${GTEST_MAIN_LIBRARIES})
++    endif()
++    catkin_add_gtest(fsm_goal_cancellation_test test/fsm_goal_cancellation_test.cpp)
++    if(TARGET fsm_goal_cancellation_test)
++        target_link_libraries(fsm_goal_cancellation_test super ${THIRD_PARTY})
++        add_dependencies(fsm_goal_cancellation_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
++    endif()
++    catkin_add_gtest(super_guide_time_initialization_test
++            test/guide_time_initialization_test.cpp)
++    if(TARGET super_guide_time_initialization_test)
++        target_link_libraries(super_guide_time_initialization_test
++                super
++                ${THIRD_PARTY})
++    endif()
++    catkin_add_gtest(flight_z_contract_test test/flight_z_contract_test.cpp)
++    if(TARGET flight_z_contract_test)
++        target_link_libraries(flight_z_contract_test ${GTEST_MAIN_LIBRARIES})
++    endif()
++    catkin_add_gtest(ciri_tangent_plane_test test/ciri_tangent_plane_test.cpp)
++    if(TARGET ciri_tangent_plane_test)
++        target_link_libraries(ciri_tangent_plane_test super ${THIRD_PARTY} ${GTEST_MAIN_LIBRARIES})
++        target_link_options(ciri_tangent_plane_test PRIVATE -fuse-ld=lld)
++        add_dependencies(ciri_tangent_plane_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
++    endif()
++    catkin_add_gtest(horizontal_clearance_contract_test test/horizontal_clearance_contract_test.cpp)
++    if(TARGET horizontal_clearance_contract_test)
++        target_link_libraries(horizontal_clearance_contract_test ${GTEST_MAIN_LIBRARIES})
++    endif()
++    catkin_add_gtest(path_start_guard_test test/path_start_guard_test.cpp)
++    if(TARGET path_start_guard_test)
++        target_link_libraries(path_start_guard_test ${GTEST_MAIN_LIBRARIES})
++    endif()
++endif()
+ 
+ #add_executable(read_replan_log
+ #        Apps/read_replan_log.cpp
+diff --git a/super_planner/include/ros_interface/ros1/fsm_ros1.hpp b/super_planner/include/ros_interface/ros1/fsm_ros1.hpp
+index 84135bf..90e31f0 100644
+--- a/super_planner/include/ros_interface/ros1/fsm_ros1.hpp
++++ b/super_planner/include/ros_interface/ros1/fsm_ros1.hpp
+@@ -28,6 +28,7 @@
+ #define SRC_FSM_ROS1_HPP
+ 
+ #include "fsm/fsm.h"
++#include "fsm/goal_command_validation.h"
+ 
+ #include "ros/ros.h"
+ #include "geometry_msgs/PoseStamped.h"
+@@ -35,26 +36,34 @@
+ #include "nav_msgs/Odometry.h"
+ #include "quadrotor_msgs/PositionCommand.h"
+ #include "quadrotor_msgs/PolynomialTrajectory.h"
++#include "super_planner/GoalCommand.h"
++#include "std_msgs/UInt64.h"
++#include <stdexcept>
+ 
+ 
+ namespace fsm {
+     class FsmRos1 : public Fsm {
+         ros::NodeHandle nh_;
+         ros::Subscriber goal_sub_;
+-        ros::Publisher cmd_pub, mpc_cmd_pub_, path_pub_;
++        ros::Publisher cmd_pub, mpc_cmd_pub_, path_pub_, rejected_goal_pub_;
+         ros::Timer execution_timer_, replan_timer_, cmd_timer_;
+         quadrotor_msgs::PositionCommand pid_cmd_;
++        quadrotor_msgs::PositionCommand command_template_;
+         rog_map::ROGMapROS::Ptr map_ptr_;
+         quadrotor_msgs::PositionCommand latest_cmd;
+         nav_msgs::Path path;
++        std::mutex path_mutex_;
+ 
+         vector<quadrotor_msgs::PositionCommand> cmd_logs_;
++        std::mutex cmd_log_mutex_;
+ 
+         void resetVisualizedPath() override {
++            std::lock_guard<std::mutex> lock(path_mutex_);
+             path.poses.clear();
+         }
+ 
+         void publishCurPoseToPath() override {
++            std::lock_guard<std::mutex> lock(path_mutex_);
+             path.header.frame_id = "world";
+             path.header.stamp = ros::Time::now();
+             geometry_msgs::PoseStamped pose;
+@@ -76,6 +85,23 @@ namespace fsm {
+             mpc_cmd_pub_.publish(cmd_traj);
+         }
+ 
++        void publishPolyTrajIfCurrent(const GoalLifecycleGuard::Token& token) override {
++            uint64_t revision = 0;
++            bool eligible = false;
++            lifecycle_.runIfCurrent(token, [&] {
++                eligible = committed_traj_epoch_ == token.epoch;
++                revision = committed_traj_revision_;
++            });
++            if (!eligible) return;
++            quadrotor_msgs::PolynomialTrajectory cmd_traj;
++            getCommittedTrajectory(cmd_traj);
++            lifecycle_.runIfCurrent(token, [&] {
++                if (committed_traj_epoch_ == token.epoch &&
++                    committed_traj_revision_ == revision)
++                    mpc_cmd_pub_.publish(cmd_traj);
++            });
++        }
++
+         void getOneHeartBeatMsg(quadrotor_msgs::PolynomialTrajectory &heartbeat, bool &traj_finish) {
+             heartbeat.type = quadrotor_msgs::PolynomialTrajectory::HEART_BEAT;
+             heartbeat.header.stamp = ros::Time::now();
+@@ -137,7 +163,9 @@ namespace fsm {
+             bool on_backup_traj;
+             planner_ptr_->getOneCommandFromTraj(pvaj, yaw, yaw_dot, on_backup_traj, traj_finish);
+             pos_cmd.header.stamp = ros::Time::now();
+-            pos_cmd.header.frame_id = "world";
++            // Task-one bridge contract: SUPER commands are expressed in the
++            // same registered Fast-LIO2 frame as the goal and odometry.
++            pos_cmd.header.frame_id = "camera_init";
+             pos_cmd.position.x = pvaj(0, 0);
+             pos_cmd.position.y = pvaj(1, 0);
+             pos_cmd.position.z = pvaj(2, 0);
+@@ -164,8 +192,6 @@ namespace fsm {
+             pos_cmd.angular_velocity.y = omg(1);
+             pos_cmd.angular_velocity.z = omg(2);
+             pos_cmd.thrust.z = aT;
+-            latest_cmd = pos_cmd;
+-            cmd_logs_.push_back(latest_cmd);
+         }
+ 
+     public:
+@@ -180,6 +206,8 @@ namespace fsm {
+         typedef std::shared_ptr<FsmRos1> Ptr;
+ 
+         void saveReplanLogToFile(const string &name = "") {
++            std::lock_guard<std::mutex> replan_lock(replan_log_mutex_);
++            std::lock_guard<std::mutex> command_lock(cmd_log_mutex_);
+             // run statistic
+             double total_length{0.0};
+             int total_replan_num{0};
+@@ -237,6 +265,7 @@ namespace fsm {
+                 return false;
+             }
+             getOnePositionCommand(pid_cmd_, traj_finish_);
++            latest_cmd = pid_cmd_;
+             if (traj_finish_) {
+                 cout << GREEN << " -- [Fsm] Traj finish." << RESET << endl;
+                 if (closeToGoal(0.1)) {
+@@ -259,7 +288,10 @@ namespace fsm {
+             }
+             fmt::print(" -- [Fsm] Cur vel: {}, delta_v: {}, max_delta_v: {}\n", pid_cmd_.vel_norm, delta_v,
+                        max_delta_v);
+-            cmd_logs_.push_back(latest_cmd);
++            {
++                std::lock_guard<std::mutex> lock(cmd_log_mutex_);
++                cmd_logs_.push_back(latest_cmd);
++            }
+             return true;
+         }
+ 
+@@ -267,7 +299,28 @@ namespace fsm {
+             super_utils::Vec3f goal_p = Vec3f{msg->pose.position.x, msg->pose.position.y, msg->pose.position.z};
+             super_utils::Quatf goal_q = super_utils::Quatf{msg->pose.orientation.w, msg->pose.orientation.x,
+                                                            msg->pose.orientation.y, msg->pose.orientation.z};
+-            setGoalPosiAndYaw(goal_p, goal_q);
++            setGoalPosiAndYaw(goal_p, goal_q, next_legacy_goal_id_++);
++        }
++
++        void goalCommandCallback(const super_planner::GoalCommandConstPtr& msg) {
++            if (!validateGoalCommand(*msg, lifecycle_.activeGoalId())) {
++                ROS_WARN_THROTTLE(1.0, "[Fsm] Rejected malformed or stale goal command");
++                return;
++            }
++            if (msg->command == super_planner::GoalCommand::CANCEL_GOAL) {
++                cancelGoal(msg->goal_id);
++                return;
++            }
++            const auto& p = msg->goal.position;
++            const auto& q = msg->goal.orientation;
++            const Vec3f goal_p(p.x, p.y, p.z);
++            const Quatf goal_q(q.w, q.x, q.y, q.z);
++            if (!setGoalPosiAndYaw(goal_p, goal_q, msg->goal_id)) {
++                ROS_WARN_THROTTLE(1.0, "[Fsm] Rejected unavailable goal position");
++                std_msgs::UInt64 rejection;
++                rejection.data = msg->goal_id;
++                rejected_goal_pub_.publish(rejection);
++            }
+         }
+ 
+         void init(const ros::NodeHandle &nh, const std::string &cfg_path) {
+@@ -279,6 +332,8 @@ namespace fsm {
+             ros_ptr_ = std::make_shared<ros_interface::Ros1Interface>(nh_);
+             planner_ptr_ = std::make_shared<SuperPlanner>(cfg_path, ros_ptr_, map_ptr_);
+             cmd_pub = nh_.advertise<quadrotor_msgs::PositionCommand>(cfg_.cmd_topic, 10);
++            rejected_goal_pub_ = nh_.advertise<std_msgs::UInt64>(
++                    "/mine_uav/super/rejected_goal_id", 10);
+             mpc_cmd_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTrajectory>(cfg_.mpc_cmd_topic, 10);
+             path_pub_ = nh_.advertise<nav_msgs::Path>("fsm/path", 100);
+ 
+@@ -290,9 +345,16 @@ namespace fsm {
+                 cmd_cnt++;
+             }
+ 
++            if (cfg_.goal_command_en) {
++                goal_sub_ = nh_.subscribe(cfg_.goal_command_topic, 20,
++                                          &FsmRos1::goalCommandCallback, this);
++                cout << YELLOW << " -- [Fsm] GOAL COMMAND ENABLE." << RESET << endl;
++                cmd_cnt++;
++            }
++
+             if (cmd_cnt != 1) {
+                 cout << YELLOW << " -- [Fsm] CMD INPUT ERROR." << RESET << endl;
+-                exit(0);
++                throw std::runtime_error("exactly one SUPER goal input mode must be enabled");
+             }
+ 
+             if (cfg_.timer_en) {
+@@ -321,29 +383,48 @@ namespace fsm {
+             pid_cmd_.kv[0] = 3.4;
+             pid_cmd_.kv[1] = 3.4;
+             pid_cmd_.kv[2] = 4.0;
++            command_template_ = pid_cmd_;
+         }
+ 
+         void pubCmdTimerCallback(const ros::TimerEvent &event) {
+-            if (stop) {
+-                return;
+-            }
+-            if (machine_state_ != FOLLOW_TRAJ && machine_state_ != EMER_STOP) {
+-                return;
+-            }
+-
+-
+-            quadrotor_msgs::PolynomialTrajectory heartbeat;
+-            getOneHeartBeatMsg(heartbeat, traj_finish_);
+-            getOnePositionCommand(pid_cmd_, traj_finish_);
+-            mpc_cmd_pub_.publish(heartbeat);
+-            cmd_pub.publish(pid_cmd_);
+-            if (traj_finish_) {
+-                cout << GREEN << " -- [Fsm] Traj finish." << RESET << endl;
+-                if (closeToGoal(0.1)) {
+-                    ChangeState("PubCmdCallback", WAIT_GOAL);
+-                } else {
+-                    ChangeState("PubCmdCallback", GENERATE_TRAJ);
++            if (stop) return;
++            const auto token = lifecycle_.snapshot();
++            if (!token) return;
++            quadrotor_msgs::PositionCommand command;
++            bool eligible = false;
++            uint64_t revision = 0;
++            lifecycle_.runIfCurrent(*token, [&] {
++                eligible = committed_traj_epoch_ == token->epoch &&
++                           (machine_state_ == FOLLOW_TRAJ || machine_state_ == EMER_STOP);
++                if (eligible) {
++                    command = command_template_;
++                    revision = committed_traj_revision_;
+                 }
++            });
++            if (!eligible) return;
++            quadrotor_msgs::PolynomialTrajectory heartbeat;
++            bool heartbeat_finished = false, command_finished = false;
++            getOneHeartBeatMsg(heartbeat, heartbeat_finished);
++            getOnePositionCommand(command, command_finished);
++            bool published = false;
++            runCommandForCurrentTrajectory(*token, revision, [&] {
++                if (machine_state_ != FOLLOW_TRAJ && machine_state_ != EMER_STOP) return;
++                mpc_cmd_pub_.publish(heartbeat);
++                cmd_pub.publish(command);
++                traj_finish_ = command_finished;
++                published = true;
++            });
++            if (published && command_finished) {
++                lifecycle_.runIfCurrent(*token, [&] {
++                    if (committed_traj_revision_ != revision ||
++                        (machine_state_ != FOLLOW_TRAJ && machine_state_ != EMER_STOP)) return;
++                    if (closeToGoal(0.1)) ChangeState("PubCmdCallback", WAIT_GOAL);
++                    else ChangeState("PubCmdCallback", GENERATE_TRAJ);
++                });
++            }
++            if (published) {
++                std::lock_guard<std::mutex> lock(cmd_log_mutex_);
++                cmd_logs_.push_back(std::move(command));
+             }
+         }
+ 
+@@ -360,4 +441,4 @@ namespace fsm {
+ 
+ #endif //SRC_FSM_ROS1_HPP
+ 
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/super_planner/include/super_core/ciri.h b/super_planner/include/super_core/ciri.h
+index fcd3cf9..ddacc71 100755
+--- a/super_planner/include/super_core/ciri.h
++++ b/super_planner/include/super_core/ciri.h
+@@ -65,8 +65,10 @@ namespace super_planner {
+     using geometry_utils::Polytope;
+ 
+     class CIRI {
++        friend class CiriTangentPlaneTestPeer;
+         ros_interface::RosInterface::Ptr ros_ptr_;
+         double robot_r_{0};
++        double horizontal_clearance_extra_{0};
+         int iter_num_{1};
+         bool debug_en{false};
+ 
+@@ -91,7 +93,7 @@ namespace super_planner {
+                 const Eigen::Vector3d &b,
+                 Ellipsoid &out_ell);
+ 
+-        static void findTangentPlaneOfSphere(const Eigen::Vector3d &center, const double &r,
++        static bool findTangentPlaneOfSphere(const Eigen::Vector3d &center, const double &r,
+                                              const Eigen::Vector3d &pass_point,
+                                              const Eigen::Vector3d &seed_p,
+                                              Eigen::Vector4d &outter_plane);
+@@ -133,7 +135,7 @@ namespace super_planner {
+ 
+         typedef std::shared_ptr<CIRI> Ptr;
+ 
+-        void setupParams(double robot_r, int iter_num);
++        void setupParams(double robot_r, int iter_num, double horizontal_clearance_extra = 0.0);
+ 
+         RET_CODE comvexDecomposition(const Eigen::MatrixX4d &bd,
+                                      const Eigen::Matrix3Xd &pc,
+@@ -142,4 +144,4 @@ namespace super_planner {
+ 
+         void getPolytope(Polytope &optimized_poly);
+     };
+-}
+\ No newline at end of file
++}
+diff --git a/super_planner/include/super_core/config.hpp b/super_planner/include/super_core/config.hpp
+index 7577f81..9f7e04f 100755
+--- a/super_planner/include/super_core/config.hpp
++++ b/super_planner/include/super_core/config.hpp
+@@ -25,6 +25,9 @@
+ #ifndef SUPER_PLANNER_CONFIG_HPP
+ #define SUPER_PLANNER_CONFIG_HPP
+ 
++#include <stdexcept>
++#include <cmath>
++
+ #include <rog_map/rog_map_core/config.hpp>
+ #include <traj_opt/config.hpp>
+ #include <utils/header/yaml_loader.hpp>
+@@ -65,6 +68,8 @@ namespace super_planner {
+         double replan_forward_dt;
+         double sample_traj_dt;
+         double robot_r;
++        double horizontal_clearance_extra, clearance_vertical_band;
++        double flight_min_z, flight_max_z;
+         int iris_iter_num;
+ 
+         int mpc_horizon{};
+@@ -99,6 +104,20 @@ namespace super_planner {
+             loader.LoadParam("super_planner/planning_horizon", planning_horizon, 10.0);
+             loader.LoadParam("super_planner/receding_dis", receding_dis, 5.0);
+             loader.LoadParam("super_planner/robot_r", robot_r, 0.3);
++            loader.LoadParam("super_planner/horizontal_clearance_extra", horizontal_clearance_extra, 0.0);
++            loader.LoadParam("super_planner/clearance_vertical_band", clearance_vertical_band, 0.0);
++            if (!std::isfinite(horizontal_clearance_extra) || horizontal_clearance_extra < 0.0 ||
++                !std::isfinite(clearance_vertical_band) || clearance_vertical_band < 0.0 ||
++                (horizontal_clearance_extra > 0.0 &&
++                 (corridor_bound_dis <= robot_r + horizontal_clearance_extra ||
++                  clearance_vertical_band <= 0.0))) {
++                throw std::invalid_argument("horizontal clearance requires a finite nonnegative margin and a larger corridor search bound");
++            }
++            loader.LoadParam("super_planner/flight_min_z", flight_min_z, -1.0e6);
++            loader.LoadParam("super_planner/flight_max_z", flight_max_z, 1.0e6);
++            if (!(flight_min_z < flight_max_z)) {
++                throw std::invalid_argument("super_planner flight z bounds must increase");
++            }
+             loader.LoadParam("super_planner/iris_iter_num", iris_iter_num, 1);
+             loader.LoadParam("super_planner/yaw_mode", yaw_mode, 1);
+             loader.LoadParam("super_planner/mpc_horizon", mpc_horizon, 1);
+diff --git a/super_planner/include/super_core/corridor_generator.h b/super_planner/include/super_core/corridor_generator.h
+index 81992a6..952ac63 100755
+--- a/super_planner/include/super_core/corridor_generator.h
++++ b/super_planner/include/super_core/corridor_generator.h
+@@ -59,6 +59,9 @@ namespace super_planner {
+         int iris_iter_num_;
+         double virtual_groud_height_ = 0.0;
+         double virtual_ceil_height_ = 0.0;
++        double flight_min_z_ = -1.0e6;
++        double flight_max_z_ = 1.0e6;
++        double clearance_vertical_band_ = 0.0;
+         rog_map::ROGMapROS::Ptr map_ptr_;
+         vec_E<Vec3i> line_seed_neighbor_list;
+         CIRI::Ptr ciri_;
+@@ -84,7 +87,11 @@ namespace super_planner {
+                           const double virtual_ceil_height,
+                           const double robot_r,
+                           const int box_search_skip_num,
+-                          const int iris_iter_num);
++                          const int iris_iter_num,
++                          const double flight_min_z,
++                          const double flight_max_z,
++                          const double horizontal_clearance_extra,
++                          const double clearance_vertical_band);
+ 
+         ~CorridorGenerator() = default;
+ 
+diff --git a/super_planner/src/super_core/ciri.cpp b/super_planner/src/super_core/ciri.cpp
+index e23b104..ebc3cb1 100755
+--- a/super_planner/src/super_core/ciri.cpp
++++ b/super_planner/src/super_core/ciri.cpp
+@@ -22,6 +22,7 @@
+ */
+ 
+ #include <super_core/ciri.h>
++#include <super_core/horizontal_clearance_contract.h>
+ using namespace color_text;
+ using namespace optimization_utils;
+ using namespace super_utils;
+@@ -37,6 +38,11 @@ namespace super_planner {
+         /// force return if the seed is not inside the boundary
+         if ((bd * ah).maxCoeff() > epsilon_ ||
+             (bd * bh).maxCoeff() > epsilon_) {
++            static int boundary_failures = 0;
++            if (boundary_failures++ < 12) ros_ptr_->warn(
++                    "CIRI boundary rejects seed a=({},{},{}) b=({},{},{}) max_a={} max_b={}",
++                    a.x(), a.y(), a.z(), b.x(), b.y(), b.z(),
++                    (bd * ah).maxCoeff(), (bd * bh).maxCoeff());
+ //            cout << YELLOW << " -- [WARN] ah, bh not in BD, forced return." << endl;
+ //            cout << "bd  * ah: " << (bd * ah).transpose().maxCoeff() << endl;
+ //            cout << "bd  * bh: " << (bd * bh).transpose().maxCoeff() << endl;
+@@ -87,6 +93,7 @@ namespace super_planner {
+             Vec4f plan_before_ab;
+ 
+             for (int i = 0; !completed && i < (M + N); ++i) {
++                bool obstacle_plane = false;
+                 if (minSqrD < minSqrR) {
+                     /// Case [Bd closer than ob]  enable the boundary constrain.
+                     Vec4f p_e = bd_e.row(bdMinId);
+@@ -94,6 +101,7 @@ namespace super_planner {
+                     bdFlags(bdMinId) = 0;
+                 }
+                 else {
++                    obstacle_plane = true;
+                     /// Case [Ob closer than Bd] enable the obstacle point constarin.
+                     ///     Compute the tangent plane of sphere
+                     ///
+@@ -153,11 +161,12 @@ namespace super_planner {
+                         /// Cut line with sphere A and B,
+                         if (temp_plane_w.head(3).dot(a) + temp_plane_w(3) > -epsilon_) {
+                             // Case the plan make seed out, the plane should be modified in world frame
+-                            findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w);
++                            if (!findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w)) return FAILED;
+                         } else if (temp_plane_w.head(3).dot(b) + temp_plane_w(3) > -epsilon_) {
+                             // Case the plan make seed out, the plane should be modified in world frame
+-                            findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w);
++                            if (!findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w)) return FAILED;
+                         }
++                        if (!temp_plane_w.allFinite()) return FAILED;
+                     }
+                     pcFlags(pcMinId) = 0;
+                     tmp_nn_pt = pc.col(pcMinId);
+@@ -189,7 +198,32 @@ namespace super_planner {
+                         }
+                     }
+                 }
+-                planes.push_back(temp_plane_w);
++                if (obstacle_plane && horizontal_clearance_extra_ > 0.0) {
++                    Eigen::Vector4d inset;
++                    if (!insetObstaclePlaneHorizontal(temp_plane_w,
++                            horizontal_clearance_extra_, a, b, inset)) {
++                        static int failures_printed = 0;
++                        if (failures_printed++ < 12) {
++                            std::cerr << "[CIRI horizontal inset infeasible] seed_a="
++                                      << a.transpose() << " seed_b=" << b.transpose()
++                                      << " obstacle=" << tmp_nn_pt.transpose()
++                                      << " plane=" << temp_plane_w.transpose()
++                                      << " shifted=" << inset.transpose()
++                                      << " a_value=" << inset.head<3>().dot(a) + inset(3)
++                                      << " b_value=" << inset.head<3>().dot(b) + inset(3)
++                                      << std::endl;
++                            ros_ptr_->warn("CIRI inset rejects seed a=({},{},{}) b=({},{},{}) obstacle=({},{},{}) plane=({},{},{},{}) a_value={} b_value={}",
++                                    a.x(), a.y(), a.z(), b.x(), b.y(), b.z(),
++                                    tmp_nn_pt.x(), tmp_nn_pt.y(), tmp_nn_pt.z(),
++                                    inset.x(), inset.y(), inset.z(), inset.w(),
++                                    inset.head<3>().dot(a) + inset(3), inset.head<3>().dot(b) + inset(3));
++                        }
++                        return FAILED;
++                    }
++                    planes.push_back(inset);
++                } else {
++                    planes.push_back(temp_plane_w);
++                }
+             }
+ 
+             hPoly.resize(planes.size(), 4);
+@@ -217,6 +251,10 @@ namespace super_planner {
+             }
+ 
+             if (!MVIE::maxVolInsEllipsoid(hPoly, E)) {
++                static int mvie_failures = 0;
++                if (mvie_failures++ < 12) ros_ptr_->warn(
++                        "CIRI MVIE rejects polytope seed a=({},{},{}) b=({},{},{}) planes={}",
++                        a.x(), a.y(), a.z(), b.x(), b.y(), b.z(), hPoly.rows());
+                 return FAILED;
+             }
+         }
+@@ -248,15 +286,16 @@ namespace super_planner {
+         optimized_poly = optimized_polytope_;
+     }
+ 
+-    void CIRI::setupParams(double robot_r, int iter_num) {
++    void CIRI::setupParams(double robot_r, int iter_num, double horizontal_clearance_extra) {
+         robot_r_ = robot_r;
++        horizontal_clearance_extra_ = horizontal_clearance_extra;
+         iter_num_ = iter_num;
+         sphere_template_ = Ellipsoid(Mat3f::Identity(), robot_r_ * Vec3f(1, 1, 1), Vec3f(0, 0, 0));
+         //        split_seed_max_ = split_seed_max;
+         //        split_thresh_ = split_thresh;
+     }
+ 
+-    void CIRI::findTangentPlaneOfSphere(const Eigen::Vector3d& center, const double& r,
++    bool CIRI::findTangentPlaneOfSphere(const Eigen::Vector3d& center, const double& r,
+                                         const Eigen::Vector3d& pass_point,
+                                         const Eigen::Vector3d& seed_p,
+                                         Eigen::Vector4d& outter_plane) {
+@@ -287,27 +326,35 @@ namespace super_planner {
+         //     outter_plane = -outter_plane;
+         // }
+ 
++        const Eigen::Vector3d P_world = pass_point - center;
++        const double radius_squared = r * r;
++        const double tolerance = 1e-9 * std::max(1.0, radius_squared);
++        if (!P_world.allFinite() || !seed_p.allFinite() || !std::isfinite(r) ||
++            r <= 0.0 || P_world.squaredNorm() < radius_squared - tolerance) {
++            return false;
++        }
+         Vec3f seed = seed_p;
+-        Vec3f dif = pass_point - pass_point;
+-        if (dif.norm() < 1e-3) {
+-            if ((pass_point - center).head(2).norm() > 1e-3) {
+-                Vec3f v1 = (pass_point - center).normalized();
+-                v1(2) = 0;
+-                seed = seed_p + 0.01 * v1.cross(Vec3f(0, 0, 1)).normalized();
+-            }
+-            else {
+-                seed = seed_p + 0.01 * (pass_point - center).cross(Vec3f(1, 0, 0)).normalized();
+-            }
++        Eigen::Vector3d cross = P_world.cross(seed - center);
++        if (cross.norm() < 1e-9) {
++            // The seed may coincide with the endpoint or lie on the radial
++            // line. Move it sideways, never along a normalized zero vector.
++            seed += 0.01 * P_world.unitOrthogonal();
++            cross = P_world.cross(seed - center);
+         }
+-        Eigen::Vector3d P = pass_point - center;
+-        Eigen::Vector3d norm_ = (pass_point - center).cross(seed - center).normalized();
++        if (cross.norm() < 1e-12) return false;
++        Eigen::Vector3d norm_ = cross.normalized();
+         Eigen::Matrix3d R = Eigen::Quaterniond::FromTwoVectors(norm_, Vec3f(0, 0, 1)).matrix();
+-        P = R * P;
++        Eigen::Vector3d P = R * P_world;
+         Eigen::Vector3d C = R * (seed - center);
+         Eigen::Vector3d Q;
+-        double r2 = r * r;
++        double r2 = radius_squared;
+         double p1p2n = P.head(2).squaredNorm();
+-        double d = sqrt(p1p2n - r2);
++        const double discriminant = p1p2n - r2;
++        if (!std::isfinite(p1p2n) || p1p2n <= 1e-12 ||
++            discriminant < -tolerance) return false;
++        // An endpoint exactly tangent to the obstacle can round a few ULPs
++        // inside the sphere after rotation. That is not an infeasible path.
++        double d = sqrt(std::max(0.0, discriminant));
+         double rp1p2n = r / p1p2n;
+         double q11 = rp1p2n * (P(0) * r - P(1) * d);
+         double q21 = rp1p2n * (P(1) * r + P(0) * d);
+@@ -327,9 +374,21 @@ namespace super_planner {
+         outter_plane.head(3) = R.transpose() * Q;
+         Q = outter_plane.head(3) + center;
+         outter_plane(3) = -Q.dot(outter_plane.head(3));
+-        if (outter_plane.head(3).dot(seed) + outter_plane(3) > epsilon_) {
++        // Polytope planes use n·x+d <= 0 for the free side. The obstacle
++        // center must be on the opposite side of the tangent plane; choosing
++        // orientation from the seed alone is ambiguous at exact tangency.
++        if (outter_plane.head(3).dot(center) + outter_plane(3) < 0.0) {
+             outter_plane = -outter_plane;
+         }
++        const double normal_length = outter_plane.head(3).norm();
++        if (!outter_plane.allFinite() || normal_length < 1e-12) return false;
++        outter_plane /= normal_length;
++        const auto signed_distance = [&outter_plane](const Eigen::Vector3d& pt) {
++            return outter_plane.head(3).dot(pt) + outter_plane(3);
++        };
++        return signed_distance(center) >= r - 1e-8 &&
++               signed_distance(pass_point) <= 1e-8 &&
++               signed_distance(seed_p) <= 1e-8;
+     }
+ 
+     void CIRI::findEllipsoid(const Eigen::Matrix3Xd& pc,
+diff --git a/super_planner/src/super_core/corridor_generator.cpp b/super_planner/src/super_core/corridor_generator.cpp
+index f74c0f6..e7e3426 100755
+--- a/super_planner/src/super_core/corridor_generator.cpp
++++ b/super_planner/src/super_core/corridor_generator.cpp
+@@ -22,6 +22,7 @@
+ */
+ 
+ #include <super_core/corridor_generator.h>
++#include <super_core/path_start_guard.h>
+ 
+ using namespace super_utils;
+ 
+@@ -31,10 +32,13 @@ namespace super_planner {
+                                          const rog_map::ROGMapROS::Ptr &map_ptr, const double bound_dis,
+                                          const double seed_line_max_dis, const double min_overlap_threshold,
+                                          const double virtual_groud_height, const double virtual_ceil_height,
+-                                         const double robot_r, const int box_search_skip_num, const int iris_iter_num)
++                                         const double robot_r, const int box_search_skip_num, const int iris_iter_num,
++                                         const double flight_min_z, const double flight_max_z,
++                                         const double horizontal_clearance_extra,
++                                         const double clearance_vertical_band)
+             : ros_ptr_(ros_ptr), map_ptr_(map_ptr) {
+         ciri_ = std::make_shared<CIRI>(ros_ptr_);
+-        ciri_->setupParams(robot_r, iris_iter_num);
++        ciri_->setupParams(robot_r, iris_iter_num, horizontal_clearance_extra);
+         bound_dis_ = bound_dis;
+         seed_line_max_length_ = seed_line_max_dis;
+         min_overlap_threshold_ = min_overlap_threshold;
+@@ -43,6 +47,9 @@ namespace super_planner {
+         iris_iter_num_ = iris_iter_num;
+         virtual_ceil_height_ = virtual_ceil_height - robot_r;
+         virtual_groud_height_ = virtual_groud_height + robot_r;
++        flight_min_z_ = flight_min_z;
++        flight_max_z_ = flight_max_z;
++        clearance_vertical_band_ = clearance_vertical_band;
+ //        failed_traj_log.open(DEBUG_FILE_DIR("sfc.csv"), std::ios::out | std::ios::trunc);
+     }
+ 
+@@ -73,14 +80,18 @@ namespace super_planner {
+         int cnt_loop = 0;
+         first_id = 0;
+ 
+-        while(first_id < path.size() && map_ptr_->isOccupiedInflate(path[first_id])) {
+-            first_id++;
++        const auto first_free = firstUnoccupiedPathIndex(path,
++                [this](const Vec3f& p) { return map_ptr_->isOccupiedInflate(p); });
++        if (!first_free) {
++            ros_ptr_->warn("SUPER rejected path: every front-end point is occupied in the inflated map");
++            return false;
+         }
++        first_id = static_cast<int>(*first_free);
+ 
+         if(first_id!=0){
+             shifted_start_pt = path[first_id];
+             double dis = (path[first_id] - path[0]).norm() * 1.2;
+-            GenerateEmptyPolytope(path[0], dis, temp_poly);
++            if (!GenerateEmptyPolytope(path[0], dis, temp_poly)) return false;
+             sfcs.emplace_back(temp_poly);
+         }
+ 
+@@ -200,19 +211,33 @@ namespace super_planner {
+         box_max = p1.cwiseMax(p2);
+         box_min -= Vec3f(bound_dis_, bound_dis_, bound_dis_);
+         box_max += Vec3f(bound_dis_, bound_dis_, bound_dis_);
++        // Search obstacle geometry with robot-radius padding, but keep the
++        // resulting centre-space corridor inside the task flight envelope.
++        box_min.z() = std::max(box_min.z(), flight_min_z_ - robot_r_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_ + robot_r_);
+ //        box_min.z() = std::max(box_min.z(), virtual_groud_height_);
+ //        box_max.z() = std::min(box_max.z(), virtual_ceil_height_);
+     }
+ 
+     bool CorridorGenerator::GeneratePolytopeFromPoint(const Vec3f &pt, Polytope &polytope) {
++        if (pt.z() < flight_min_z_ || pt.z() > flight_max_z_) return false;
+         Eigen::Vector3d box_max, box_min;
+         vec_E<Vec3f> pc;
+         getSeedBBox(pt, pt, box_min, box_max);
++        if (clearance_vertical_band_ > 0.0) {
++            // Only obstacles that can intersect the body anywhere in this
++            // corridor's altitude band are relevant to the horizontal inset.
++            box_min.z() = std::max(box_min.z(), pt.z() - clearance_vertical_band_ - robot_r_);
++            box_max.z() = std::min(box_max.z(), pt.z() + clearance_vertical_band_ + robot_r_);
++        }
+         // TODO the box did not consider the robot_r
+         map_ptr_->boundBoxByLocalMap(box_min, box_max);
+         map_ptr_->boxSearch(box_min, box_max, OCCUPIED, pc);
+         box_min.z() += robot_r_;
+         box_max.z() -= robot_r_;
++        box_min.z() = std::max(box_min.z(), flight_min_z_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_);
++        if (box_min.z() >= box_max.z()) return false;
+         MatD4f planes;
+         Eigen::Vector3d a = pt, b = pt;
+         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+@@ -273,6 +298,10 @@ namespace super_planner {
+         box_max = pt;
+         box_min -= Vec3f(dis, dis, dis);
+         box_max += Vec3f(dis, dis, dis);
++        if (pt.z() < flight_min_z_ || pt.z() > flight_max_z_) return false;
++        box_min.z() = std::max(box_min.z(), flight_min_z_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_);
++        if (box_min.z() >= box_max.z()) return false;
+         MatD4f planes;
+         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+         bd(0, 0) = 1.0;
+@@ -302,13 +331,24 @@ namespace super_planner {
+     }
+ 
+     bool CorridorGenerator::GeneratePolytopeFromLine(Line &line, Polytope &polytope) {
++        if (std::min(line.first.z(), line.second.z()) < flight_min_z_ ||
++            std::max(line.first.z(), line.second.z()) > flight_max_z_) return false;
+         Eigen::Vector3d box_max, box_min;
+         vec_E<Vec3f> pc, pts{line.first, line.second};
+         getSeedBBox(line.first, line.second, box_min, box_max);
++        if (clearance_vertical_band_ > 0.0) {
++            box_min.z() = std::max(box_min.z(),
++                    std::min(line.first.z(), line.second.z()) - clearance_vertical_band_ - robot_r_);
++            box_max.z() = std::min(box_max.z(),
++                    std::max(line.first.z(), line.second.z()) + clearance_vertical_band_ + robot_r_);
++        }
+         map_ptr_->boundBoxByLocalMap(box_min, box_max);
+         map_ptr_->boxSearch(box_min, box_max, OCCUPIED, pc);
+         box_min.z() += robot_r_;
+         box_max.z() -= robot_r_;
++        box_min.z() = std::max(box_min.z(), flight_min_z_);
++        box_max.z() = std::min(box_max.z(), flight_max_z_);
++        if (box_min.z() >= box_max.z()) return false;
+         MatD4f planes;
+         Eigen::Vector3d a = line.first, b = line.second;
+         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+@@ -374,4 +414,4 @@ namespace super_planner {
+         }
+ 
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/super_planner/src/super_core/super_planner.cpp b/super_planner/src/super_core/super_planner.cpp
+index a7a9826..72e86cf 100755
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -22,6 +22,7 @@
+ */
+ 
+ #include <super_core/super_planner.h>
++#include <super_core/flight_z_contract.h>
+ #include <memory>
+ #include <super_utils/scope_timer.hpp>
+ #include <fmt/color.h>
+@@ -48,7 +49,11 @@ namespace super_planner {
+                                                       rog_map_cfg.virtual_ceil_height,
+                                                       cfg_.robot_r,
+                                                       cfg_.obs_skip_num,
+-                                                      cfg_.iris_iter_num);
++                                                      cfg_.iris_iter_num,
++                                                      cfg_.flight_min_z,
++                                                      cfg_.flight_max_z,
++                                                      cfg_.horizontal_clearance_extra,
++                                                      cfg_.clearance_vertical_band);
+         cg_ptr_->SetLineNeighborList(cfg_.seed_line_neighbour);
+ 
+ 
+@@ -65,11 +70,32 @@ namespace super_planner {
+         astar_ptr_->setFineInfNeighbors(neighbor_step);
+     }
+ 
+-    RET_CODE
+-    SuperPlanner::PlanFromRest(const Vec3f &goal_p,
++    void SuperPlanner::captureRunSnapshot(PlannerRunSnapshot* snapshot) {
++        if (!snapshot) return;
++        latest_replan.setSfcPc(cg_ptr_->getLatestCloud());
++        latest_replan.setComptT(time_consuming_);
++        snapshot->log = latest_replan;
++        snapshot->module_time = time_consuming_;
++        snapshot->goal_valid = gi_.goal_valid;
++        std::fill(time_consuming_.begin(), time_consuming_.end(), 0);
++    }
++
++    RET_CODE SuperPlanner::PlanFromRest(const Vec3f &goal_p,
+                                const double &goal_yaw,
+-                               const bool &new_goal) {
++                               const bool &new_goal,
++                               const PlannerCommitGate& commit_gate,
++                               PlannerRunSnapshot* snapshot) {
+         std::lock_guard<std::mutex> guard(replan_lock_);
++        const auto result = planFromRestLocked(goal_p, goal_yaw, new_goal, commit_gate);
++        captureRunSnapshot(snapshot);
++        return result;
++    }
++
++    RET_CODE SuperPlanner::planFromRestLocked(const Vec3f &goal_p,
++                               const double &goal_yaw,
++                               const bool &new_goal,
++                               const PlannerCommitGate& commit_gate) {
++        robot_state_ = map_ptr_->getRobotState();
+         latest_replan.reset();
+         latest_replan.setGoal(goal_p, goal_yaw, robot_state_);
+         if (robot_state_.rcv == false) {
+@@ -103,9 +129,9 @@ namespace super_planner {
+         /// 2) Generate Exp traj
+         ExpTraj exp_traj_info;
+         BackupTraj back_traj_info;
+-        last_exp_traj_info_.setEmpty();
++        ExpTraj empty_exp_traj_info;
+         local_start_p_ = local_star_pt;
+-        RET_CODE exp_ret_code = generateExpTraj(last_exp_traj_info_, exp_traj_info);
++        RET_CODE exp_ret_code = generateExpTraj(empty_exp_traj_info, exp_traj_info);
+         //GenerateRestToRestExpTraj(local_star_pt, exp_traj_info);
+         if (exp_ret_code == FAILED) {
+             ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory failed with {}.",
+@@ -123,10 +149,18 @@ namespace super_planner {
+                 ros_ptr_->info(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory SUCCESS.");
+             }
+ 
+-            cmd_traj_info_.setTrajectory(exp_traj_info, back_traj_info);
+-            last_exp_traj_info_ = exp_traj_info;
+-            robot_on_backup_traj_ = false;
+-            gi_.new_goal = false;
++            CmdTraj prepared;
++            if (!prepared.setTrajectory(exp_traj_info, back_traj_info)) return FAILED;
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
++            ExpTraj committed_exp = exp_traj_info;
++            if (!commitPreparedTrajectory(cmd_traj_info_, prepared, commit_gate, [&] {
++                    last_exp_traj_info_ = std::move(committed_exp);
++                    robot_on_backup_traj_ = false;
++                    gi_.new_goal = false;
++                })) return FAILED;
+ 
+             // For visualization
+             {
+@@ -141,10 +175,18 @@ namespace super_planner {
+             if (cfg_.print_log) {
+                 ros_ptr_->info(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory Finish or NO_NEED.");
+             }
+-            robot_on_backup_traj_ = false;
+-            cmd_traj_info_.setTrajectory(exp_traj_info);
+-            last_exp_traj_info_ = exp_traj_info;
+-            gi_.new_goal = false;
++            CmdTraj prepared;
++            prepared.setTrajectory(exp_traj_info);
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
++            ExpTraj committed_exp = exp_traj_info;
++            if (!commitPreparedTrajectory(cmd_traj_info_, prepared, commit_gate, [&] {
++                    robot_on_backup_traj_ = false;
++                    last_exp_traj_info_ = std::move(committed_exp);
++                    gi_.new_goal = false;
++                })) return FAILED;
+ 
+             // For visualization
+             TimeConsuming t_viz("viz goal VisualizeCommitTrajectory", false);
+@@ -161,12 +203,23 @@ namespace super_planner {
+     }
+ 
+ 
+-    RET_CODE
+-    SuperPlanner::ReplanOnce(const Vec3f &goal_p,
++    RET_CODE SuperPlanner::ReplanOnce(const Vec3f &goal_p,
+                              const double &goal_yaw,
+-                             const bool &new_goal) {
+-        TimeConsuming replan_total_t("ReplanOnce", false);
++                             const bool &new_goal,
++                             const PlannerCommitGate& commit_gate,
++                             PlannerRunSnapshot* snapshot) {
+         std::lock_guard<std::mutex> guard(replan_lock_);
++        const auto result = replanOnceLocked(goal_p, goal_yaw, new_goal, commit_gate);
++        captureRunSnapshot(snapshot);
++        return result;
++    }
++
++    RET_CODE SuperPlanner::replanOnceLocked(const Vec3f &goal_p,
++                             const double &goal_yaw,
++                             const bool &new_goal,
++                             const PlannerCommitGate& commit_gate) {
++        TimeConsuming replan_total_t("ReplanOnce", false);
++        robot_state_ = map_ptr_->getRobotState();
+ 
+         gi_.goal_p = goal_p;
+         gi_.goal_yaw = goal_yaw;
+@@ -187,7 +240,8 @@ namespace super_planner {
+         /// 1) Replan EXP traj
+         ExpTraj exp_traj_info;
+         TimeConsuming t_exp("t_exp", false);
+-        RET_CODE exp_ret_code = generateExpTraj(last_exp_traj_info_, exp_traj_info);
++        ExpTraj planning_exp_traj_info = last_exp_traj_info_;
++        RET_CODE exp_ret_code = generateExpTraj(planning_exp_traj_info, exp_traj_info);
+         time_consuming_[GENERATE_EXP_TRAJ] = t_exp.stop();
+ 
+         if (exp_ret_code == FAILED) {
+@@ -237,10 +291,18 @@ namespace super_planner {
+         }
+ 
+         if (back_ret_code == SUCCESS) {
+-            cmd_traj_info_.setTrajectory(exp_traj_info, back_traj_info);
+-            last_exp_traj_info_ = exp_traj_info;
+-            robot_on_backup_traj_ = false;
+-            gi_.new_goal = false;
++            CmdTraj prepared;
++            if (!prepared.setTrajectory(exp_traj_info, back_traj_info)) return FAILED;
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
++            ExpTraj committed_exp = exp_traj_info;
++            if (!commitPreparedTrajectory(cmd_traj_info_, prepared, commit_gate, [&] {
++                    last_exp_traj_info_ = std::move(committed_exp);
++                    robot_on_backup_traj_ = false;
++                    gi_.new_goal = false;
++                })) return FAILED;
+ 
+             {
+                 // For visualization
+@@ -255,9 +317,14 @@ namespace super_planner {
+             return SUCCESS;
+         } else if (back_ret_code == NO_NEED) {
+             // 这次生成backup轨迹的点没有意义,
+-            robot_on_backup_traj_ = false;
+-            last_exp_traj_info_ = exp_traj_info;
+-            gi_.new_goal = false;
++            ExpTraj committed_exp = exp_traj_info;
++            const std::function<bool()> install_state = [&] {
++                robot_on_backup_traj_ = false;
++                last_exp_traj_info_ = std::move(committed_exp);
++                gi_.new_goal = false;
++                return true;
++            };
++            if (commit_gate ? !commit_gate(install_state, false) : !install_state()) return FAILED;
+ 
+ 
+             {
+@@ -273,10 +340,18 @@ namespace super_planner {
+             return SUCCESS;
+         } else if (back_ret_code == FINISH) {
+             // Which means the exp traj is all in known free, no need for backup traj
+-            cmd_traj_info_.setTrajectory(exp_traj_info);
+-            last_exp_traj_info_ = exp_traj_info;
+-            robot_on_backup_traj_ = false;
+-            gi_.new_goal = false;
++            CmdTraj prepared;
++            prepared.setTrajectory(exp_traj_info);
++            if (!trajectoryInsideFlightZ(prepared.posTraj(), cfg_.flight_min_z, cfg_.flight_max_z)) {
++                ros_ptr_->warn(" -- [SUPER] Rejecting candidate outside task flight z bounds.");
++                return FAILED;
++            }
++            ExpTraj committed_exp = exp_traj_info;
++            if (!commitPreparedTrajectory(cmd_traj_info_, prepared, commit_gate, [&] {
++                    last_exp_traj_info_ = std::move(committed_exp);
++                    robot_on_backup_traj_ = false;
++                    gi_.new_goal = false;
++                })) return FAILED;
+ 
+             {
+                 TimeConsuming t_viz("tviz", false);
+@@ -295,21 +370,33 @@ namespace super_planner {
+     }
+ 
+     void SuperPlanner::getOneHeartbeatTime(double &start_WT_pos, bool &traj_finish) {
+-        double eval_t = (ros_ptr_->getSimTime() - cmd_traj_info_.getStartWallTime());
++        const auto snapshot = cmd_traj_info_.heartbeatSnapshot();
++        double eval_t = (ros_ptr_->getSimTime() - snapshot.start_wall_time);
+         traj_finish = false;
+-        double total_dur = cmd_traj_info_.getTotalDuration();
++        double total_dur = snapshot.total_duration;
+         if (eval_t > total_dur) {
+             traj_finish = true;
+             eval_t = total_dur;
+         }
+-        start_WT_pos = cmd_traj_info_.getStartWallTime();
+-        if (cmd_traj_info_.backupTrajAvilibale() && eval_t > cmd_traj_info_.getBackupTrajStartTT()) {
++        start_WT_pos = snapshot.start_wall_time;
++        if (snapshot.backup_available && eval_t > snapshot.backup_start_time) {
+             robot_on_backup_traj_ = true;
+         } else {
+             robot_on_backup_traj_ = false;
+         }
+     }
+ 
++    bool SuperPlanner::canRetargetCurrentTrajectory(double min_remaining) const {
++        const auto snapshot = cmd_traj_info_.heartbeatSnapshot();
++        const double elapsed = ros_ptr_->getSimTime() - snapshot.start_wall_time;
++        if (!std::isfinite(elapsed) || elapsed < 0.0 ||
++            snapshot.total_duration - elapsed <= min_remaining ||
++            robot_on_backup_traj_) return false;
++        // Do not carry a trajectory into its emergency backup segment.
++        return !snapshot.backup_available ||
++               snapshot.backup_start_time - elapsed > min_remaining;
++    }
++
+     Trajectory SuperPlanner::getCommittedPositionTrajectory() {
+         return cmd_traj_info_.posTraj();
+     }
+@@ -342,7 +429,7 @@ namespace super_planner {
+ 
+ 
+         /// Get Yaw planning
+-        static double last_yaw = robot_state_.yaw;
++        static double last_yaw = map_ptr_->getRobotState().yaw;
+ 
+         yaw = cmd_traj_info_.getYaw((eval_t))[0];
+         yaw_dot = cmd_traj_info_.getYawRate((eval_t))[0];
+@@ -371,6 +458,7 @@ namespace super_planner {
+ 
+ 
+     void SuperPlanner::getModuleTimeConsuming(vector<double> &time) {
++        std::lock_guard<std::mutex> guard(replan_lock_);
+         time = time_consuming_;
+         std::fill(time_consuming_.begin(), time_consuming_.end(), 0);
+     }
+@@ -770,7 +858,7 @@ namespace super_planner {
+ 
+         replan_process_start_TT = replan_process_start_WT - guide_pos_traj.start_WT;
+         Trajectory temp_exp_traj;
+-        if (!last_exp_traj_info_.empty() &&
++        if (!last_exp_traj_info.empty() &&
+             !guide_pos_traj.getPartialTrajectoryByTime(replan_process_start_TT, replan_state_TT,
+                                                        temp_exp_traj)) {
+             ros_ptr_->error(" -- [SUPER] in [generateExpTraj]: getPartialTrajectoryByTime failed, force return");
+@@ -1202,7 +1290,6 @@ namespace super_planner {
+ 
+ 
+     void SuperPlanner::getRobotState(rog_map::RobotState &out) {
+-        robot_state_ = map_ptr_->getRobotState();
+-        out = robot_state_;
++        out = map_ptr_->getRobotState();
+     }
+ }
+diff --git a/super_planner/include/super_core/horizontal_clearance_contract.h b/super_planner/include/super_core/horizontal_clearance_contract.h
+new file mode 100644
+--- /dev/null
++++ b/super_planner/include/super_core/horizontal_clearance_contract.h
+@@ -0,0 +1,24 @@
++#pragma once
++
++#include <cmath>
++#include <Eigen/Core>
++
++namespace super_planner {
++
++// Inset only an obstacle half-space.  The support function of a horizontal
++// disk of radius extra is extra * ||n_xy||; vertical flight bounds are not
++// contracted.  An infeasible seed is rejected before optimization.
++inline bool insetObstaclePlaneHorizontal(
++    const Eigen::Vector4d& plane, double extra,
++    const Eigen::Vector3d& start, const Eigen::Vector3d& end,
++    Eigen::Vector4d& inset) {
++    if (!plane.allFinite() || !start.allFinite() || !end.allFinite() ||
++        !std::isfinite(extra) || extra < 0.0) return false;
++    inset = plane;
++    inset(3) += extra * plane.head<2>().norm();
++    if (!inset.allFinite()) return false;
++    return inset.head<3>().dot(start) + inset(3) <= 1e-8 &&
++           inset.head<3>().dot(end) + inset(3) <= 1e-8;
++}
++
++}  // namespace super_planner
+diff --git a/super_planner/include/super_core/path_start_guard.h b/super_planner/include/super_core/path_start_guard.h
+new file mode 100644
+--- /dev/null
++++ b/super_planner/include/super_core/path_start_guard.h
+@@ -0,0 +1,17 @@
++#pragma once
++
++#include <cstddef>
++#include <optional>
++
++namespace super_planner {
++
++template <typename Path, typename IsOccupied>
++std::optional<std::size_t> firstUnoccupiedPathIndex(
++    const Path& path, IsOccupied is_occupied) {
++    for (std::size_t i = 0; i < path.size(); ++i) {
++        if (!is_occupied(path[i])) return i;
++    }
++    return std::nullopt;
++}
++
++}  // namespace super_planner
+diff --git a/super_planner/test/horizontal_clearance_contract_test.cpp b/super_planner/test/horizontal_clearance_contract_test.cpp
+new file mode 100644
+--- /dev/null
++++ b/super_planner/test/horizontal_clearance_contract_test.cpp
+@@ -0,0 +1,40 @@
++#include <gtest/gtest.h>
++
++#include <super_core/horizontal_clearance_contract.h>
++
++namespace {
++
++TEST(HorizontalClearanceContract, InsetsWallByExactHorizontalMargin) {
++  Eigen::Vector4d plane(1.0, 0.0, 0.0, -2.0), inset;
++  const Eigen::Vector3d seed(0.5, 0.0, 1.5);
++  ASSERT_TRUE(super_planner::insetObstaclePlaneHorizontal(
++      plane, 1.0, seed, seed, inset));
++  EXPECT_NEAR(inset(3), -1.0, 1e-12);
++  EXPECT_NEAR(inset.head<3>().dot(Eigen::Vector3d(1.0, 0.0, 1.5)) +
++                  inset(3), 0.0, 1e-12);
++}
++
++TEST(HorizontalClearanceContract, DoesNotMoveVerticalObstaclePlane) {
++  Eigen::Vector4d plane(0.0, 0.0, -1.0, 0.4), inset;
++  const Eigen::Vector3d seed(0.0, 0.0, 1.5);
++  ASSERT_TRUE(super_planner::insetObstaclePlaneHorizontal(
++      plane, 1.0, seed, seed, inset));
++  EXPECT_TRUE(inset.isApprox(plane));
++}
++
++TEST(HorizontalClearanceContract, InsetsObliquePlaneByHorizontalSupport) {
++  Eigen::Vector4d plane(0.6, 0.0, 0.8, -2.0), inset;
++  const Eigen::Vector3d seed(0.0, 0.0, 1.0);
++  ASSERT_TRUE(super_planner::insetObstaclePlaneHorizontal(
++      plane, 1.0, seed, seed, inset));
++  EXPECT_NEAR(inset(3), -1.4, 1e-12);
++}
++
++TEST(HorizontalClearanceContract, RejectsSeedCutByRequiredMargin) {
++  Eigen::Vector4d plane(1.0, 0.0, 0.0, -2.0), inset;
++  EXPECT_FALSE(super_planner::insetObstaclePlaneHorizontal(
++      plane, 1.0, Eigen::Vector3d(1.1, 0.0, 1.5),
++      Eigen::Vector3d(0.5, 0.0, 1.5), inset));
++}
++
++}  // namespace
+diff --git a/super_planner/test/path_start_guard_test.cpp b/super_planner/test/path_start_guard_test.cpp
+new file mode 100644
+--- /dev/null
++++ b/super_planner/test/path_start_guard_test.cpp
+@@ -0,0 +1,26 @@
++#include <gtest/gtest.h>
++#include <super_core/path_start_guard.h>
++#include <vector>
++
++TEST(PathStartGuard, RejectsEmptyPath) {
++    const std::vector<int> path;
++    EXPECT_FALSE(super_planner::firstUnoccupiedPathIndex(path,
++        [](int) { return true; }).has_value());
++}
++
++TEST(PathStartGuard, RejectsFullyOccupiedPathWithoutOutOfBoundsRead) {
++    const std::vector<int> path{1, 2, 3};
++    std::size_t calls = 0;
++    const auto index = super_planner::firstUnoccupiedPathIndex(path,
++        [&calls](int) { ++calls; return true; });
++    EXPECT_FALSE(index.has_value());
++    EXPECT_EQ(calls, path.size());
++}
++
++TEST(PathStartGuard, FindsFirstFreePoint) {
++    const std::vector<int> path{1, 2, 3};
++    const auto index = super_planner::firstUnoccupiedPathIndex(path,
++        [](int point) { return point < 3; });
++    ASSERT_TRUE(index.has_value());
++    EXPECT_EQ(*index, 2U);
++}

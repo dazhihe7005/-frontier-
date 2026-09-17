@@ -98,6 +98,12 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_offboard_mode_guard
     test/test_offboard_mode_guard.cpp
   )
+  catkin_add_gtest(test_anisotropic_clearance
+    test/test_anisotropic_clearance.cpp
+  )
+  if(TARGET test_anisotropic_clearance)
+    target_link_libraries(test_anisotropic_clearance ${GTEST_MAIN_LIBRARIES})
+  endif()
 endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge

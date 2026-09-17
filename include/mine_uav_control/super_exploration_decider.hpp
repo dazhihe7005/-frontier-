@@ -19,6 +19,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>
+#include <std_msgs/UInt64.h>
 #include <std_srvs/SetBool.h>
 #include <std_srvs/Trigger.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -106,6 +107,7 @@ class SuperExplorationDecider {
   void decisionTimerCallback(const ros::TimerEvent& event);
   void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
+  void rejectedGoalCallback(const std_msgs::UInt64::ConstPtr& msg);
   void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
   bool enableCallback(std_srvs::SetBool::Request& request,
                       std_srvs::SetBool::Response& response);
@@ -169,6 +171,7 @@ class SuperExplorationDecider {
   std::unique_ptr<Synchronizer> synchronizer_;
 
   ros::Subscriber return_request_subscriber_;
+  ros::Subscriber rejected_goal_subscriber_;
   ros::Subscriber mission_enable_subscriber_;
   ros::Subscriber battery_subscriber_;
   ros::Subscriber free_ray_subscriber_;
@@ -199,6 +202,7 @@ class SuperExplorationDecider {
   ros::Time first_data_time_;
   ros::Time last_frontier_time_;
   ros::Time goal_sent_time_;
+  ros::Time rejected_goal_retry_after_;
   ros::Time last_actionable_frontier_time_;
   ros::Time last_significant_map_growth_time_;
 
@@ -258,6 +262,7 @@ class SuperExplorationDecider {
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
   double vehicle_radius_{0.4};
+  double vertical_vehicle_radius_{-1.0};
   double min_observation_height_above_home_{0.0};
   double max_observation_height_above_home_{0.3};
   double data_timeout_{1.0};

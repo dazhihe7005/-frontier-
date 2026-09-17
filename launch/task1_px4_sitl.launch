@@ -18,6 +18,7 @@
   <arg name="spawn_yaw" default="0"/>
   <arg name="max_exploration_radius" default="24.0"/>
   <arg name="decider_vehicle_radius" default="0.40"/>
+  <arg name="decider_vertical_vehicle_radius" default="-1.0"/>
   <arg name="frontier_search_radius" default="10.0"/>
   <arg name="decider_max_map_radius" default="40.0"/>
   <arg name="decider_raycast_max_range" default="30.0"/>
@@ -114,6 +115,7 @@
     <param name="frontier_search_radius" value="$(arg frontier_search_radius)"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
     <param name="vehicle_radius" value="$(arg decider_vehicle_radius)"/>
+    <param name="vertical_vehicle_radius" value="$(arg decider_vertical_vehicle_radius)"/>
     <param name="max_map_radius" value="$(arg decider_max_map_radius)"/>
     <param name="raycast_max_range" value="$(arg decider_raycast_max_range)"/>
     <param name="sync_slop" value="$(arg decider_sync_slop)"/>
