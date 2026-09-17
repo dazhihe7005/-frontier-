@@ -40,6 +40,9 @@ TEST(ShaftMission, BottomConfirmationThenReturnToCapturedEntrance) {
   in.depth = 10.4;
   EXPECT_EQ(mission.step(in).state, ShaftMission::State::kComplete);
   EXPECT_FALSE(mission.step(in).command_valid);
+  in.depth_valid = false;
+  in.range_fresh = false;
+  EXPECT_EQ(mission.step(in).state, ShaftMission::State::kComplete);
 }
 
 TEST(ShaftMission, StaleSensorAndDepthJumpFailClosed) {

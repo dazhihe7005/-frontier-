@@ -14,7 +14,9 @@ The algorithm records entrance depth on activation, descends with speed reduced 
 
 ## Evidence
 
-`catkin_make -C /home/nuc/super_ws shaft_mission_node test_shaft_mission` compiled. Six GTests pass, including an **idealized** 420 m kinematic loop that descended until the bottom became visible, triggered return and reached the starting depth. The model assumes perfect independent depth and bottom range measurements; it does not represent PX4 dynamics, barometer drift, sensor dropouts over hundreds of metres, walls, airflow, communications loss or battery reserves. No Gazebo shaft flight has passed.
+`catkin_make -C /home/nuc/super_ws shaft_mission_node test_shaft_mission` compiled. Six GTests pass, including an **idealized** 420 m kinematic loop that descended until the bottom became visible, triggered return and reached the starting depth. A ROS-topic integration test also passes: enable→descent→confirmed bottom→return→complete, then stale-range reset→fault. The first integration attempt correctly faulted because the test injected an impossible 0→5 m depth jump; after correcting that test input and rebuilding the node, the test passed. The model assumes perfect independent depth and bottom range measurements; it does not represent PX4 dynamics, barometer drift, sensor dropouts over hundreds of metres, walls, airflow, communications loss or battery reserves. No Gazebo shaft flight has passed.
+
+The COMPLETE and FAULT states now remain latched even if sensors subsequently stop, until the enable signal goes low. This avoids turning an already-completed mission into a spurious post-completion fault. The node publishes no velocity intent in either terminal state.
 
 ## Next validation gates
 

@@ -52,6 +52,9 @@ class ShaftMission {
       have_previous_depth_ = false;
       return {state_, 0.0, false};
     }
+    if (state_ == State::kFault || state_ == State::kComplete) {
+      return {state_, 0.0, false};
+    }
     if (!config_valid_) {
       state_ = State::kFault;
       return {state_, 0.0, false};
@@ -60,9 +63,6 @@ class ShaftMission {
         !in.depth_valid || !std::isfinite(in.depth) ||
         !in.range_fresh || !validRange(in)) {
       state_ = State::kFault;
-      return {state_, 0.0, false};
-    }
-    if (state_ == State::kFault || state_ == State::kComplete) {
       return {state_, 0.0, false};
     }
     if (have_previous_depth_ &&

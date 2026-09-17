@@ -1,0 +1,8 @@
+<launch>
+  <node pkg="mine_uav_control" type="shaft_mission_node"
+        name="shaft_mission_node_test" output="screen">
+    <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+  </node>
+  <test pkg="mine_uav_control" type="test_shaft_ros_logic.py"
+        test-name="shaft_mission_ros_logic" time-limit="30.0"/>
+</launch>
