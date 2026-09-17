@@ -16,12 +16,14 @@ import xml.etree.ElementTree as ET
 import rosbag
 
 
-def baffles_from_world(path, spawn_x):
+def boxes_from_world(path, spawn_x, include_vertical_walls=False):
     root = ET.parse(path).getroot()
     boxes = {}
     for model in root.findall(".//world/model"):
         name = model.get("name", "")
-        if not name.startswith("baffle_"):
+        if not name.startswith("baffle_") and not (
+                include_vertical_walls and name in
+                {"left_wall", "right_wall", "far_wall"}):
             continue
         pose = [float(value) for value in model.findtext("pose").split()]
         size = [float(value) for value in model.findtext("link/collision/geometry/box/size").split()]
@@ -34,6 +36,10 @@ def baffles_from_world(path, spawn_x):
     if not boxes:
         raise ValueError("no baffle collision boxes in " + path)
     return boxes
+
+
+def baffles_from_world(path, spawn_x):
+    return boxes_from_world(path, spawn_x, False)
 
 
 def horizontal_distance(x, y, box):
@@ -137,8 +143,11 @@ def main():
     parser.add_argument("--min-actual-margin", type=float)
     parser.add_argument("--min-local-x", type=float)
     parser.add_argument("--require-complete", action="store_true")
+    parser.add_argument("--include-vertical-walls", action="store_true",
+                        help="also audit chamber side walls and far wall")
     args = parser.parse_args()
-    report = analyze(args.bag, baffles_from_world(args.world, args.spawn_x),
+    report = analyze(args.bag, boxes_from_world(
+        args.world, args.spawn_x, args.include_vertical_walls),
                      args.vehicle_radius)
     report["acceptance_failures"] = acceptance_failures(
         report, args.min_planned_margin, args.min_actual_margin,

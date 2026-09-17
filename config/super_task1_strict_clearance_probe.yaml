@@ -68,7 +68,7 @@ rog_map:
   inflation_resolution: 0.2
   # A* uses 1.4 m map inflation plus roughly 0.4 m robot neighbor radius.
   # This is 0.2 m more conservative than the continuous corridor.
-  inflation_step: 7
+  inflation_step: 9
   inflation_vertical_step: 2
   unk_inflation_en: false
   unk_inflation_step: 1

@@ -104,6 +104,12 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_anisotropic_clearance)
     target_link_libraries(test_anisotropic_clearance ${GTEST_MAIN_LIBRARIES})
   endif()
+  catkin_add_gtest(test_outbound_goal_contract
+    test/test_outbound_goal_contract.cpp
+  )
+  if(TARGET test_outbound_goal_contract)
+    target_link_libraries(test_outbound_goal_contract ${GTEST_MAIN_LIBRARIES})
+  endif()
 endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge

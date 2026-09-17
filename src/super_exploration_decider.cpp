@@ -1,5 +1,6 @@
 #include "mine_uav_control/super_exploration_decider.hpp"
 #include "mine_uav_control/anisotropic_clearance.hpp"
+#include "mine_uav_control/outbound_goal_contract.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -166,6 +167,8 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("min_data_duration", min_data_duration_, min_data_duration_);
   private_nh_.param("candidate_spacing", candidate_spacing_, candidate_spacing_);
   private_nh_.param("vehicle_radius", vehicle_radius_, vehicle_radius_);
+  private_nh_.param("max_outbound_backtrack", max_outbound_backtrack_,
+                    max_outbound_backtrack_);
   private_nh_.param("vertical_vehicle_radius", vertical_vehicle_radius_,
                     vertical_vehicle_radius_);
   private_nh_.param("min_observation_height_above_home",
@@ -320,6 +323,7 @@ bool SuperExplorationDecider::loadParameters() {
                     max_frontier_candidates_);
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
+      !std::isfinite(max_outbound_backtrack_) || max_outbound_backtrack_ < 0.0 ||
       !std::isfinite(vertical_vehicle_radius_) ||
       (vertical_vehicle_radius_ != -1.0 && vertical_vehicle_radius_ <= 0.0) ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
@@ -1623,6 +1627,78 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
   return false;
 }
 
+bool SuperExplorationDecider::publishLateralDetourGoal(
+    const VoxelSet& reachable,
+    const std::vector<FrontierCandidate>& candidates) {
+  if (!have_home_ || candidates.empty() ||
+      front_obstacle_streak_ < front_obstacle_confirm_frames_) return false;
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+  const double dx = current_pose_.pose.position.x - home_pose_.pose.position.x;
+  const double dy = current_pose_.pose.position.y - home_pose_.pose.position.y;
+  const double progress = c * dx + s * dy;
+  const double lateral = -s * dx + c * dy;
+  const double target_progress = std::max(0.0, progress - 0.25);
+  double best_score = -std::numeric_limits<double>::infinity();
+  geometry_msgs::PoseStamped best_goal;
+  bool found = false;
+
+  for (const auto& candidate : candidates) {
+    const double candidate_progress = candidateMissionProgress(candidate);
+    if (!outboundProgressAllowed(
+            progress, candidate_progress, max_outbound_backtrack_)) continue;
+    const double lateral_delta =
+        candidateMissionLateral(candidate) - lateral;
+    const double step = std::copysign(
+        std::min(std::abs(lateral_delta), 4.0), lateral_delta);
+    if (std::abs(step) < min_goal_distance_) continue;
+    geometry_msgs::PoseStamped goal;
+    goal.header.frame_id = world_frame_;
+    goal.pose.position.x =
+        home_pose_.pose.position.x + c * target_progress - s * (lateral + step);
+    goal.pose.position.y =
+        home_pose_.pose.position.y + s * target_progress + c * (lateral + step);
+    goal.pose.position.z = current_pose_.pose.position.z;
+    goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
+    const VoxelKey goal_key = positionToKey(
+        goal.pose.position.x, goal.pose.position.y, goal.pose.position.z);
+    if (reachable.count(goal_key) == 0 || !isClearForVehicle(goal_key)) continue;
+
+    // Demand a known-free, body-clear straight lateral transition before
+    // handing the goal to SUPER. A connected component alone may wind around
+    // a wall and does not prove the direct transition is safe.
+    const double distance = std::hypot(
+        goal.pose.position.x - current_pose_.pose.position.x,
+        goal.pose.position.y - current_pose_.pose.position.y);
+    const int samples = std::max(
+        1, static_cast<int>(std::ceil(distance / (0.5 * voxel_resolution_))));
+    bool direct_clear = true;
+    for (int i = 1; i <= samples; ++i) {
+      const double t = static_cast<double>(i) / samples;
+      const auto& start = current_pose_.pose.position;
+      const VoxelKey key = positionToKey(
+          start.x + t * (goal.pose.position.x - start.x),
+          start.y + t * (goal.pose.position.y - start.y),
+          start.z);
+      if (reachable.count(key) == 0 || !isClearForVehicle(key)) {
+        direct_clear = false;
+        break;
+      }
+    }
+    if (!direct_clear) continue;
+    const double score = candidate_progress - 0.1 * distance +
+                         0.01 * candidate.unknown_neighbors;
+    if (!found || score > best_score) {
+      found = true;
+      best_score = score;
+      best_goal = goal;
+    }
+  }
+  if (!found) return false;
+  publishGoal(best_goal, "lateral_detour");
+  return true;
+}
+
 bool SuperExplorationDecider::tryForwardHandover(const VoxelSet& reachable) {
   if (!have_active_goal_) {
     return false;
@@ -1653,36 +1729,34 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
     }
     reason = "heading_priority";
   } else {
-    // A confirmed front obstacle must not be crossed just because a frontier
-    // candidate happens to have a high information score. Prefer a lateral or
-    // rear candidate in fallback mode; if none exists, wait for more map data.
+    // A confirmed front obstacle is handled by a separately verified lateral
+    // transition. Never turn a rear platform frontier into an outbound goal.
     const bool front_obstacle_confirmed =
         front_obstacle_streak_ >= front_obstacle_confirm_frames_;
     if (front_obstacle_confirmed) {
+      return false;
+    } else {
+      const double current_dx =
+          current_pose_.pose.position.x - home_pose_.pose.position.x;
+      const double current_dy =
+          current_pose_.pose.position.y - home_pose_.pose.position.y;
+      const double current_progress =
+          std::cos(mission_heading_yaw_) * current_dx +
+          std::sin(mission_heading_yaw_) * current_dy;
+      double best_score = -std::numeric_limits<double>::infinity();
       for (const auto& candidate : candidates) {
-        if (!isForwardCandidate(candidate)) {
-          if (selected == nullptr || candidate.score > selected->score) {
-            selected = &candidate;
-          }
+        if (!outboundProgressAllowed(
+                current_progress, candidateMissionProgress(candidate),
+                max_outbound_backtrack_)) continue;
+        const double score =
+            candidate.score + fallback_heading_weight_ *
+                                  candidateHeadingAlignment(candidate);
+        if (selected == nullptr || score > best_score) {
+          selected = &candidate;
+          best_score = score;
         }
       }
-      if (selected == nullptr) {
-        return false;
-      }
-      reason = "front_obstacle_fallback";
-    } else {
-      selected = &*std::max_element(
-          candidates.begin(), candidates.end(),
-          [this](const FrontierCandidate& left,
-                 const FrontierCandidate& right) {
-            const double left_score =
-                left.score + fallback_heading_weight_ *
-                                 candidateHeadingAlignment(left);
-            const double right_score =
-                right.score + fallback_heading_weight_ *
-                                  candidateHeadingAlignment(right);
-            return left_score < right_score;
-          });
+      if (selected == nullptr) return false;
       reason = "frontier_fallback";
     }
   }
@@ -1931,7 +2005,9 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       return;
     }
     rejected_goal_retry_after_ = ros::Time(0);
-    if (publishForwardLookaheadGoal(reachable) || selectAndPublishFrontier(candidates)) {
+    if (publishLateralDetourGoal(reachable, candidates) ||
+        publishForwardLookaheadGoal(reachable) ||
+        selectAndPublishFrontier(candidates)) {
       publishStatus("EXPLORING", "retrying a reachable goal after SUPER rejection");
       return;
     }
@@ -1941,6 +2017,11 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       publishEndApproachGoal(coverage)) {
     publishStatus("APPROACHING_END_WALL",
                   "three-wall map seen; moving to configured stand-off");
+    return;
+  }
+
+  if (!have_active_goal_ && publishLateralDetourGoal(reachable, candidates)) {
+    publishStatus("EXPLORING", "known-free lateral transition toward side opening");
     return;
   }
 

@@ -32,6 +32,13 @@ class MazeClearanceTest(unittest.TestCase):
         self.assertEqual(MODULE.nearest(samples, 0.0), samples[0])
         self.assertEqual(MODULE.nearest(samples, 2.0), samples[-1])
 
+    def test_all_vertical_walls_are_included_only_when_requested(self):
+        world = SCRIPT.parent.parent / "worlds" / "goaf_serpentine_maze.world"
+        boxes = MODULE.boxes_from_world(world, -8.0, True)
+        self.assertEqual(len(boxes), 6)
+        self.assertEqual(boxes["far_wall"], (47.8, 48.2, -20.0, 20.0))
+        self.assertEqual(boxes["left_wall"], (8.0, 48.0, 19.8, 20.2))
+
     def test_partial_run_cannot_pass_wall_clearance(self):
         report = {"max_local_x_m": 5.55, "mission_complete": False,
                   "baffles": {"baffle_1": {"planned_surface_margin_m": 11.0,

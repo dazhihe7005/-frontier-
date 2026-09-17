@@ -4,9 +4,9 @@
   <arg name="gui" default="true"/>
   <arg name="rviz" default="true"/>
   <arg name="allow_auto_arm" default="true"/>
-  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
-  <arg name="decider_vehicle_radius" default="0.40"/>
-  <arg name="decider_vertical_vehicle_radius" default="-1.0"/>
+  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_strict_clearance_probe.yaml"/>
+  <arg name="decider_vehicle_radius" default="1.8"/>
+  <arg name="decider_vertical_vehicle_radius" default="0.4"/>
 
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
