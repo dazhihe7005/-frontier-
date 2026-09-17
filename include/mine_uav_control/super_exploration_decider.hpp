@@ -148,7 +148,8 @@ class SuperExplorationDecider {
       const std::vector<FrontierCandidate>& candidates);
   const char* explorationPhaseName() const;
   void publishGoal(const geometry_msgs::PoseStamped& goal,
-                   const std::string& reason);
+                   const std::string& reason,
+                   bool continuous_handover = false);
   void cancelActiveGoal(const std::string& reason,
                         bool unconditional = false);
   void beginReturnHome(const std::string& reason);

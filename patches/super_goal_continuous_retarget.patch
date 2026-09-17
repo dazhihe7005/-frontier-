@@ -1,0 +1,151 @@
+--- a/super_planner/include/fsm/fsm.h
++++ b/super_planner/include/fsm/fsm.h
+@@ -169,6 +169,9 @@
+ 
+         bool setGoalPosiAndYaw(const Vec3f &p, const Quatf &q, uint64_t goal_id);
+ 
++        void activateGoalState(const Vec3f& goal_p, double goal_yaw,
++                               uint64_t goal_id, bool can_continue);
++
+         // Legacy direct callers (including the ROS2 wrapper) keep click mode.
+         bool setGoalPosiAndYaw(const Vec3f &p, const Quatf &q) {
+             return setGoalPosiAndYaw(p, q, next_legacy_goal_id_++);
+--- a/super_planner/include/super_core/super_planner.h
++++ b/super_planner/include/super_core/super_planner.h
+@@ -132,6 +132,8 @@
+ 
+         void getOneHeartbeatTime(double &start_WT_pos, bool &traj_finish);
+ 
++        bool canRetargetCurrentTrajectory(double min_remaining) const;
++
+         Trajectory getCommittedPositionTrajectory();
+ 
+         Trajectory getCommittedYawTrajectory();
+--- a/super_planner/src/super_core/fsm.cpp
++++ b/super_planner/src/super_core/fsm.cpp
+@@ -255,7 +255,22 @@
+             cout << GREEN << " -- [Fsm] Receive click goal at: [" << goal_p.transpose() << "]; goal yaw disabled"
+                  << RESET << endl;
+         }
++        activateGoalState(goal_p, goal_yaw, goal_id,
++                          cfg_.goal_command_en &&
++                          planner_ptr_->canRetargetCurrentTrajectory(0.4));
++        return true;
++    }
++
++    void Fsm::activateGoalState(const Vec3f& goal_p, double goal_yaw,
++                                uint64_t goal_id, bool can_continue) {
++        const auto previous = lifecycle_.snapshot();
+         lifecycle_.activate(goal_id, [&] {
++            // A SET without CANCEL may keep the current safe command trajectory
++            // alive while ReplanOnce starts from its future P/V/A state. The
++            // lifecycle epoch still invalidates any in-flight old-goal plan.
++            const bool continuous = can_continue && previous &&
++                machine_state_ == FOLLOW_TRAJ &&
++                committed_traj_epoch_ == previous->epoch;
+             gi_.goal_p = goal_p;
+             gi_.goal_yaw = goal_yaw;
+             gi_.new_goal = true;
+@@ -263,10 +278,12 @@
+             started_ = true;
+             finish_plan = false;
+             plan_from_rest_ = false;
+-            if (machine_state_ == FOLLOW_TRAJ || machine_state_ == EMER_STOP)
++            if (continuous) {
++                committed_traj_epoch_ = previous->epoch + 1;
++            } else if (machine_state_ == FOLLOW_TRAJ || machine_state_ == EMER_STOP) {
+                 machine_state_ = WAIT_GOAL;
++            }
+         });
+-        return true;
+     }
+ 
+     bool Fsm::cancelGoal(uint64_t requested_goal_id) {
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -365,6 +365,17 @@
+         }
+     }
+ 
++    bool SuperPlanner::canRetargetCurrentTrajectory(double min_remaining) const {
++        const auto snapshot = cmd_traj_info_.heartbeatSnapshot();
++        const double elapsed = ros_ptr_->getSimTime() - snapshot.start_wall_time;
++        if (!std::isfinite(elapsed) || elapsed < 0.0 ||
++            snapshot.total_duration - elapsed <= min_remaining ||
++            robot_on_backup_traj_) return false;
++        // Do not carry a trajectory into its emergency backup segment.
++        return !snapshot.backup_available ||
++               snapshot.backup_start_time - elapsed > min_remaining;
++    }
++
+     Trajectory SuperPlanner::getCommittedPositionTrajectory() {
+         return cmd_traj_info_.posTraj();
+     }
+--- a/super_planner/test/fsm_goal_cancellation_test.cpp
++++ b/super_planner/test/fsm_goal_cancellation_test.cpp
+@@ -18,6 +18,10 @@
+       finish_plan = false;
+     });
+   }
++  void retarget(uint64_t id, bool can_continue) {
++    activateGoalState(super_utils::Vec3f(id, 0, 1.5), 0.0,
++                      id, can_continue);
++  }
+   void allowReplan() {
+     lifecycle_.runIfCurrent(*lifecycle_.snapshot(), [&] { plan_from_rest_ = false; });
+   }
+@@ -142,6 +146,54 @@
+   EXPECT_FALSE(fsm.cancelGoal(21));
+ }
+ 
++TEST(FsmGoalCancellation, DirectRetargetCarriesOnlyCurrentSafeTrajectory) {
++  ProbeFsm fsm;
++  fsm.activate(21);
++  const auto old = *fsm.token();
++  int shared = 0;
++  ASSERT_TRUE(fsm.simulatedPlannerGate(old, [&] {
++    shared = 21;
++    return true;
++  }));
++  ASSERT_TRUE(fsm.commandAllowed(old));
++  fsm.retarget(22, true);
++  const auto current = *fsm.token();
++  EXPECT_TRUE(fsm.following());
++  EXPECT_TRUE(fsm.hasNewGoal());
++  EXPECT_FALSE(fsm.planFromRestPending());
++  EXPECT_TRUE(fsm.commandAllowed(current));
++  EXPECT_FALSE(fsm.commandAllowed(old));
++  EXPECT_FALSE(fsm.simulatedCommit(old, shared, 99));
++  EXPECT_EQ(shared, 21);
++  EXPECT_EQ(fsm.committedEpoch(), current.epoch);
++
++  ASSERT_TRUE(fsm.cancelGoal(22));
++  fsm.retarget(23, true);
++  EXPECT_TRUE(fsm.waitingForGoal());
++  EXPECT_FALSE(fsm.commandAllowed(*fsm.token()));
++}
++
++TEST(FsmGoalCancellation, RetargetWithoutSafeContinuationFallsBackToRest) {
++  ProbeFsm fsm;
++  fsm.activate(21);
++  const auto old = *fsm.token();
++  int shared = 0;
++  ASSERT_TRUE(fsm.simulatedPlannerGate(old, [&] {
++    shared = 21;
++    return true;
++  }));
++  fsm.retarget(22, false);
++  EXPECT_TRUE(fsm.waitingForGoal());
++  EXPECT_TRUE(fsm.hasNewGoal());
++  EXPECT_FALSE(fsm.commandAllowed(*fsm.token()));
++  EXPECT_FALSE(fsm.commandAllowed(old));
++
++  fsm.cancelGoal(22);
++  fsm.retarget(23, true);
++  EXPECT_TRUE(fsm.waitingForGoal());
++  EXPECT_FALSE(fsm.commandAllowed(*fsm.token()));
++}
++
+ TEST(FsmGoalCancellation, PlannerCommitHookSkipsActualCmdTrajInstallAfterCancel) {
+   ProbeFsm fsm;
+   fsm.activate(21);

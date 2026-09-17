@@ -1400,8 +1400,12 @@ void SuperExplorationDecider::publishVisualization(
 }
 
 void SuperExplorationDecider::publishGoal(
-    const geometry_msgs::PoseStamped& goal, const std::string& reason) {
-  cancelActiveGoal("replace_goal");
+    const geometry_msgs::PoseStamped& goal, const std::string& reason,
+    bool continuous_handover) {
+  // SET while a goal is active requests a trajectory-continuous retarget.
+  // An explicit CANCEL retains the old hard-stop semantics for unsafe or
+  // non-continuous transitions (including exploration -> return).
+  if (!continuous_handover) cancelActiveGoal("replace_goal");
   active_goal_is_end_approach_ = false;
   current_goal_ = goal;
   current_goal_.header.frame_id = world_frame_;
@@ -1555,7 +1559,7 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
         goal.header.frame_id = world_frame_;
         goal.pose.position = target;
         goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
-        publishGoal(goal, "forward_lookahead");
+        publishGoal(goal, "forward_lookahead", true);
         return true;
       }
     }
@@ -1695,7 +1699,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
         return_waypoint_index_ + 1 < return_waypoints_.size()) {
       ++return_waypoint_index_;
       publishGoal(return_waypoints_[return_waypoint_index_],
-                  "return_breadcrumb");
+                  "return_breadcrumb", true);
       publishStatus("RETURNING", "following observed outbound route");
       return;
     }

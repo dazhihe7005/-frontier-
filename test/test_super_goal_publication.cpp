@@ -14,8 +14,9 @@ class SuperExplorationDeciderTestPeer {
  public:
   static void publish(SuperExplorationDecider& decider,
                       const geometry_msgs::PoseStamped& goal,
-                      const std::string& reason) {
-    decider.publishGoal(goal, reason);
+                      const std::string& reason,
+                      bool continuous_handover = false) {
+    decider.publishGoal(goal, reason, continuous_handover);
   }
 
   static bool emptyForwardHandoverPreservesGoal(
@@ -124,30 +125,37 @@ TEST(SuperGoalPublication, StartupReplacementAndResetUseOneOrderedTopic) {
       SuperExplorationDeciderTestPeer::emptyForwardHandoverPreservesGoal(decider));
   geometry_msgs::PoseStamped second = first;
   second.pose.position.x = 6.0;
-  SuperExplorationDeciderTestPeer::publish(decider, second, "test_second");
+  SuperExplorationDeciderTestPeer::publish(decider, second,
+                                          "forward_lookahead", true);
+  geometry_msgs::PoseStamped third = second;
+  third.pose.position.x = 7.0;
+  SuperExplorationDeciderTestPeer::publish(decider, third, "test_hard");
   SuperExplorationDeciderTestPeer::reset(decider);
 
   while (ros::ok() && std::chrono::steady_clock::now() < deadline) {
     {
       std::lock_guard<std::mutex> lock(mutex);
-      if (received.size() >= 5) break;
+      if (received.size() >= 6) break;
     }
     ros::WallDuration(0.01).sleep();
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
-    ASSERT_EQ(received.size(), 5u);
+    ASSERT_EQ(received.size(), 6u);
     EXPECT_EQ(received[0].command, super_planner::GoalCommand::CANCEL_GOAL);
     EXPECT_EQ(received[0].goal_id, 0u);
     EXPECT_EQ(received[1].command, super_planner::GoalCommand::SET_GOAL);
     EXPECT_EQ(received[1].goal_id, 1u);
     EXPECT_EQ(received[1].reason, "test_first");
-    EXPECT_EQ(received[2].command, super_planner::GoalCommand::CANCEL_GOAL);
-    EXPECT_EQ(received[2].goal_id, 1u);
-    EXPECT_EQ(received[3].command, super_planner::GoalCommand::SET_GOAL);
+    EXPECT_EQ(received[2].command, super_planner::GoalCommand::SET_GOAL);
+    EXPECT_EQ(received[2].goal_id, 2u);
+    EXPECT_EQ(received[2].reason, "forward_lookahead");
+    EXPECT_EQ(received[3].command, super_planner::GoalCommand::CANCEL_GOAL);
     EXPECT_EQ(received[3].goal_id, 2u);
-    EXPECT_EQ(received[4].command, super_planner::GoalCommand::CANCEL_GOAL);
-    EXPECT_EQ(received[4].goal_id, 0u);
+    EXPECT_EQ(received[4].command, super_planner::GoalCommand::SET_GOAL);
+    EXPECT_EQ(received[4].goal_id, 3u);
+    EXPECT_EQ(received[5].command, super_planner::GoalCommand::CANCEL_GOAL);
+    EXPECT_EQ(received[5].goal_id, 0u);
   }
   spinner.stop();
 }
