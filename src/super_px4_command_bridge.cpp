@@ -13,6 +13,8 @@
 #include <std_msgs/String.h>
 #include <std_srvs/SetBool.h>
 
+#include "mine_uav_control/offboard_mode_guard.hpp"
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -67,6 +69,10 @@ class SuperPx4CommandBridge {
     private_nh_.param("min_height", min_height_, -0.5);
     private_nh_.param("max_height", max_height_, 1.8);
     private_nh_.param("height_clamp_tolerance", height_clamp_tolerance_, 0.25);
+    private_nh_.param("max_alignment_translation_change",
+                      max_alignment_translation_change_, 0.05);
+    private_nh_.param("max_alignment_yaw_change",
+                      max_alignment_yaw_change_, 0.05);
     private_nh_.param("use_acceleration", use_acceleration_, true);
     private_nh_.param("auto_enable_topic", auto_enable_topic_,
                       std::string("/mine_uav/mission/auto_enable"));
@@ -89,6 +95,9 @@ class SuperPx4CommandBridge {
     max_speed_ = std::max(0.1, max_speed_);
     max_acceleration_ = std::max(0.1, max_acceleration_);
     max_horizontal_radius_ = std::max(1.0, max_horizontal_radius_);
+    max_alignment_translation_change_ =
+        std::max(0.001, max_alignment_translation_change_);
+    max_alignment_yaw_change_ = std::max(0.001, max_alignment_yaw_change_);
     prestream_duration_ = std::max(1.0, prestream_duration_);
     mode_request_interval_ = std::max(0.5, mode_request_interval_);
     if (min_height_ > max_height_) {
@@ -146,16 +155,32 @@ class SuperPx4CommandBridge {
       const geometry_msgs::TransformStamped::ConstPtr& transform) {
     const auto& t = transform->transform.translation;
     const auto& q = transform->transform.rotation;
+    const double quaternion_norm =
+        std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
     if (!finite(t.x) || !finite(t.y) || !finite(t.z) || !finite(q.x) ||
-        !finite(q.y) || !finite(q.z) || !finite(q.w)) {
+        !finite(q.y) || !finite(q.z) || !finite(q.w) ||
+        !finite(quaternion_norm) || quaternion_norm < 1e-6) {
       alignment_ready_ = false;
       latchFault("INVALID_ALIGNMENT");
       return;
     }
+    const double new_yaw = yawFromQuaternion(q);
+    const bool alignment_changed = alignment_ready_ &&
+        (vectorNorm(t.x - alignment_x_, t.y - alignment_y_,
+                    t.z - alignment_z_) > max_alignment_translation_change_ ||
+         std::abs(normalizeAngle(new_yaw - alignment_yaw_)) >
+             max_alignment_yaw_change_);
+    if (alignment_changed && auto_enabled_ && mission_enabled_) {
+      // Updating this transform while executing would reinterpret the old
+      // SUPER trajectory in a new PX4 frame. Invalidate it and exit first.
+      valid_command_ = false;
+      latchFault("ALIGNMENT_CHANGED_DURING_TASK");
+      resetPrestream();
+    }
     alignment_x_ = t.x;
     alignment_y_ = t.y;
     alignment_z_ = t.z;
-    alignment_yaw_ = yawFromQuaternion(q);
+    alignment_yaw_ = new_yaw;
     alignment_ready_ = true;
     updateStatus();
   }
@@ -217,7 +242,18 @@ class SuperPx4CommandBridge {
     }
     mavros_connected_ = state->connected;
     mavros_armed_ = state->armed;
+    const std::string previous_mode = px4_mode_;
     px4_mode_ = state->mode;
+    if (mine_uav_control::externalOffboardExit(
+            previous_mode, px4_mode_, offboard_mode_, offboard_owned_,
+            exit_requested_)) {
+      // CH5/manual takeover and PX4 failsafe exits both revoke this
+      // bridge's permission to request OFFBOARD again. A deliberate
+      // auto-enable low->high reset is required before the next attempt.
+      latchFault("OFFBOARD_EXITED_EXTERNALLY");
+      valid_command_ = false;
+      resetPrestream();
+    }
     if (px4_mode_ != offboard_mode_ && exit_requested_) {
       exit_requested_ = false;
       offboard_owned_ = false;
@@ -629,6 +665,8 @@ class SuperPx4CommandBridge {
   double min_height_{-0.5};
   double max_height_{1.8};
   double height_clamp_tolerance_{0.25};
+  double max_alignment_translation_change_{0.05};
+  double max_alignment_yaw_change_{0.05};
   double alignment_x_{0.0};
   double alignment_y_{0.0};
   double alignment_z_{0.0};

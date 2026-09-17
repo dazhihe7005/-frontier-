@@ -1,0 +1,10 @@
+<launch>
+  <node pkg="mine_uav_control" type="super_px4_command_bridge"
+        name="super_px4_command_bridge" output="screen" required="true">
+    <param name="prestream_duration" value="1.0"/>
+    <param name="mode_request_interval" value="0.5"/>
+    <param name="command_timeout" value="0.5"/>
+  </node>
+  <test test-name="super_bridge_manual_override" pkg="mine_uav_control"
+        type="test_super_bridge_manual_override.py" time-limit="25"/>
+</launch>

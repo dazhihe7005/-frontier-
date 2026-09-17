@@ -2440,3 +2440,11 @@ run07/run08 连续完成深入、地图闭合、反向面包屑返航和 AUTO.LO
 用户要求关闭仿真、列出各任务进度并继续下一项。助手向本次任务一 `roslaunch` 发送 SIGINT，确认 PX4 SITL、Gazebo、RViz、规划/桥接/调度仿真节点全部退出；专用 11312 ROS master 也关闭，11311 的其他 ROS master 未动。按当前代码/报告：任务一固定 40×40×30 m 场景 run10/run11 已连续完成探索、闭合建图、返航和 AUTO.LOITER，地图三墙/地板/顶板离线验收通过；未知采空区、真实 MID360+Fast-LIO2、有桨真机及 RC 接管尚未验收。任务二竖井控制器尚未实现，`shaft_task_available=false`；调度器仍为旧 CH6 选任务、CH7 自动允许，用户提出的 CH7/CH11 电平变化切任务安排尚未改动。
 
 下一项开始处理任务一规划高度与 PX4 围栏不一致：确认 `z_px4_local=z_camera_init+alignment_z`，ROG-Map 虚拟顶板不等于严格轨迹上限，官方 SUPER 走廊生成的上下界裁剪行被注释。新增 `scripts/analyze_task1_height_contract.py` 对历史 bag 的发布样本重算：run04 在 15028 条有效指令中 3745 条超过 1.8 m，最高 2.912 m；run11 在 12217 条中 0 条超限，最高 1.600 m。旧 SITL bag 没录对齐话题，按仿真适配器单位变换显式传 `--alignment-z 0`；README 后续录包命令增加对齐话题。新增 `docs/task1_height_envelope_contract.md` 明确规划层、主/备份/紧急走廊、连续多项式极值和对齐突变的实现/验收门槛。当前只完成测量和合同定义，**没有**把未验证的高度补丁装入 SUPER，也不能据 run11 抽样通过宣称真实飞行高度风险已解决。脚本语法与项目 `catkin_make --pkg mine_uav_control` 编译通过。
+
+## 2026-09-17：继续开发，先修人工接管和对齐突变保护
+
+用户要求继续完成各任务开发。检查发现任务一桥接器在已进入受控 OFFBOARD 后，飞手通过 CH5/PX4 切到 POSCTL/MANUAL 时，因自动允许仍为高位，原定时器会再次请求 OFFBOARD。这条因果链可能抵消人工接管，故先于 CH7/CH11 调度重构修复。新增纯逻辑 `externalOffboardExit`，只有受控 OFFBOARD→其他模式且非桥接器主动退出时锁存 `OFFBOARD_EXITED_EXTERNALLY`、使旧指令无效；临时 CH7 方案需先拨低再重新授权。3项 GTest 与独立 ROS 集成测试通过：模拟进入 OFFBOARD、切手动后 1.5 s 没有新 OFFBOARD 请求，低→高重新授权后才有新请求。
+
+同一桥接器增加任务中的 Fast-LIO2→PX4 对齐突变保护：平移变化超过 0.05 m 或 yaw 变化超过 0.05 rad 时锁存 `ALIGNMENT_CHANGED_DURING_TASK`、旧指令失效、退出受控 OFFBOARD；ROS 集成测试证明 0.02 m 小变化不退出，0.10 m 变化请求 POSCTL，之后不再重新请求 OFFBOARD。改动只作用于 PX4 命令桥，不改变 Fast-LIO2→PX4 定位发布链，也不意味着 SUPER 的动态高度走廊已完成。
+
+为防止安全修复破坏原功能，另跑 40×40×30 m 无界面 PX4/Gazebo 任务一回归：OFFBOARD→EXPLORING→RETURNING→COMPLETE，最终 PX4 AUTO.LOITER，命令状态 TASK1_COMPLETE；测试完成后关闭专用 11312 master 和全部仿真进程，11311 未动。修改及证据见 `docs/task1_manual_override_guard.md`；真实 CH5/RC/对齐重置仍需拆桨验收。下一阶段优先实现 SUPER 规划层动态高度边界和连续轨迹提交检查，再改 CH7/CH11 触发式调度；任务二仍处于禁止启动状态。
