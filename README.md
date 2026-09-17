@@ -546,7 +546,8 @@ mkdir -p /home/nuc/task1_logs
 rosbag record -O /home/nuc/task1_logs/task1_acceptance.bag \
   /clock /Odometry /goal /mavros/state \
   /mavros/local_position/pose /mavros/local_position/velocity_local \
-  /planning/pos_cmd /mine_uav/exploration/finished \
+  /planning/pos_cmd /mine_uav/task1/fastlio_to_px4_alignment \
+  /mine_uav/exploration/finished \
   /mine_uav/exploration/model_coverage /mine_uav/exploration/status \
   /mine_uav/task1/command_status /rosout_agg
 ```
@@ -558,6 +559,8 @@ rosrun mine_uav_control analyze_task1_sitl_bag.py \
   /home/nuc/task1_logs/task1_acceptance.bag \
   --json-output /home/nuc/task1_logs/task1_acceptance.json
 ```
+
+另可用 `scripts/analyze_task1_height_contract.py` 按对齐后的 PX4 本地高度围栏检查 SUPER 发布样本。历史 SITL bag 未记录对齐话题时需显式传 `--alignment-z 0`；真机 bag 不得擅自假定偏移为零。诊断结论、run04/run11 对照与尚未实施的规划层修复见 [`docs/task1_height_envelope_contract.md`](docs/task1_height_envelope_contract.md)。
 
 默认验收包括：进入OFFBOARD、任务COMPLETE、地图闭合ready、退出到AUTO.LOITER、至少三个
 任务目标、路径长度不小于45 m、水平返航误差不大于1 m、最大横向偏移不大于1.5 m、
