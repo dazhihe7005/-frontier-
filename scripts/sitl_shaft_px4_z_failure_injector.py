@@ -26,7 +26,7 @@ class SitlPx4ZFailureInjector:
         self.state = State()
         self.depth = None
         self.shaft_status = "IDLE"
-        self.failure_enabled = False
+        self.prepared = False
         self.injected = False
         self.terminal = False
         self.last_setup_attempt = rospy.Time(0)
@@ -71,21 +71,35 @@ class SitlPx4ZFailureInjector:
             pulled = self.pull(force_pull=True)
             if not pulled.success:
                 return
-            response = self.set(
-                param_id="SYS_FAILURE_EN",
-                value=ParamValue(integer=1, real=0.0))
-            confirmed = self.get(param_id="SYS_FAILURE_EN")
-            if response.success and confirmed.success and \
-                    confirmed.value.integer == 1:
-                self.failure_enabled = True
-                self.publish("SITL_FAILURE_INJECTION_ENABLED")
-                rospy.logwarn("PX4 SITL failure injection enabled; awaiting %.1f m",
-                              self.trigger_depth)
+            current = self.get(param_id="SYS_FAILURE_EN")
+            if not current.success:
+                return
+            if current.value.integer != 0 and not self.set_permission(0):
+                self.publish("STALE_FAILURE_PERMISSION_RESET_FAILED")
+                return
+            self.prepared = True
+            self.publish("SITL_FAILURE_INJECTION_PREPARED")
+            rospy.logwarn("PX4 SITL failure injection prepared; permission remains OFF")
         except rospy.ServiceException as error:
             rospy.logwarn_throttle(2.0, "SITL failure setup retry: %s", error)
 
+    def set_permission(self, value):
+        response = self.set(
+            param_id="SYS_FAILURE_EN",
+            value=ParamValue(integer=value, real=0.0))
+        confirmed = self.get(param_id="SYS_FAILURE_EN")
+        return (response.success and confirmed.success and
+                confirmed.value.integer == value)
+
     def inject(self):
+        self.terminal = True  # Never issue two sets of failure commands.
+        permission_attempted = False
         try:
+            permission_attempted = True
+            if not self.set_permission(1):
+                self.publish("FAILURE_PERMISSION_ENABLE_FAILED")
+                return
+            self.publish("SITL_FAILURE_INJECTION_ENABLED")
             for unit, label in ((3, "BARO"), (4, "GPS")):
                 response = self.command(
                     broadcast=False, command=420, confirmation=0,
@@ -93,30 +107,29 @@ class SitlPx4ZFailureInjector:
                     param4=0.0, param5=0.0, param6=0.0, param7=0.0)
                 if not response.success or response.result != 0:
                     self.publish("FAILURE_COMMAND_REJECTED:" + label)
-                    self.terminal = True
                     return
             self.injected = True
             self.publish("INJECTED_BARO_GPS_OFF")
             rospy.logwarn("PX4 SITL baro and GPS OFF injected at %.2f m",
                           self.depth)
-            # SYS_FAILURE_EN authorizes new failure commands; switching it
-            # back off does not undo the already-injected sensor failures.
-            # Do it immediately while MAVROS is still connected so the next
-            # SITL process cannot inherit this dangerous permission.
-            reset = self.set(
-                param_id="SYS_FAILURE_EN",
-                value=ParamValue(integer=0, real=0.0))
-            confirmed = self.get(param_id="SYS_FAILURE_EN")
-            if reset.success and confirmed.success and \
-                    confirmed.value.integer == 0:
-                self.publish("INJECTED_BARO_GPS_OFF_PERMISSION_DISABLED")
-            else:
-                self.publish("INJECTED_BARO_GPS_OFF_PARAM_RESET_FAILED")
-                rospy.logerr("SITL SYS_FAILURE_EN reset failed; reset it manually")
         except rospy.ServiceException as error:
             self.publish("INJECTION_OR_PARAM_RESET_SERVICE_ERROR")
-            self.terminal = True
             rospy.logerr("PX4 SITL failure injection service error: %s", error)
+        finally:
+            # Permission is enabled only in this short section. Reset even
+            # when a failure command is rejected or its service raises.
+            if permission_attempted:
+                try:
+                    disabled = self.set_permission(0)
+                except rospy.ServiceException:
+                    disabled = False
+                if disabled:
+                    suffix = ("INJECTED_BARO_GPS_OFF_PERMISSION_DISABLED"
+                              if self.injected else "FAILURE_ABORTED_PERMISSION_DISABLED")
+                    self.publish(suffix)
+                else:
+                    self.publish("FAILURE_PARAM_RESET_FAILED")
+                    rospy.logerr("SITL SYS_FAILURE_EN reset failed; reset it manually")
 
     def tick(self, _event):
         if self.terminal or self.injected:
@@ -127,7 +140,7 @@ class SitlPx4ZFailureInjector:
         if not self.state.connected:
             return
         now = rospy.Time.now()
-        if not self.failure_enabled:
+        if not self.prepared:
             if self.state.armed:
                 self.publish("MISSED_DISARMED_SETUP")
                 self.terminal = True

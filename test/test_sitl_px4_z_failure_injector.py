@@ -50,8 +50,10 @@ class SitlPx4ZFailureInjectorSafetyTest(unittest.TestCase):
         self.injector.command = MagicMock(return_value=MagicMock(
             success=True, result=0))
         self.injector.set = MagicMock(return_value=MagicMock(success=True))
-        self.injector.get = MagicMock(return_value=MagicMock(
-            success=True, value=MagicMock(integer=0)))
+        self.injector.get = MagicMock(side_effect=[
+            MagicMock(success=True, value=MagicMock(integer=1)),
+            MagicMock(success=True, value=MagicMock(integer=0)),
+        ])
         self.injector.inject()
         self.assertTrue(self.injector.injected)
         self.assertEqual(self.injector.command.call_count, 2)
@@ -60,6 +62,37 @@ class SitlPx4ZFailureInjectorSafetyTest(unittest.TestCase):
         self.assertEqual(self.injector.set.call_args.kwargs["value"].integer, 0)
         self.assertEqual(self.injector.status_pub.publish.call_args.args[0].data,
                          "INJECTED_BARO_GPS_OFF_PERMISSION_DISABLED")
+
+    def test_preparation_does_not_enable_failure_permission(self):
+        self.injector.prepared = False
+        self.injector.status_pub = MagicMock()
+        self.injector.pull = MagicMock(return_value=MagicMock(success=True))
+        self.injector.get = MagicMock(return_value=MagicMock(
+            success=True, value=MagicMock(integer=0)))
+        self.injector.set = MagicMock()
+        self.injector.setup()
+        self.assertTrue(self.injector.prepared)
+        self.injector.set.assert_not_called()
+        self.assertEqual(self.injector.status_pub.publish.call_args.args[0].data,
+                         "SITL_FAILURE_INJECTION_PREPARED")
+
+    def test_rejected_failure_command_still_disables_permission(self):
+        self.injector.depth = 6.1
+        self.injector.injected = False
+        self.injector.terminal = False
+        self.injector.status_pub = MagicMock()
+        self.injector.command = MagicMock(return_value=MagicMock(
+            success=False, result=1))
+        self.injector.set = MagicMock(return_value=MagicMock(success=True))
+        self.injector.get = MagicMock(side_effect=[
+            MagicMock(success=True, value=MagicMock(integer=1)),
+            MagicMock(success=True, value=MagicMock(integer=0)),
+        ])
+        self.injector.inject()
+        self.assertFalse(self.injector.injected)
+        self.assertEqual(self.injector.set.call_count, 2)
+        self.assertEqual(self.injector.status_pub.publish.call_args.args[0].data,
+                         "FAILURE_ABORTED_PERMISSION_DISABLED")
 
 
 if __name__ == "__main__":
