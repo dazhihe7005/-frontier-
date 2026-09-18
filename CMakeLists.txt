@@ -152,6 +152,7 @@ catkin_install_python(PROGRAMS
   scripts/ground_station.py
   scripts/gazebo_mid360_fastlio_adapter.py
   scripts/sitl_localization_adapter.py
+  scripts/sitl_shaft_rviz_frames.py
   scripts/sitl_task_operator.py
   scripts/sitl_shaft_sensor_adapter.py
   scripts/sitl_shaft_px4_router.py

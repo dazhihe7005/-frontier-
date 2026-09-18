@@ -110,7 +110,13 @@ class SitlShaftPx4Router:
         state_fresh = (not self.state_time.is_zero() and
                        -0.05 <= state_age <= self.state_timeout)
         pose_fresh = self.pose is not None and (
-            -0.05 <= (now - self.pose_time).to_sec() <= self.pose_timeout)
+            -0.05 <= (now - self.pose_time).to_sec() <= self.pose_timeout and
+            not self.pose.header.stamp.is_zero() and
+            -0.05 <= (now - self.pose.header.stamp).to_sec() <=
+            self.pose_timeout and
+            all(math.isfinite(value) for value in (
+                self.pose.pose.position.x, self.pose.pose.position.y,
+                self.pose.pose.position.z)))
         intent_fresh = self.intent is not None and (
             -0.05 <= (now - self.intent_time).to_sec() <= self.intent_timeout and
             not self.intent.header.stamp.is_zero() and

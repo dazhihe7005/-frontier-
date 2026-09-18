@@ -3,6 +3,7 @@
        adapter and router refuse to operate without /use_sim_time. Depth is
        Gazebo world truth; bottom range may come from a Gazebo ray, not real laser. -->
   <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
   <arg name="range_drop_after_depth" default="-1.0"/>
   <arg name="depth_drop_after_depth" default="-1.0"/>
   <arg name="bad_sigma_after_depth" default="-1.0"/>
@@ -26,6 +27,13 @@
   </include>
   <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
         name="sitl_localization_adapter" output="screen" required="true"/>
+  <group if="$(arg rviz)">
+    <!-- Display-only transforms; never used as a PX4 localization input. -->
+    <node pkg="mine_uav_control" type="sitl_shaft_rviz_frames.py"
+          name="sitl_shaft_rviz_frames" output="screen"/>
+    <node pkg="rviz" type="rviz" name="task2_rviz" output="screen"
+          args="-d $(find mine_uav_control)/rviz/task2_shaft_sitl.rviz"/>
+  </group>
   <node pkg="mine_uav_control" type="sitl_shaft_sensor_adapter.py"
         name="sitl_shaft_sensor_adapter" output="screen" required="true">
     <param name="bottom_top_world_z" value="-20.85"/>

@@ -1,0 +1,79 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Name: Entrance plane (Z=0)
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 30
+      Reference Frame: <Fixed Frame>
+      Alpha: 0.25
+      Color: 120; 120; 120
+    - Class: rviz/PointCloud
+      Name: Gazebo simulated ray cloud (not FAST-LIO2)
+      Enabled: true
+      Topic: /mine_uav/sitl/mid360/points
+      Queue Size: 10
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: AxisColor
+      Axis: Z
+      Position Transformer: XYZ
+      Decay Time: 8
+      Alpha: 0.8
+    - Class: rviz/Path
+      Name: PX4 SITL trajectory
+      Enabled: true
+      Topic: /mine_uav/sitl/px4_path
+      Color: 0; 255; 80
+      Line Style: Lines
+      Line Width: 0.05
+      Pose Style: None
+      Buffer Length: 5000
+    - Class: rviz/Odometry
+      Name: Simulated vehicle pose
+      Enabled: true
+      Topic: /Odometry
+      Keep: 1
+      Shape: Arrow
+      Color: 255; 100; 20
+      Position Tolerance: 0
+      Angle Tolerance: 0
+      Covariance:
+        Position: false
+        Orientation: false
+  Enabled: true
+  Global Options:
+    Background Color: 28; 32; 38
+    Default Light: true
+    Fixed Frame: camera_init
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Name: Current View
+      Target Frame: camera_init
+      Distance: 34
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: -9
+      Pitch: 1.15
+      Yaw: 0.7
+    Saved: ~
+Window Geometry:
+  Width: 1350
+  Height: 900
+  X: 100
+  Y: 80

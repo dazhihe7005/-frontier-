@@ -3,6 +3,7 @@
 """Pure callback-level checks for the SITL router's ownership lifecycle."""
 
 import importlib.util
+import math
 import pathlib
 import unittest
 from unittest.mock import MagicMock, patch
@@ -107,6 +108,7 @@ class ShaftRouterLifecycleTest(unittest.TestCase):
     def test_replayed_intent_stamp_cannot_publish_descent(self):
         router = owned_router()
         router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(10)
         router.pose_time = MODULE.rospy.Time(10)
         router.intent = TwistStamped()
         router.intent.header.stamp = MODULE.rospy.Time(1)
@@ -133,6 +135,80 @@ class ShaftRouterLifecycleTest(unittest.TestCase):
                           return_value=MODULE.rospy.Time(10)):
             router.on_intent(old)
         self.assertIsNone(router.intent)
+
+    def test_replayed_pose_stamp_cannot_publish_descent(self):
+        router = owned_router()
+        router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(1)  # republished at t=10
+        router.pose.pose.position.x = 1.0
+        router.pose.pose.position.y = 2.0
+        router.pose.pose.position.z = 3.0
+        router.pose_time = MODULE.rospy.Time(10)
+        router.intent = TwistStamped()
+        router.intent.header.stamp = MODULE.rospy.Time(10)
+        router.intent.twist.linear.z = -0.5
+        router.intent_time = MODULE.rospy.Time(10)
+        router.status = "DESCENDING"
+        router.command_pub = MagicMock()
+        router.publish_hold = MagicMock()
+        router.request_fallback = MagicMock()
+        with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                patch.object(MODULE.rospy.Time, "now",
+                             return_value=MODULE.rospy.Time(10)):
+            router.tick(None)
+        router.command_pub.publish.assert_not_called()
+        router.publish_hold.assert_not_called()
+        self.assertFalse(router.ready)
+
+    def test_nonfinite_pose_cannot_publish_descent_or_hold(self):
+        for bad_value in (math.nan, math.inf):
+            with self.subTest(bad_value=bad_value):
+                router = owned_router()
+                router.fixed_xy = None  # first command captures the invalid XY
+                router.pose = PoseStamped()
+                router.pose.header.stamp = MODULE.rospy.Time(10)
+                router.pose.pose.position.x = bad_value
+                router.pose.pose.position.y = 2.0
+                router.pose.pose.position.z = 3.0
+                router.pose_time = MODULE.rospy.Time(10)
+                router.intent = TwistStamped()
+                router.intent.header.stamp = MODULE.rospy.Time(10)
+                router.intent.twist.linear.z = -0.5
+                router.intent_time = MODULE.rospy.Time(10)
+                router.status = "DESCENDING"
+                router.command_pub = MagicMock()
+                router.publish_hold = MagicMock()
+                router.request_fallback = MagicMock()
+                with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                        patch.object(MODULE.rospy.Time, "now",
+                                     return_value=MODULE.rospy.Time(10)):
+                    router.tick(None)
+                router.command_pub.publish.assert_not_called()
+                router.publish_hold.assert_not_called()
+                self.assertFalse(router.ready)
+
+    def test_fresh_finite_pose_and_intent_publish_target(self):
+        router = owned_router()
+        router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(10)
+        router.pose.pose.position.x = 1.0
+        router.pose.pose.position.y = 2.0
+        router.pose.pose.position.z = 3.0
+        router.pose_time = MODULE.rospy.Time(10)
+        router.intent = TwistStamped()
+        router.intent.header.stamp = MODULE.rospy.Time(10)
+        router.intent.twist.linear.z = -0.5
+        router.intent_time = MODULE.rospy.Time(10)
+        router.status = "DESCENDING"
+        router.command_pub = MagicMock()
+        with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                patch.object(MODULE.rospy.Time, "now",
+                             return_value=MODULE.rospy.Time(10)):
+            router.tick(None)
+        target = router.command_pub.publish.call_args.args[0]
+        self.assertEqual((target.position.x, target.position.y), (1.0, 2.0))
+        self.assertEqual(target.velocity.z, -0.5)
+        self.assertTrue(router.ready)
 
 
 if __name__ == "__main__":

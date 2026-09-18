@@ -2623,3 +2623,9 @@ run16 前墙等待约 6.11 s，PX4 实际高度下降 0.515 m、x 前移 0.925 m
 用户要求暂时回看任务二，不启动新的仿真或真机。本轮直接复核本地保存的最终 22 m PX4/Gazebo bag：脚本通过要求的自主完成、Gazebo ray 转发、离底机体外余量≥1 m、XY 偏差≤0.5 m 等断言。实际状态时刻 DESCENDING 17.424 s、RETURNING 59.424 s、COMPLETE 101.274 s、AUTO.LOITER 102.322 s；机体外最小离底余量 1.434 m，侧墙余量 4.476 m，XY 最大偏差 0.139 m，2106/2106 帧转发测距匹配 Gazebo 原始 ray。完成点落在入口深度容差 0.5 m 内，不代表精准落回入口平台或自动着陆。
 
 故障 bag 审计通过：在约 6 m 下探处将深度声明误差增大，32.624 s 进入 FAULT，0.698 s 后 PX4 AUTO.LOITER，后续 27.15 s 最大额外下沉 0.166 m；这是 PX4 SITL 高度仍有效时的表现。中途外部模式服务退出 bag 通过：切 AUTO.LOITER 后调度器约 0.080 s 撤销、就绪标志约 0.031 s 变 false，后续 28.097 s 无 OFFBOARD 重入或新 setpoint。任务二状态机 GTest 6/6、SITL 路由生命周期 Python 测试 5/5 本轮重跑通过；420 m 仅为理想运动学单测，不是 420 m PX4/Gazebo 闭环。当前 22 m 使用 Gazebo 世界真值产生独立入口相对深度，底部测距是 Gazebo ray，未验证真实深度源、真实下视激光、PX4 Z 失效、真实 CH5 接管或生产路由；生产 `shaft_task_available=false` 保持不变。
+
+## 2026-09-18：任务二开启 Gazebo/RViz，随后转为软件缺陷修复
+
+用户要求开启任务二仿真并同时打开 RViz，之后表示不用继续观看，改为自主完成无需真机的优化。先在隔离 ROS master 11319/Gazebo master 11499 启动 22 m PX4 SITL，并打开 Gazebo 和 RViz；没有连接或控制真实 PX4。发现点云在 `mid360_link`、轨迹在 `camera_init`，原本缺 TF；增加仅用于可视化的 `camera_init -> base_link -> mid360_link` 变换后，TF 查询和约 10 Hz 模拟雷达点云、PX4 路径都可观察。RViz 初版配置把 Gazebo 插件实际的 `sensor_msgs/PointCloud` 误设为 `PointCloud2`，ROS 日志明确报 MD5/类型不匹配；已改用 `rviz/PointCloud`。用户随后要求停止观看，故更正后的 RViz 显示项没有再打开做目视验收。该点云只是 Gazebo ray 近似，不是 MID360s/FAST-LIO2 建图。停止了该轮所有隔离仿真进程。
+
+继续检查任务二 SITL-only PX4 路由器，发现其位姿新鲜度只按回调接收时间判断，缺消息自带时间戳和坐标有效性门控。先写回归测试并在旧代码上复现：重发旧 `PoseStamped` 仍可继续发下降 setpoint；首次锁定 XY 时，NaN/Inf 坐标可进入目标。修复为同时检查接收时间、位姿消息时间戳和 X/Y/Z 有限性，失效时撤销指令就绪并走原有 SITL 回退路径。8 项路由器生命周期测试均通过。无界面隔离 22 m 全程再飞通过：DESCENDING 17.373 s、RETURNING 59.424 s、COMPLETE 101.373 s、PX4 AUTO.LOITER 102.325 s；机体外最小离底 1.417 m、最大 XY 偏移 0.133 m，1911/1911 帧任务测距匹配 Gazebo 原始 ray。记录的 PX4 位姿 3146 帧均在 `map`，消息时差 -8～+7 ms。bag 存于 `/home/nuc/task2_logs/probes/task2_22m_pose_gate_20260918.bag`，仅本地保存。仿真结束已停止；真实 11312 ROS master 和生产任务二禁用配置未动。完整说明见 `docs/task2_shaft_logic_2026-09-18.md`。这些不证明真实 PX4 Z 丢失时可安全返航。
