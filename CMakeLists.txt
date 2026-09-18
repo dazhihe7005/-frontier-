@@ -138,6 +138,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
 )
 
 catkin_install_python(PROGRAMS
+  scripts/task1_real_time_guard.py
   scripts/analyze_task1_height_contract.py
   scripts/analyze_task1_sitl_bag.py
   scripts/ground_station.py

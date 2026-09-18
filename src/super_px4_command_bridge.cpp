@@ -257,7 +257,7 @@ class SuperPx4CommandBridge {
             exit_requested_)) {
       // CH5/manual takeover and PX4 failsafe exits both revoke this
       // bridge's permission to request OFFBOARD again. A deliberate
-      // auto-enable low->high reset is required before the next attempt.
+      // task-enable transition is required before the next attempt.
       latchFault("OFFBOARD_EXITED_EXTERNALLY");
       valid_command_ = false;
       resetPrestream();

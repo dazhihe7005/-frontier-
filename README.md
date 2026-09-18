@@ -161,11 +161,12 @@ export ROS_MASTER_URI=http://localhost:11312
 roslaunch mine_uav_control task1_real.launch rviz:=true
 ```
 
-当前实验配置暂时忽略 CH6，只使用 CH7。启动前让 CH7 保持低位；确认定位健康后，
-由飞手手动解锁、起飞并稳定悬停，再把 CH7 从低位拨到高位并保持约 0.5 秒。
+当前任务调度忽略 CH6；CH7/CH11 的首次稳定电平只建立基线。确认定位健康后，
+由飞手手动解锁、起飞并稳定悬停，再拨动 CH7 到另一稳定位置并保持约 0.5 秒。
 任务一随后以当前位姿建立 home，开始向 SUPER 发布探索目标，指令桥预发送悬停目标后
-自动请求 OFFBOARD。节点不会自动解锁或自动起飞。CH7 拨回低位会退出任务控制并请求
-切回 `POSCTL`，飞手应立即接管。
+自动请求 OFFBOARD。节点不会自动解锁或自动起飞。**任务运行期间再次拨动 CH7/CH11
+会被忽略，CH7 拨回低位不是中止键。**人工接管应使用已拆桨验证的 CH5 飞行模式切换；
+真实定位丢失时不能假设 `POSCTL` 一定能够悬停。
 
 任务一运行状态可在第二个终端查看：
 
@@ -222,7 +223,7 @@ Fast-LIO2 跳变、超时或 MAVROS 断开都会停止外部视觉输出。
 悬停点，再自动请求 OFFBOARD；节点本身永不解锁 PX4。SUPER 短暂重规划时会发送
 当前位置悬停目标；任务切走、定位失效、通信断开、指令越界或任务完成时会退出受控
 OFFBOARD。真机默认退出到 `POSCTL`，必须保证遥控器和 PX4 失效保护配置可用。
-若飞手通过 CH5 或 PX4 失效保护让飞控从受控 OFFBOARD 切到其他模式，桥接器会锁住自动重新进入；当前临时 CH7 方案要求先拨低、再重新拨高才可再次申请 OFFBOARD。此项已有模拟 MAVROS 模式切换的 ROS 回归及 40 m 仿真闭环回归，但仍需拆桨实测遥控器 CH5 和真实 PX4 模式切换，不能把仿真当作人工接管实机验收。见 [`docs/task1_manual_override_guard.md`](docs/task1_manual_override_guard.md)。
+若飞手通过 CH5 或 PX4 失效保护让飞控从受控 OFFBOARD 切到其他模式，桥接器会锁住自动重新进入；调度器也会撤销任务。稳定电平重新建立基线后，必须再次产生新的 CH7 电平变化才可能重新授权。此项已有模拟 MAVROS 模式切换的 ROS 回归及 40 m 仿真闭环回归，但仍需拆桨实测遥控器 CH5 和真实 PX4 模式切换，不能把仿真当作人工接管实机验收。见 [`docs/task1_manual_override_guard.md`](docs/task1_manual_override_guard.md)。
 任务执行中的 Fast-LIO2→PX4 对齐突变也会锁存故障并退出受控 OFFBOARD；这只是桥接层保护，不代表 SUPER 内部的规划高度约束已经完成。
 
 统一启动文件（首次实机必须拆桨）：
@@ -232,6 +233,11 @@ source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.
 export ROS_MASTER_URI=http://localhost:11312
 roslaunch mine_uav_control task1_real.launch
 ```
+
+真机入口包含 `task1_real_time_guard.py`：若共用曾运行 SITL 的 ROS master，
+`/use_sim_time=true` 且无 `/clock` 时它会报错并停止整个启动。先停止 SITL，
+改用真实时间 master；不要把静止的仿真时间误当真实定位故障。2026-09-18
+隔离检测证据见[真机雷达与决策输入诊断](docs/task1_live_mid360_decider_2026-09-18.md)。
 
 关键状态检查：
 

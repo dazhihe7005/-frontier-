@@ -7,6 +7,11 @@
   <arg name="start_super" default="true"/>
   <arg name="rviz" default="false"/>
 
+  <!-- A stale SITL /use_sim_time without /clock freezes freshness timers.
+       Exit the complete real-aircraft launch instead of silently proceeding. -->
+  <node pkg="mine_uav_control" type="task1_real_time_guard.py"
+        name="task1_real_time_guard" output="screen" required="true"/>
+
   <group if="$(arg start_livox)">
     <!-- The connected unit reports Livox device type 35 (Mid360s), not type 9 (MID360). -->
     <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360s.launch"/>
