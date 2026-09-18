@@ -1,0 +1,15 @@
+<launch>
+  <node pkg="mine_uav_control" type="mission_scheduler"
+        name="mission_scheduler" output="screen" required="true">
+    <param name="rc_topic" value="/test/mission/rc"/>
+    <param name="odometry_topic" value="/test/mission/odom"/>
+    <param name="mavros_state_topic" value="/test/mission/mavros_state"/>
+    <param name="switch_stable_time" value="0.12"/>
+    <param name="rc_timeout" value="0.5"/>
+    <param name="odometry_timeout" value="0.5"/>
+    <param name="shaft_task_available" value="true"/>
+    <param name="decision_rate" value="30.0"/>
+  </node>
+  <test test-name="mission_scheduler_edges" pkg="mine_uav_control"
+        type="test_mission_scheduler_edges.py" time-limit="30"/>
+</launch>

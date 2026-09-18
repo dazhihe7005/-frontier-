@@ -187,17 +187,17 @@ rostopic echo /goal
 `task1_real.launch` 已启用 `require_mission_enable_edge=true`，因此任务一不会因节点启动、
 旧的锁存消息或第一帧里程计而提前建立 home。现场按以下顺序操作：
 
-1. 临时测试模式会忽略物理 CH6 的位置，物理 CH7 先保持低位。
+1. 确认 CH7、CH11 的 MAVROS 通道映射；启动时保持任一稳定位置，供调度器建立基线。
 2. 启动任务一链路，确认 Fast-LIO2 点云/位姿、MAVROS 连接和 PX4 状态正常。
 3. 拆桨完成手动解锁、起飞并悬停，在 POSCTL/手动模式下稳定飞机。
-4. 将 CH7 从低位拨到高位并保持。调度器对该变化去抖约 0.5 s；任务一收到
+4. 将 CH7 拨到另一位置。调度器对该变化去抖约 0.5 s；任务一收到
    `goaf_enable: false -> true` 后，在下一帧同步的点云+位姿处捕获当前位姿为 home，
    然后才开始发布探索目标给 SUPER。
-5. 测试中将 CH7 拨回低位会停止任务一的自动目标输出，之后由飞手接管；要重新开始一轮，
-   必须先保持低位，再重新拨到高位。该逻辑不会自动起飞。
+5. 任务运行中再次拨动 CH7 或 CH11 会被忽略。任务完成或飞手切出 OFFBOARD 后，
+   再次拨动 CH7 可启动新一轮任务一。该逻辑不会自动起飞。
 
-临时测试中 CH7 是启动/自动允许开关，CH6 被 `force_goaf_task=true` 忽略；恢复正式任务调度
-时将该参数改为 `false`，再由 CH6 选择任务。必须避免在实验室同时运行两个
+当前任务调度以 CH7 的任一稳定电平变化启动任务一；CH6 不参与任务选择。
+必须避免在实验室同时运行两个
 调度器、两个 SUPER 或两个 PX4 setpoint 发布节点。SUPER 当前具备已知障碍膨胀、A*/安全
 走廊、轨迹碰撞复查和备份轨迹等避障环节；高层决策器还会把墙后及当前不可达自由空间之外
 的 frontier 过滤掉。它适合进行拆桨和低速实验验证，但真实飞行前仍必须单独验证点云坐标系、
@@ -375,11 +375,13 @@ rostopic pub -1 /mine_uav/exploration/return_home std_msgs/Bool "data: true"
 
 ## Fast-LIO2 → 任务调度器 → 采空区/竖井任务
 
-`mission_scheduler` 通过 MAVROS 的 `/mavros/rc/in` 读取遥控器二段开关，并发布唯一的任务选择结果：
+`mission_scheduler` 通过 MAVROS 的 `/mavros/rc/in` 读取 CH7 与 CH11，并发布唯一的任务选择结果：
 
-- RC 低位：任务一 `goaf_exploration`，采空区自主探测与建模；
-- RC 高位：任务二 `shaft_exploration`，竖井探测；
-- 遥控器丢失、开关处于中间无效区或 Fast-LIO2 位姿超时：进入 `hold`，并在已进入任务后发布返航请求。
+- 上电默认手动；首次稳定 RC 读数只建立基线，不启动任务；
+- CH7 稳定电平变化（两个方向均可）：启动任务一 `goaf_exploration`；
+- CH11 稳定电平变化（两个方向均可）：在任务二可用时启动 `shaft_exploration`；
+- 任务运行中忽略两个通道的新变化。完成或飞手退出 OFFBOARD 后回到 `hold`，新的变化可再次启动任务；
+- 遥控器或 MAVROS 断链会撤销当前任务；任务一还要求 Fast-LIO2 位姿新鲜。任务二由自身的相对深度与测距逻辑检查传感器，生产开关仍为禁用。
 
 启动：
 
@@ -389,7 +391,7 @@ source /home/nuc/super_ws/devel/setup.bash
 roslaunch mine_uav_control mission_scheduler.launch
 ```
 
-默认 `rc_switch_channel: 5` 是 ROS 数组下标，对应物理 CH6，不代表一定是你的实际二段开关；应通过 `/mavros/rc/in` 和 QGroundControl 确认后修改配置。
+默认 `goaf_trigger_channel: 6`、`shaft_trigger_channel: 10` 是 ROS 数组下标，对应物理 CH7、CH11；应通过 `/mavros/rc/in` 和 QGroundControl 核实通道顺序及开关电平。CH6 不参与任务调度。
 
 主要输出：
 
@@ -401,7 +403,7 @@ roslaunch mine_uav_control mission_scheduler.launch
 /mine_uav/mission/status        std_msgs/String  状态与健康信息
 ```
 
-该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。两个任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免两个任务同时控制飞行器。当前任务一的 `super_exploration_decider` 已订阅 `goaf_enable`；任务二实现后接入 `shaft_enable`。
+该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。两个任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免两个任务同时控制飞行器。任务一的 `super_exploration_decider` 已订阅 `goaf_enable`；任务二的 `shaft_mission_node` 已订阅 `shaft_enable`，但仅有仿真专用 PX4 指令路由器，真机任务二仍被禁用。定位丢失时不会请求无法保证安全的自主返航。
 
 ### SITL 联调
 
@@ -675,3 +677,5 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 2026-09-18 任务二开始：新增隔离的竖井状态机和 ROS 节点，要求独立相对深度与下视测距同时新鲜，先下探、井底连续确认后回到记录的入口深度。6 项单测及 1 项 ROS 节点集成测试通过，包含理想 420 m 运动学闭环。通用任务节点只发布 `/mine_uav/shaft/velocity_intent_enu`；真实任务的 `shaft_task_available` 仍为 `false`。下视测距本身无法提供 400 多米返航所需的入口深度参考；实机必须另行解决定位与失效恢复。接口与下一关见[任务二竖井逻辑记录](docs/task2_shaft_logic_2026-09-18.md)。
 
 任务二后续完成首个 **22 m PX4/Gazebo 接口闭环**：专用启动文件 `task2_shaft_22m_px4_sitl.launch` 仅在仿真中启用任务二，并用 Gazebo 世界真值模拟独立深度与下视测距；PX4 经 OFFBOARD 下探、井底触发、返航，完成后切 AUTO.LOITER。bag 显示离底最小机体外余量 1.373 m、XY 最大偏移 0.142 m。第一次完整闭环因理想测距基准错约 0.9 m 只剩 0.504 m 余量，失败与修正的 A/B 证据均在[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。**这不等于真实 400 m 竖井或无可靠 Z 定位已验证**；生产调度器仍禁用任务二，未接真实测距、独立深度源或人工接管验证。
+
+调度器现按 CH7/CH11 的稳定电平变化分别启动任务一/任务二；新版 ROS 边沿测试和两任务各自的 SITL 已通过。任务二专用 SITL 还可用 `range_drop_after_depth:=6.0` 在下探 6 m 后停止模拟测距，检查传感器超时、任务撤销和 PX4 模式交接。延长观测的故障试验中，从 FAULT 到 AUTO.LOITER 约 0.539 s，后续 24.667 s 内最大额外下沉约 0.152 m；这是标准 SITL 定位有效时的结果，不能外推到无可靠 Z 的实井。详见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。

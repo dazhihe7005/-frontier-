@@ -3,6 +3,7 @@
        adapter and router refuse to operate without /use_sim_time. The 22 m
        range is synthetic, not a Gazebo ray sensor or real laser. -->
   <arg name="gui" default="false"/>
+  <arg name="range_drop_after_depth" default="-1.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/shaft_22m_logic_sitl.world"/>
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -21,6 +22,7 @@
         name="sitl_shaft_sensor_adapter" output="screen" required="true">
     <param name="bottom_top_world_z" value="-20.85"/>
     <param name="entrance_world_z" value="0.25"/>
+    <param name="stop_range_after_depth" value="$(arg range_drop_after_depth)"/>
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
         name="sitl_shaft_release_pad" output="screen" required="true"/>
@@ -36,7 +38,6 @@
     <rosparam command="load" file="$(find mine_uav_control)/config/mission_scheduler.yaml"/>
     <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
     <param name="shaft_task_available" value="true"/>
-    <param name="force_goaf_task" value="false"/>
   </node>
   <node pkg="mine_uav_control" type="shaft_mission_node"
         name="shaft_mission_node" output="screen" required="true">

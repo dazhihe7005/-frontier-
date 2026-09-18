@@ -29,37 +29,27 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
   private_nh_.param("status_topic", status_topic_,
                     std::string("/mine_uav/mission/status"));
 
-  private_nh_.param("rc_switch_channel", rc_switch_channel_, rc_switch_channel_);
-  private_nh_.param("auto_enable_channel", auto_enable_channel_,
-                    auto_enable_channel_);
+  private_nh_.param("goaf_trigger_channel", goaf_trigger_channel_,
+                    goaf_trigger_channel_);
+  private_nh_.param("shaft_trigger_channel", shaft_trigger_channel_,
+                    shaft_trigger_channel_);
   private_nh_.param("low_threshold", low_threshold_, low_threshold_);
   private_nh_.param("high_threshold", high_threshold_, high_threshold_);
-  private_nh_.param("auto_enable_threshold", auto_enable_threshold_,
-                    auto_enable_threshold_);
   private_nh_.param("switch_stable_time", switch_stable_time_, switch_stable_time_);
-  private_nh_.param("auto_enable_stable_time", auto_enable_stable_time_,
-                    auto_enable_stable_time_);
   private_nh_.param("rc_timeout", rc_timeout_, rc_timeout_);
   private_nh_.param("odometry_timeout", odometry_timeout_, odometry_timeout_);
   private_nh_.param("decision_rate", decision_rate_, decision_rate_);
   private_nh_.param("require_odometry", require_odometry_, require_odometry_);
   private_nh_.param("require_mavros_connection", require_mavros_connection_,
                     require_mavros_connection_);
-  private_nh_.param("require_auto_enable_low_before_enable",
-                    require_auto_enable_low_before_enable_,
-                    require_auto_enable_low_before_enable_);
-  private_nh_.param("force_goaf_task", force_goaf_task_, force_goaf_task_);
   private_nh_.param("shaft_task_available", shaft_task_available_,
                     shaft_task_available_);
 
-  if (rc_switch_channel_ < 0) {
-    ROS_WARN("rc_switch_channel must be non-negative; using channel 5 (ROS index)");
-    rc_switch_channel_ = 5;
-  }
-  if (auto_enable_channel_ < 0 || auto_enable_channel_ == rc_switch_channel_) {
-    ROS_WARN("auto_enable_channel must be non-negative and different from the "
-             "task switch; using channel 6 (ROS index / physical CH7)");
-    auto_enable_channel_ = 6;
+  if (goaf_trigger_channel_ < 0 || shaft_trigger_channel_ < 0 ||
+      goaf_trigger_channel_ == shaft_trigger_channel_) {
+    ROS_WARN("Task trigger channels must be distinct and non-negative; using CH7/CH11");
+    goaf_trigger_channel_ = 6;
+    shaft_trigger_channel_ = 10;
   }
   if (low_threshold_ >= high_threshold_) {
     ROS_WARN("low_threshold must be below high_threshold; using 1300/1700");
@@ -68,10 +58,6 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
   }
   if (!std::isfinite(switch_stable_time_) || switch_stable_time_ < 0.0) {
     switch_stable_time_ = 0.5;
-  }
-  if (!std::isfinite(auto_enable_stable_time_) ||
-      auto_enable_stable_time_ < 0.0) {
-    auto_enable_stable_time_ = 0.5;
   }
   if (!std::isfinite(rc_timeout_) || rc_timeout_ <= 0.0) {
     rc_timeout_ = 1.0;
@@ -88,6 +74,12 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
       odometry_topic_, 10, &MissionScheduler::odometryCallback, this);
   mavros_state_subscriber_ = nh_.subscribe(
       mavros_state_topic_, 10, &MissionScheduler::mavrosStateCallback, this);
+  goaf_finished_subscriber_ = nh_.subscribe(
+      "/mine_uav/exploration/finished", 1,
+      &MissionScheduler::goafFinishedCallback, this);
+  shaft_status_subscriber_ = nh_.subscribe(
+      "/mine_uav/shaft/status", 1,
+      &MissionScheduler::shaftStatusCallback, this);
 
   // Latched outputs let a task node receive the current selection immediately.
   active_task_publisher_ = nh_.advertise<std_msgs::UInt8>(active_task_topic_, 1, true);
@@ -103,11 +95,10 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
                            &MissionScheduler::timerCallback, this);
   publishOutputs("startup");
 
-  ROS_INFO("mission_scheduler ready: task switch ROS index %d (physical CH%d), "
-           "auto-enable ROS index %d (physical CH%d), low->goaf, high->shaft, "
-           "odometry required=%s, shaft available=%s",
-           rc_switch_channel_, rc_switch_channel_ + 1, auto_enable_channel_,
-           auto_enable_channel_ + 1, require_odometry_ ? "true" : "false",
+  ROS_INFO("mission_scheduler ready: goaf trigger CH%d, shaft trigger CH%d, "
+           "either stable edge starts an idle task; odometry required=%s, shaft available=%s",
+           goaf_trigger_channel_ + 1, shaft_trigger_channel_ + 1,
+           require_odometry_ ? "true" : "false",
            shaft_task_available_ ? "true" : "false");
 }
 
@@ -115,31 +106,18 @@ void MissionScheduler::rcCallback(const mavros_msgs::RCIn::ConstPtr& message) {
   last_rc_time_ = ros::Time::now();
   have_rc_ = true;
 
-  if (rc_switch_channel_ >= static_cast<int>(message->channels.size())) {
-    rc_value_ = 0;
-    rc_selection_ = RcSelection::kInvalid;
-    ROS_WARN_THROTTLE(
-        2.0, "RC channel index %d is unavailable; received %zu channels",
-        rc_switch_channel_, message->channels.size());
-    return;
+  goaf_channel_available_ =
+      goaf_trigger_channel_ < static_cast<int>(message->channels.size());
+  shaft_channel_available_ =
+      shaft_trigger_channel_ < static_cast<int>(message->channels.size());
+  goaf_rc_value_ = goaf_channel_available_
+                       ? message->channels[goaf_trigger_channel_] : 0;
+  shaft_rc_value_ = shaft_channel_available_
+                        ? message->channels[shaft_trigger_channel_] : 0;
+  if (!goaf_channel_available_ || !shaft_channel_available_) {
+    ROS_WARN_THROTTLE(2.0, "CH7/CH11 trigger channels unavailable: received %zu channels",
+                      message->channels.size());
   }
-
-  rc_value_ = message->channels[rc_switch_channel_];
-  rc_selection_ = classifyRc(rc_value_);
-
-  if (auto_enable_channel_ >= static_cast<int>(message->channels.size())) {
-    auto_enable_value_ = 0;
-    auto_channel_available_ = false;
-    auto_enable_requested_ = false;
-    ROS_WARN_THROTTLE(
-        2.0, "Auto-enable RC channel index %d is unavailable; received %zu channels",
-        auto_enable_channel_, message->channels.size());
-    return;
-  }
-  auto_enable_value_ = message->channels[auto_enable_channel_];
-  auto_channel_available_ = true;
-  auto_enable_requested_ =
-      auto_enable_value_ >= static_cast<uint16_t>(auto_enable_threshold_);
 }
 
 void MissionScheduler::odometryCallback(const nav_msgs::Odometry::ConstPtr&) {
@@ -148,19 +126,74 @@ void MissionScheduler::odometryCallback(const nav_msgs::Odometry::ConstPtr&) {
 }
 
 void MissionScheduler::mavrosStateCallback(const mavros_msgs::State::ConstPtr& message) {
+  const bool manual_mode = message->mode == "MANUAL" ||
+                           message->mode == "POSCTL" ||
+                           message->mode == "ALTCTL" ||
+                           message->mode == "STABILIZED";
+  if (active_task_ != Task::kHold && offboard_seen_for_task_ &&
+      px4_mode_ == "OFFBOARD" && message->mode != "OFFBOARD") {
+    external_mode_exit_pending_ = true;
+  } else if (active_task_ != Task::kHold && !offboard_seen_for_task_ &&
+             !px4_mode_.empty() && px4_mode_ != message->mode && manual_mode) {
+    // The pilot can abort during prestream, before this task ever owns OFFBOARD.
+    external_mode_exit_pending_ = true;
+  }
   have_mavros_state_ = true;
   mavros_connected_ = message->connected;
   mavros_armed_ = message->armed;
+  px4_mode_ = message->mode;
+  if (active_task_ != Task::kHold && px4_mode_ == "OFFBOARD") {
+    offboard_seen_for_task_ = true;
+  }
 }
 
-MissionScheduler::RcSelection MissionScheduler::classifyRc(uint16_t value) const {
+void MissionScheduler::goafFinishedCallback(const std_msgs::Bool::ConstPtr& message) {
+  goaf_finished_ = message->data;
+}
+
+void MissionScheduler::shaftStatusCallback(const std_msgs::String::ConstPtr& message) {
+  shaft_status_ = message->data;
+  if (active_task_ == Task::kShaftExploration &&
+      (shaft_status_ == "DESCENDING" || shaft_status_ == "RETURNING")) {
+    shaft_started_ = true;
+  }
+}
+
+MissionScheduler::RcLevel MissionScheduler::classifyRc(uint16_t value) const {
   if (value > 0 && value <= static_cast<uint16_t>(low_threshold_)) {
-    return RcSelection::kGoafExploration;
+    return RcLevel::kLow;
   }
   if (value >= static_cast<uint16_t>(high_threshold_)) {
-    return RcSelection::kShaftExploration;
+    return RcLevel::kHigh;
   }
-  return RcSelection::kInvalid;
+  return RcLevel::kInvalid;
+}
+
+bool MissionScheduler::updateEdge(RcEdge* edge, RcLevel level,
+                                  const ros::Time& now) {
+  if (level == RcLevel::kInvalid) {
+    edge->pending = RcLevel::kInvalid;
+    return false;
+  }
+  if (level != edge->pending) {
+    edge->pending = level;
+    edge->pending_since = now;
+    return false;
+  }
+  if (ageSec(edge->pending_since, now) < switch_stable_time_ ||
+      level == edge->stable) {
+    if (level == edge->stable && !edge->initialized &&
+        ageSec(edge->pending_since, now) >= switch_stable_time_) {
+      edge->initialized = true;
+    }
+    return false;
+  }
+  edge->stable = level;
+  if (!edge->initialized) {
+    edge->initialized = true;  // The first stable reading is only a baseline.
+    return false;
+  }
+  return true;
 }
 
 void MissionScheduler::timerCallback(const ros::TimerEvent&) {
@@ -170,103 +203,82 @@ void MissionScheduler::timerCallback(const ros::TimerEvent&) {
       have_odometry_ && ageSec(last_odometry_time_, now) <= odometry_timeout_;
   const bool mavros_ok = !require_mavros_connection_ ||
                          (have_mavros_state_ && mavros_connected_);
-
-  bool auto_state_changed = false;
-  std::string auto_reason;
-  if (!rc_fresh || !auto_channel_available_) {
-    auto_reason = !rc_fresh ? "rc_lost" : "auto_channel_unavailable";
-    auto_enable_pending_since_ = ros::Time();
-    if (auto_enabled_) {
-      auto_enabled_ = false;
-      auto_state_changed = true;
-    }
-  } else if (!auto_enable_requested_) {
-    auto_reason = "auto_not_enabled";
-    auto_enable_low_seen_ = true;
-    auto_enable_pending_since_ = ros::Time();
-    if (auto_enabled_) {
-      auto_enabled_ = false;
-      auto_state_changed = true;
-    }
-  } else if (require_auto_enable_low_before_enable_ &&
-             !auto_enable_low_seen_) {
-    auto_reason = "auto_switch_needs_low_reset";
-    auto_enable_pending_since_ = ros::Time();
-  } else {
-    if (auto_enable_pending_since_.isZero()) {
-      auto_enable_pending_since_ = now;
-    }
-    if (ageSec(auto_enable_pending_since_, now) >=
-        auto_enable_stable_time_) {
-      auto_reason = "auto_enabled";
-      if (!auto_enabled_) {
-        auto_enabled_ = true;
-        auto_state_changed = true;
-      }
-    } else {
-      auto_reason = "auto_enable_debounce";
-    }
+  const bool was_rearming = rearm_pending_;
+  // Consume edges even while busy, so an ignored switch cannot start a task
+  // later when the current task finishes. A stale RC link never creates an edge.
+  const bool goaf_edge = rc_fresh && goaf_channel_available_ &&
+      updateEdge(&goaf_edge_, classifyRc(goaf_rc_value_), now);
+  const bool shaft_edge = rc_fresh && shaft_channel_available_ &&
+      updateEdge(&shaft_edge_, classifyRc(shaft_rc_value_), now);
+  if (!rc_fresh || !goaf_channel_available_) {
+    goaf_edge_.pending = RcLevel::kInvalid;
+    goaf_edge_.stable = RcLevel::kInvalid;
+    goaf_edge_.initialized = false;
+  }
+  if (!rc_fresh || !shaft_channel_available_) {
+    shaft_edge_.pending = RcLevel::kInvalid;
+    shaft_edge_.stable = RcLevel::kInvalid;
+    shaft_edge_.initialized = false;
   }
 
-  RcSelection desired_selection = RcSelection::kInvalid;
+  if (rearm_pending_ && rc_fresh && goaf_channel_available_ &&
+      shaft_channel_available_ && goaf_edge_.initialized &&
+      shaft_edge_.initialized &&
+      ageSec(goaf_edge_.pending_since, now) >= switch_stable_time_ &&
+      ageSec(shaft_edge_.pending_since, now) >= switch_stable_time_) {
+    rearm_pending_ = false;
+  }
+
   std::string reason;
-  if (!rc_fresh) {
-    reason = "rc_lost";
-  } else if (!auto_enabled_) {
-    reason = auto_reason;
+  if (!rc_fresh || !goaf_channel_available_ || !shaft_channel_available_) {
+    reason = "rc_lost_or_channel_unavailable";
   } else if (!mavros_ok) {
     reason = "mavros_disconnected";
-  } else if (require_odometry_ && !odometry_fresh) {
+  } else if (active_task_ == Task::kGoafExploration &&
+             require_odometry_ && !odometry_fresh) {
     reason = "fastlio2_odometry_lost";
-  } else if (force_goaf_task_) {
-    desired_selection = RcSelection::kGoafExploration;
-    reason = "force_goaf_task_test_mode";
-  } else if (rc_selection_ == RcSelection::kInvalid) {
-    reason = "rc_switch_invalid_or_mid";
-  } else if (rc_selection_ == RcSelection::kShaftExploration &&
-             !shaft_task_available_) {
-    reason = "shaft_task_not_implemented";
-  } else {
-    desired_selection = rc_selection_;
-    reason = selectionName(desired_selection);
+  } else if (active_task_ == Task::kGoafExploration && goaf_finished_) {
+    reason = "task1_complete";
+  } else if (active_task_ == Task::kShaftExploration && shaft_started_ &&
+             (shaft_status_ == "COMPLETE" ||
+              shaft_status_ == "FAULT_NO_SAFE_AUTONOMOUS_RECOVERY")) {
+    reason = shaft_status_ == "COMPLETE" ? "task2_complete" : "task2_fault";
+  } else if (active_task_ != Task::kHold && external_mode_exit_pending_) {
+    reason = "px4_offboard_exited";
   }
 
-  if (desired_selection == RcSelection::kInvalid) {
-    pending_selection_ = RcSelection::kInvalid;
-    if (active_task_ != Task::kHold) {
-      const bool request_return = reason != "auto_not_enabled" &&
-                                  reason != "auto_enable_debounce" &&
-                                  reason != "auto_switch_needs_low_reset";
-      applyTask(Task::kHold, reason, request_return);
-    } else if (last_reason_ != reason) {
-      last_reason_ = reason;
-      publishOutputs(reason);
-    } else if (auto_state_changed) {
-      publishOutputs(reason);
-    }
-  } else {
-    if (desired_selection == pending_selection_) {
-      if (ageSec(pending_since_, now) >= switch_stable_time_) {
-        const Task desired_task =
-            desired_selection == RcSelection::kGoafExploration
-                ? Task::kGoafExploration
-                : Task::kShaftExploration;
-        if (desired_task != active_task_) {
-          applyTask(desired_task, "rc_switch_stable", false);
-        }
+  if (!reason.empty() && active_task_ != Task::kHold) {
+    // A failed health gate revokes task authority. The task bridge handles
+    // leaving OFFBOARD. Lost localization cannot safely support an autonomous
+    // return, so do not publish a misleading return-home request.
+    applyTask(Task::kHold, reason, false);
+  } else if (active_task_ == Task::kHold && reason.empty() &&
+             !was_rearming && !rearm_pending_) {
+    if (goaf_edge && shaft_edge) {
+      reason = "simultaneous_task_edges_ignored";
+    } else if (goaf_edge) {
+      if (require_odometry_ && !odometry_fresh) {
+        reason = "fastlio2_odometry_unavailable";
+      } else {
+        applyTask(Task::kGoafExploration, "ch7_edge", false);
       }
-    } else {
-      pending_selection_ = desired_selection;
-      pending_since_ = now;
+    } else if (shaft_edge && shaft_task_available_) {
+      applyTask(Task::kShaftExploration, "ch11_edge", false);
+    } else if (shaft_edge) {
+      reason = "shaft_task_unavailable";
     }
+  }
+  if (active_task_ == Task::kHold && !reason.empty() &&
+      last_reason_ != reason) {
+    last_reason_ = reason;
+    publishOutputs(reason);
   }
 
   std::ostringstream status;
   status << "active_task=" << static_cast<int>(active_task_)
          << "(" << taskName(active_task_) << ")"
-         << " desired=" << selectionName(desired_selection)
-         << " task_rc=" << rc_value_
-         << " auto_rc=" << auto_enable_value_
+         << " ch7_rc=" << goaf_rc_value_
+         << " ch11_rc=" << shaft_rc_value_
          << " auto_enabled=" << (auto_enabled_ ? "true" : "false")
          << " rc_age=" << (have_rc_ ? ageSec(last_rc_time_, now) : -1.0)
          << " odom_age=" << (have_odometry_ ? ageSec(last_odometry_time_, now) : -1.0)
@@ -283,8 +295,25 @@ void MissionScheduler::applyTask(Task task, const std::string& reason,
                                  bool request_return) {
   const Task previous_task = active_task_;
   active_task_ = task;
+  auto_enabled_ = task != Task::kHold;
   return_home_requested_ = request_return;
   last_reason_ = reason;
+  offboard_seen_for_task_ = task != Task::kHold && px4_mode_ == "OFFBOARD";
+  external_mode_exit_pending_ = false;
+  if (task == Task::kGoafExploration) {
+    goaf_finished_ = false;
+  }
+  if (task == Task::kShaftExploration) {
+    shaft_started_ = false;
+    shaft_status_.clear();
+  }
+  if (task == Task::kHold && previous_task != Task::kHold) {
+    // A switch movement that began while the old task was active must not
+    // complete its debounce after the task ends and launch a new task.
+    rearm_pending_ = true;
+    goaf_edge_ = RcEdge();
+    shaft_edge_ = RcEdge();
+  }
 
   std_msgs::String event;
   std::ostringstream event_text;
@@ -334,18 +363,6 @@ std::string MissionScheduler::taskName(Task task) const {
     case Task::kHold:
     default:
       return "hold";
-  }
-}
-
-std::string MissionScheduler::selectionName(RcSelection selection) const {
-  switch (selection) {
-    case RcSelection::kGoafExploration:
-      return "goaf_exploration";
-    case RcSelection::kShaftExploration:
-      return "shaft_exploration";
-    case RcSelection::kInvalid:
-    default:
-      return "invalid";
   }
 }
 

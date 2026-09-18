@@ -19,6 +19,11 @@ class SitlShaftSensorAdapter:
             rospy.get_param("~entrance_world_z", 0.25)
         )
         self.max_range = float(rospy.get_param("~max_range", 30.0))
+        # SITL-only fault injection: stop the independent bottom range stream
+        # after reaching this entrance-relative depth. Negative disables it.
+        self.stop_range_after_depth = float(
+            rospy.get_param("~stop_range_after_depth", -1.0)
+        )
         self.last_publish = rospy.Time(0)
         self.depth_pub = rospy.Publisher(
             "/mine_uav/shaft/relative_depth_m", Float64, queue_size=10
@@ -53,6 +58,13 @@ class SitlShaftSensorAdapter:
         self.last_publish = now
         depth = self.entrance_world_z - z
         self.depth_pub.publish(Float64(data=depth))
+        if (self.stop_range_after_depth >= 0.0 and
+                depth >= self.stop_range_after_depth):
+            rospy.logwarn_once(
+                "SITL fault injection: bottom range stopped after %.2f m depth",
+                self.stop_range_after_depth,
+            )
+            return
         remaining = z - self.bottom_top_world_z
         reading = Range()
         reading.header.stamp = now

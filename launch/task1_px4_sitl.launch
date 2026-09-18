@@ -97,8 +97,6 @@
         name="mission_scheduler" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/mission_scheduler.yaml"/>
     <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
-    <param name="require_auto_enable_low_before_enable" value="true"/>
-    <param name="force_goaf_task" value="true"/>
   </node>
 
   <!-- Planning-map lifecycle follows CH7. /Odometry remains continuously

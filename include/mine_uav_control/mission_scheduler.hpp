@@ -24,22 +24,27 @@ class MissionScheduler {
     kShaftExploration = 2,
   };
 
-  enum class RcSelection : uint8_t {
-    kInvalid = 0,
-    kGoafExploration = 1,
-    kShaftExploration = 2,
+  enum class RcLevel : uint8_t { kInvalid = 0, kLow = 1, kHigh = 2 };
+
+  struct RcEdge {
+    RcLevel stable{RcLevel::kInvalid};
+    RcLevel pending{RcLevel::kInvalid};
+    ros::Time pending_since;
+    bool initialized{false};
   };
 
   void rcCallback(const mavros_msgs::RCIn::ConstPtr& message);
   void odometryCallback(const nav_msgs::Odometry::ConstPtr& message);
   void mavrosStateCallback(const mavros_msgs::State::ConstPtr& message);
+  void goafFinishedCallback(const std_msgs::Bool::ConstPtr& message);
+  void shaftStatusCallback(const std_msgs::String::ConstPtr& message);
   void timerCallback(const ros::TimerEvent& event);
 
-  RcSelection classifyRc(uint16_t value) const;
+  RcLevel classifyRc(uint16_t value) const;
+  bool updateEdge(RcEdge* edge, RcLevel level, const ros::Time& now);
   void applyTask(Task task, const std::string& reason, bool request_return);
   void publishOutputs(const std::string& reason);
   std::string taskName(Task task) const;
-  std::string selectionName(RcSelection selection) const;
   double ageSec(const ros::Time& stamp, const ros::Time& now) const;
 
   ros::NodeHandle nh_;
@@ -48,6 +53,8 @@ class MissionScheduler {
   ros::Subscriber rc_subscriber_;
   ros::Subscriber odometry_subscriber_;
   ros::Subscriber mavros_state_subscriber_;
+  ros::Subscriber goaf_finished_subscriber_;
+  ros::Subscriber shaft_status_subscriber_;
 
   ros::Publisher active_task_publisher_;
   ros::Publisher auto_enable_publisher_;
@@ -70,20 +77,16 @@ class MissionScheduler {
   std::string switch_event_topic_;
   std::string status_topic_;
 
-  int rc_switch_channel_{5};
-  int auto_enable_channel_{6};
+  int goaf_trigger_channel_{6};
+  int shaft_trigger_channel_{10};
   int low_threshold_{1300};
   int high_threshold_{1700};
-  int auto_enable_threshold_{1700};
   double switch_stable_time_{0.5};
-  double auto_enable_stable_time_{0.5};
   double rc_timeout_{1.0};
   double odometry_timeout_{1.0};
   double decision_rate_{10.0};
   bool require_odometry_{true};
   bool require_mavros_connection_{false};
-  bool require_auto_enable_low_before_enable_{true};
-  bool force_goaf_task_{false};
   bool shaft_task_available_{false};
 
   bool have_rc_{false};
@@ -92,22 +95,26 @@ class MissionScheduler {
   bool mavros_connected_{false};
   bool mavros_armed_{false};
 
-  uint16_t rc_value_{0};
-  uint16_t auto_enable_value_{0};
-  bool auto_channel_available_{false};
-  bool auto_enable_requested_{false};
-  bool auto_enable_low_seen_{false};
+  uint16_t goaf_rc_value_{0};
+  uint16_t shaft_rc_value_{0};
+  bool goaf_channel_available_{false};
+  bool shaft_channel_available_{false};
   bool auto_enabled_{false};
-  RcSelection rc_selection_{RcSelection::kInvalid};
-  RcSelection pending_selection_{RcSelection::kInvalid};
+  RcEdge goaf_edge_;
+  RcEdge shaft_edge_;
+  bool rearm_pending_{false};
   Task active_task_{Task::kHold};
+  bool goaf_finished_{false};
+  std::string shaft_status_;
+  bool shaft_started_{false};
+  std::string px4_mode_;
+  bool offboard_seen_for_task_{false};
+  bool external_mode_exit_pending_{false};
   bool return_home_requested_{false};
   std::string last_reason_{"startup"};
 
   ros::Time last_rc_time_;
   ros::Time last_odometry_time_;
-  ros::Time pending_since_;
-  ros::Time auto_enable_pending_since_;
 };
 
 }  // namespace mine_uav_control

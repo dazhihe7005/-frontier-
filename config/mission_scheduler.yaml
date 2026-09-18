@@ -1,34 +1,24 @@
-# ROS channel indexes are zero-based: 5 means physical RC channel CH6.
-# Set this to the actual two-position switch channel from QGroundControl.
+# ROS RC indexes are zero-based. Confirm physical CH7 and CH11 in MAVROS/QGC.
 rc_topic: "/mavros/rc/in"
-rc_switch_channel: 5
+goaf_trigger_channel: 6
+shaft_trigger_channel: 10
 
-# Independent automatic-control permission switch. ROS index 6 is physical
-# CH7. High permits the selected task; low immediately forces HOLD/disabled.
-auto_enable_channel: 6
-auto_enable_threshold: 1700
-auto_enable_stable_time: 0.5
-# Refuse a switch that was already high when the node started. The operator
-# must move it low once before automatic control can be enabled.
-require_auto_enable_low_before_enable: true
-
-# Low position selects task 1; high position selects task 2.
-# Values in the middle band are treated as invalid and force HOLD.
+# Both stable low->high and high->low changes are start events. The first
+# stable reading after startup only establishes a baseline.
 low_threshold: 1300
 high_threshold: 1700
 switch_stable_time: 0.5
 rc_timeout: 1.0
 
-# Task 2 is deliberately blocked until the shaft controller is implemented and
-# validated. Selecting it currently produces HOLD.
+# Task 2 remains blocked in production until its real sensor and PX4 control
+# chain is validated. Its dedicated SITL launch may override this flag.
 shaft_task_available: false
 
-# Fast-LIO2 odometry health gate.
+# Task-one Fast-LIO2 gate. Task two uses its own depth and range validation.
 odometry_topic: "/Odometry"
 odometry_timeout: 1.0
 require_odometry: true
 
-# Optional MAVROS connection health gate.
 mavros_state_topic: "/mavros/state"
 require_mavros_connection: true
 

@@ -88,6 +88,7 @@ if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   add_rostest(test/super_bridge_manual_override.test)
   add_rostest(test/shaft_mission_ros.test)
+  add_rostest(test/mission_scheduler_edges.test)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp

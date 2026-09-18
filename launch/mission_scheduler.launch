@@ -1,12 +1,10 @@
 <launch>
   <arg name="config" default="$(find mine_uav_control)/config/mission_scheduler.yaml" />
-  <arg name="force_goaf_task" default="false" />
 
   <node pkg="mine_uav_control"
         type="mission_scheduler"
         name="mission_scheduler"
         output="screen">
     <rosparam command="load" file="$(arg config)" />
-    <param name="force_goaf_task" value="$(arg force_goaf_task)" />
   </node>
 </launch>

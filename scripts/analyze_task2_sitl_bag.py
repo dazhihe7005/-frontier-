@@ -32,6 +32,11 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
     pad_seen = False
     pad_gone_after_seen = False
     position_setpoint_count = 0
+    latest_world_z = None
+    world_z_at_fault = None
+    deepest_world_z_after_fault = math.inf
+    fault_time = None
+    last_world_time = None
     with rosbag.Bag(path) as bag:
         for topic, msg, stamp in bag.read_messages(topics=[
             "/mine_uav/shaft/status", "/mine_uav/shaft/relative_depth_m",
@@ -59,6 +64,9 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
                         depth_at_completion = latest_depth
                 if msg.data.startswith("FAULT"):
                     fault = True
+                    if world_z_at_fault is None:
+                        world_z_at_fault = latest_world_z
+                        fault_time = t
             elif topic == "/mavros/state":
                 if not modes or modes[-1]["mode"] != msg.mode or \
                         modes[-1]["armed"] != msg.armed:
@@ -74,9 +82,16 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
                     pad_seen = True
                 elif pad_seen:
                     pad_gone_after_seen = True
-                if not active or "iris" not in names:
+                if "iris" not in names:
                     continue
                 pose = msg.pose[names.index("iris")].position
+                latest_world_z = pose.z
+                last_world_time = t
+                if fault:
+                    deepest_world_z_after_fault = min(
+                        deepest_world_z_after_fault, pose.z)
+                if not active:
+                    continue
                 if first_active_xy is None:
                     first_active_xy = (pose.x, pose.y)
                 max_xy_deviation = max(
@@ -107,6 +122,19 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
         "modes": modes,
         "complete": complete,
         "fault": fault,
+        "world_z_at_fault": world_z_at_fault,
+        "post_fault_extra_descent": (
+            world_z_at_fault - deepest_world_z_after_fault
+            if world_z_at_fault is not None and
+            math.isfinite(deepest_world_z_after_fault) else None),
+        "fault_to_loiter_seconds": next(
+            (mode["time"] - status["time"]
+             for status in statuses if status["state"].startswith("FAULT")
+             for mode in modes if mode["time"] >= status["time"]
+             and mode["mode"] == "AUTO.LOITER"), None),
+        "post_fault_observation_seconds": (
+            last_world_time - fault_time
+            if last_world_time is not None and fault_time is not None else None),
         "disarmed_while_active": disarmed_while_active,
         "pad_seen": pad_seen,
         "pad_gone_after_seen": pad_gone_after_seen,
@@ -129,6 +157,10 @@ if __name__ == "__main__":
     parser.add_argument("--shaft-half-width", type=float, default=5.0)
     parser.add_argument("--vehicle-radius", type=float, default=0.4)
     parser.add_argument("--require-complete", action="store_true")
+    parser.add_argument("--require-fault", action="store_true")
+    parser.add_argument("--max-fault-to-loiter", type=float)
+    parser.add_argument("--max-post-fault-descent", type=float)
+    parser.add_argument("--min-post-fault-observation", type=float)
     parser.add_argument("--min-bottom-margin", type=float)
     parser.add_argument("--max-xy-deviation", type=float)
     parser.add_argument("--max-range-alignment-error", type=float)
@@ -140,6 +172,20 @@ if __name__ == "__main__":
     failures = []
     if args.require_complete and not result["complete"]:
         failures.append("not complete")
+    if args.require_fault and not result["fault"]:
+        failures.append("no fault observed")
+    if args.max_fault_to_loiter is not None and (
+            result["fault_to_loiter_seconds"] is None or
+            result["fault_to_loiter_seconds"] > args.max_fault_to_loiter):
+        failures.append("fault-to-LOITER above threshold or absent")
+    if args.max_post_fault_descent is not None and (
+            result["post_fault_extra_descent"] is None or
+            result["post_fault_extra_descent"] > args.max_post_fault_descent):
+        failures.append("post-fault descent above threshold or absent")
+    if args.min_post_fault_observation is not None and (
+            result["post_fault_observation_seconds"] is None or
+            result["post_fault_observation_seconds"] < args.min_post_fault_observation):
+        failures.append("post-fault observation too short or absent")
     if args.min_bottom_margin is not None and \
             result["min_bottom_margin"] < args.min_bottom_margin:
         failures.append("bottom margin below threshold")

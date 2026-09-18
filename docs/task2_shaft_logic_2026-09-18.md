@@ -46,3 +46,23 @@ python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
 ```
 
 The preceding bag fails both bottom-margin and range-alignment limits with the same command. This is a PX4/Gazebo **interface** result, not a real 420 m shaft validation: the downward range is calculated from Gazebo truth, depth is ideal world truth, PX4 still has standard SITL localization, side walls are wide, and no real lidar or loss-of-Z/failsafe behavior is exercised. The actual shaft task still requires an independent depth sensor and verified recovery under sensor failures.
+
+## CH11 scheduler integration and range-loss fault injection
+
+The scheduler now treats the first stable CH7/CH11 readings as a baseline and starts Task 1/Task 2 only on a subsequent debounced edge in either direction. A running task ignores further edges; terminal status revokes its enable and requires fresh baseline settling before another start. The ROS `mission_scheduler_edges` test passed for mutual exclusion, repeat runs, manual mode takeover, shaft operation without Fast-LIO odometry, and Task 1 odometry-loss behavior. An odometry loss now requests HOLD without a misleading autonomous return-home command. Production Task 2 remains disabled.
+
+The same 22 m PX4/Gazebo launch was rerun under the CH11 scheduler with ideal aligned world-truth depth/range. The saved bag `/home/nuc/task2_logs/probes/task2_22m_ch11_scheduler_20260918.bag` passed the existing analyzer: DESCENDING 17.371 s, RETURNING 59.421 s, COMPLETE 101.371 s, AUTO.LOITER about 101.52 s; deepest entrance-relative depth 19.282 m, minimum body-outside bottom margin 1.417 m, minimum side margin 4.457 m, maximum XY deviation 0.142 m and range/world alignment discrepancy 0.034 m. This rerun covers the router's previously unrerun change in the normal completion path; deliberate pilot takeover still needs separate verification.
+
+For a controlled sensor failure, `task2_shaft_22m_px4_sitl.launch` accepts `range_drop_after_depth:=6.0`. Its SITL-only adapter then stops publishing bottom range once ideal entrance-relative depth reaches 6 m while continuing independent depth. In the extended bag `/home/nuc/task2_logs/probes/task2_22m_range_loss_ch11_observed_20260918.bag`, descent began at 17.377 s, `FAULT_NO_SAFE_AUTONOMOUS_RECOVERY` occurred at 32.978 s near depth 6.212 m, the scheduler revoked Task 2 by 33.027 s, and PX4 entered AUTO.LOITER by 33.517 s. The fault-to-LOITER interval was 0.539 s. Across 24.667 s of Gazebo observations after the fault, maximum additional descent was 0.152 m. This is a **controlled SITL result with valid PX4 localization**, not proof of safe recovery if Z is unreliable. A first, shorter bag is also retained locally but is not used to claim stable post-fault behavior.
+
+Re-audit the extended fault bag:
+
+```bash
+source /opt/ros/noetic/setup.bash
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_range_loss_ch11_observed_20260918.bag \
+  --require-fault --max-fault-to-loiter 1.0 \
+  --max-post-fault-descent 1.0 --min-post-fault-observation 10
+```
+
+The analyzer deliberately does not apply its range-alignment threshold to a range-loss bag: the most recent range becomes stale by design. Remaining blockers are a physically independent depth/entrance reference, actual laser integration, degraded-Z tests, a non-GPS recovery policy, manual takeover checks, and 400+ m/airflow/battery validation. None is solved by this fault injection.

@@ -34,8 +34,6 @@ class SitlTaskOperator:
         self.auto_enable_delay = max(
             2.0, float(rospy.get_param("~auto_enable_delay", 8.0))
         )
-        self.task_channel_index = int(rospy.get_param("~task_channel_index", 5))
-        self.auto_channel_index = int(rospy.get_param("~auto_channel_index", 6))
         self.task_switch_pwm = int(rospy.get_param("~task_switch_pwm", 1000))
         self.bridge_ready_topic = rospy.get_param(
             "~bridge_ready_topic", "/mine_uav/task1/command_ready"
@@ -99,12 +97,15 @@ class SitlTaskOperator:
         )
 
     def _publish_rc(self, auto_enabled):
-        channel_count = max(8, self.task_channel_index + 1, self.auto_channel_index + 1)
         message = RCIn()
         message.header.stamp = rospy.Time.now()
-        message.channels = [1500] * channel_count
-        message.channels[self.task_channel_index] = self.task_switch_pwm
-        message.channels[self.auto_channel_index] = 2000 if auto_enabled else 1000
+        message.channels = [1500] * 11
+        # Legacy task_switch_pwm selects the SITL scenario only. Publish one
+        # stable edge on CH7 for task one or CH11 for task two; CH6 is unused.
+        message.channels[6] = 1000
+        message.channels[10] = 1000
+        trigger_index = 10 if self.task_switch_pwm >= 1700 else 6
+        message.channels[trigger_index] = 2000 if auto_enabled else 1000
         self.rc_pub.publish(message)
 
     def _advance_takeoff(self, now, state, odom):
@@ -151,7 +152,7 @@ class SitlTaskOperator:
                 rospy.loginfo("SITL reached pre-task hover")
             elif (now - self._hover_start).to_sec() >= self.hover_duration:
                 self._ready = True
-                rospy.loginfo("SITL hover stable; emulated CH7 enabled")
+                rospy.loginfo("SITL hover stable; emulated task trigger changed")
         else:
             self._hover_start = rospy.Time(0)
 
