@@ -2659,3 +2659,11 @@ run16 前墙等待约 6.11 s，PX4 实际高度下降 0.515 m、x 前移 0.925 m
 ## 2026-09-18：用户问保留 Gazebo 后下一步做什么
 
 继续保留当前 Gazebo Classic，不迁移仿真平台。下一步优先验证“任务二深度不只是 NUC 知道，PX4 也有可靠 Z 可控”：在隔离 11319 SITL、仅模拟源条件下，把入口相对深度/完整外部位姿作为 PX4 EKF2 的视觉高度输入，验证配置、坐标与实际融合；然后分别切断模拟 GPS、气压计和外部高度，观察 PX4 垂直估计有效性、悬停/返航及失效处置，按 bag 设置客观验收。PX4 官方说明外部视觉垂直位置需 EKF2_EV_CTRL 对应位及以 Vision 为 EKF2_HGT_REF；这只用于设计隔离仿真，不应现在修改真实飞控。官方参考：https://docs.px4.io/main/en/ros/external_position_estimation 和 https://docs.px4.io/main/en/advanced_config/tuning_the_ecl_ekf 。若使用世界真值代替未选定的实物传感器，只能验证“软件接口与融合链”，不能证明真实 400 m 场景可用；真实下一关仍是独立入口相对深度来源、机载下视激光标定、真实 RC 接管与失败后安全处置。生产任务二继续禁用。
+
+## 2026-09-18：任务二外部视觉高度融合隔离仿真
+
+用户要求继续完成除真机验证外的任务。仅在隔离的 ROS 11319/PX4 UDP SITL 中，新增 Gazebo 真值位姿到 MAVROS 外部视觉的仿真专用适配器、`iris_vision` 启动文件、审计脚本及单测；生产任务二继续 `shaft_task_available: false`。修正本机 PX4 `1013_gazebo-classic_iris_vision` 错误引用不存在的 `10016_gazebo-classic_iris`，改用本机存在的 `10015_gazebo-classic_iris`；将 SITL 视觉控制设为 XY+Z、不使用视觉 yaw，干净启动可自动解锁。仓库的 `px4_airframes/` 保存该 SITL 机型文件，但不自动安装到 PX4，也不用于真实飞控。
+
+干净启动的 22 m 竖井仿真在下降中于 29.118 s 成功关闭模拟气压计和 GPS，55.474 s 返航、95.974 s COMPLETE、96.330 s AUTO.LOITER；机体外最小离底 1.430 m，最大 XY 偏移 0.070 m，2480/2480 测距与 Gazebo ray 一致。注入后至完成记录 1790 帧视觉、67 帧 PX4 estimator status，Z 无效为 0 帧；PX4 ULog 中 `cs_ev_hgt` 为 144/145 帧，末帧视觉高度融合，气压计/GPS 均未融合。这只证实软件外部视觉链路在理想世界真值输入下可以给 PX4 提供 Z，不证实真实传感器精度或 400 多米场景。
+
+再同时关闭气压计/GPS 并于 33.199 s 停止视觉：PX4 于 34.527 s 判 Z 无效，NUC 于 0.023 s 后撤销 command-ready，之后无新 setpoint；PX4 约 1 s 后离开 OFFBOARD。Gazebo 随后停滞/断连，仅有 Z 失效后 3.932 s 世界真值，不能宣称安全悬停、返航或落地。三份 bag/ULog 仅保留本机 `/home/nuc/task2_logs/probes/`、`/home/nuc/.ros/log/2026-09-18/`；报告为 `docs/task2_vision_height_sitl_2026-09-18.md`。视觉适配器 3 项、任务二路由器 12 项单测通过；融合审计通过有故障正常完成 bag，并按预期拒绝无注入 bag。真实 ROS 11312 和真实飞控未改，仿真已停止。下一步真正的阻塞仍是独立可靠的入口相对深度/完整定位源、无 Z 的物理安全处置、真实 CH11/CH5 接管和卸桨联调；这些不能靠 Gazebo 真值代替。

@@ -11,6 +11,7 @@ from std_msgs.msg import Bool
 
 class SitlShaftReleasePad:
     def __init__(self):
+        self.vehicle_model = rospy.get_param("~vehicle_model", "iris")
         self.enabled = False
         self.armed = False
         self.drone_z = None
@@ -30,7 +31,7 @@ class SitlShaftReleasePad:
 
     def on_models(self, message):
         try:
-            self.drone_z = message.pose[message.name.index("iris")].position.z
+            self.drone_z = message.pose[message.name.index(self.vehicle_model)].position.z
         except ValueError:
             self.drone_z = None
 

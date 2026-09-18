@@ -704,4 +704,6 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 
 任务二仿真路由又增加独立深度与 PX4 高度**相对变化**的一致性门控，超过 1 m 即撤销任务指令；带渐进深度漂移的 22 m SITL 复测中，撤销后 0 帧任务 setpoint，正常 22 m 闭环仍通过。它只检测两源矛盾，不提供缺失的真实深度源或无 Z 安全恢复。当前 Ubuntu 20.04/ROS1/Intel 核显 NUC 保留 Gazebo 仿真：Isaac Sim 新版硬件/系统要求不符，MuJoCo 迁移需重新实现 PX4、ROS 和传感器桥接。详情见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)，生产开关仍禁用。
 
+新增隔离 22 m `task2_shaft_22m_vision_px4_sitl.launch`：Gazebo 世界真值全位姿经 MAVROS 进入 PX4 外部视觉，PX4 ULog 确认视觉高度参与融合。关闭模拟气压计/GPS 后任务仍完整返航；再断开视觉后 PX4 Z 失效，路由能停发指令，但仿真失速/断连，**未证明安全回收**。这是纯仿真接口实验，不是真实独立深度源；本机 PX4 SITL 的 `iris_vision` 机型需要[项目内的机型配置](px4_airframes/1013_gazebo-classic_iris_vision)，它不会自动安装到其他 PX4 工作树。完整证据与限制见[视觉高度实验报告](docs/task2_vision_height_sitl_2026-09-18.md)。
+
 故障注入器为显式 opt-in；其参数权限改成仅在注入瞬间短暂开启，已验证触发前后 `SYS_FAILURE_EN=0`。若仿真异常退出，下一次启动前仍需检查并复位该 SITL 参数；不要在真机使用故障注入启动项。

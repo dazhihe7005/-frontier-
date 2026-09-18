@@ -13,6 +13,7 @@ from std_msgs.msg import Float64
 
 class SitlShaftSensorAdapter:
     def __init__(self):
+        self.vehicle_model = rospy.get_param("~vehicle_model", "iris")
         self.bottom_top_world_z = float(
             rospy.get_param("~bottom_top_world_z", -20.85)
         )
@@ -103,7 +104,7 @@ class SitlShaftSensorAdapter:
         if self.pad_present:
             return
         try:
-            z = message.pose[message.name.index("iris")].position.z
+            z = message.pose[message.name.index(self.vehicle_model)].position.z
         except ValueError:
             return
         if not math.isfinite(z):

@@ -13,10 +13,13 @@ import sys
 import rosbag
 
 
-def analyze(path, bottom_top=-20.85, vehicle_radius=0.4):
+def analyze(path, bottom_top=-20.85, vehicle_radius=0.4,
+            vehicle_model="iris"):
     saw_valid_z = False
     invalid_at = None
     injected_at = None
+    vision_active = False
+    vision_drop_at = None
     ready_false_at = None
     mode_exit_at = None
     task_hold_at = None
@@ -35,10 +38,11 @@ def analyze(path, bottom_top=-20.85, vehicle_radius=0.4):
             "/mavros/setpoint_raw/local", "/mine_uav/task2/command_ready",
             "/mine_uav/mission/active_task",
             "/mine_uav/sitl/px4_z_failure_status", "/gazebo/model_states",
+            "/mine_uav/sitl/vision_truth_active",
         ]):
             t = stamp.to_sec()
-            if topic == "/gazebo/model_states" and "iris" in msg.name:
-                latest_world = msg.pose[msg.name.index("iris")].position.z
+            if topic == "/gazebo/model_states" and vehicle_model in msg.name:
+                latest_world = msg.pose[msg.name.index(vehicle_model)].position.z
                 last_world_at = t
                 if invalid_at is not None:
                     min_world_after_invalid = min(
@@ -53,8 +57,13 @@ def analyze(path, bottom_top=-20.85, vehicle_radius=0.4):
                     invalid_at = t
                     world_at_invalid = latest_world
             elif topic == "/mine_uav/sitl/px4_z_failure_status":
-                if msg.data == "INJECTED_BARO_GPS_OFF":
+                if msg.data.startswith("INJECTED_BARO_GPS_OFF"):
                     injected_at = t
+            elif topic == "/mine_uav/sitl/vision_truth_active":
+                if msg.data:
+                    vision_active = True
+                elif vision_active and vision_drop_at is None:
+                    vision_drop_at = t
             elif topic == "/mavros/setpoint_raw/local":
                 last_setpoint_at = t
                 if invalid_at is not None:
@@ -82,6 +91,8 @@ def analyze(path, bottom_top=-20.85, vehicle_radius=0.4):
     return {
         "injection_confirmed_in_bag": injected_at is not None,
         "injection_time": round(injected_at, 3) if injected_at else None,
+        "vision_drop_time": round(vision_drop_at, 3)
+        if vision_drop_at is not None else None,
         "first_px4_z_invalid_time": round(invalid_at, 3) if invalid_at else None,
         "ready_withdraw_delay_s": delay(ready_false_at),
         "mode_exit_delay_s": delay(mode_exit_at),
@@ -106,17 +117,22 @@ if __name__ == "__main__":
     parser.add_argument("bag")
     parser.add_argument("--bottom-top", type=float, default=-20.85)
     parser.add_argument("--vehicle-radius", type=float, default=0.4)
+    parser.add_argument("--vehicle-model", default="iris")
     parser.add_argument("--require-injection", action="store_true")
+    parser.add_argument("--require-vision-drop", action="store_true")
     parser.add_argument("--max-ready-withdraw-delay", type=float)
     parser.add_argument("--max-post-invalid-setpoints", type=int)
     args = parser.parse_args()
-    result = analyze(args.bag, args.bottom_top, args.vehicle_radius)
+    result = analyze(args.bag, args.bottom_top, args.vehicle_radius,
+                     args.vehicle_model)
     print(json.dumps(result, indent=2))
     failures = []
     if result["first_px4_z_invalid_time"] is None:
         failures.append("no PX4 Z-valid-to-invalid transition observed")
     if args.require_injection and not result["injection_confirmed_in_bag"]:
         failures.append("no confirmed baro+GPS injection event")
+    if args.require_vision_drop and result["vision_drop_time"] is None:
+        failures.append("no active-to-stopped vision transition")
     if args.max_ready_withdraw_delay is not None and (
             result["ready_withdraw_delay_s"] is None or
             result["ready_withdraw_delay_s"] > args.max_ready_withdraw_delay):

@@ -3,6 +3,7 @@
        adapter and router refuse to operate without /use_sim_time. Depth is
        Gazebo world truth; bottom range may come from a Gazebo ray, not real laser. -->
   <arg name="gui" default="false"/>
+  <arg name="vehicle" default="iris"/>
   <arg name="rviz" default="false"/>
   <arg name="range_drop_after_depth" default="-1.0"/>
   <arg name="depth_drop_after_depth" default="-1.0"/>
@@ -23,7 +24,7 @@
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="interactive" value="false"/>
-    <arg name="vehicle" value="iris"/>
+    <arg name="vehicle" value="$(arg vehicle)"/>
     <arg name="sdf" value="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
     <arg name="world" value="$(arg world)"/>
     <arg name="x" value="0"/>
@@ -42,6 +43,7 @@
   </group>
   <node pkg="mine_uav_control" type="sitl_shaft_sensor_adapter.py"
         name="sitl_shaft_sensor_adapter" output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
     <param name="bottom_top_world_z" value="$(arg bottom_top_world_z)"/>
     <param name="entrance_world_z" value="$(arg entrance_world_z)"/>
     <param name="stop_range_after_depth" value="$(arg range_drop_after_depth)"/>
@@ -52,7 +54,9 @@
     <param name="range_source" value="$(arg range_source)"/>
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
-        name="sitl_shaft_release_pad" output="screen" required="true"/>
+        name="sitl_shaft_release_pad" output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
+  </node>
   <node pkg="mine_uav_control" type="sitl_task_operator.py"
         name="sitl_task_operator" output="screen" required="true">
     <param name="allow_auto_arm" value="true"/>

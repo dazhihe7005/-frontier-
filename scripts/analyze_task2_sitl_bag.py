@@ -24,7 +24,8 @@ def finite_range_alignment_error(reading, max_range, true_distance):
     return abs(reading - true_distance)
 
 
-def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
+def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4,
+            vehicle_model="iris"):
     statuses = []
     modes = []
     first_active_xy = None
@@ -125,9 +126,9 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
                     pad_seen = True
                 elif pad_seen:
                     pad_gone_after_seen = True
-                if "iris" not in names:
+                if vehicle_model not in names:
                     continue
-                pose = msg.pose[names.index("iris")].position
+                pose = msg.pose[names.index(vehicle_model)].position
                 latest_world_z = pose.z
                 last_world_time = t
                 if fault:
@@ -209,6 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--bottom-top", type=float, default=-20.85)
     parser.add_argument("--shaft-half-width", type=float, default=5.0)
     parser.add_argument("--vehicle-radius", type=float, default=0.4)
+    parser.add_argument("--vehicle-model", default="iris")
     parser.add_argument("--require-complete", action="store_true")
     parser.add_argument("--require-fault", action="store_true")
     parser.add_argument("--max-fault-to-loiter", type=float)
@@ -222,7 +224,8 @@ if __name__ == "__main__":
     parser.add_argument("--require-gate-event")
     args = parser.parse_args()
     result = analyze(args.bag, args.bottom_top,
-                     args.shaft_half_width, args.vehicle_radius)
+                     args.shaft_half_width, args.vehicle_radius,
+                     args.vehicle_model)
     print(json.dumps(result,
                      indent=2, allow_nan=False))
     failures = []

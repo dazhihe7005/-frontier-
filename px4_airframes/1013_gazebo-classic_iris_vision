@@ -1,0 +1,16 @@
+#!/bin/sh
+# Local PX4 SITL-only airframe override for shaft external-vision experiments.
+# Do not install on a real flight controller or treat Gazebo truth as hardware.
+
+. ${R}etc/init.d-posix/airframes/10015_gazebo-classic_iris
+
+# Fuse external-vision horizontal and vertical position, but use simulator
+# magnetometer yaw. The stock local 1013 file references nonexistent 10016
+# gazebo-classic_iris; the original yaw-related defaults also failed preflight
+# here. Both yaw-related values were changed together, not isolated individually.
+param set-default EKF2_EV_DELAY 5
+param set-default EKF2_EV_CTRL 3
+param set-default EKF2_HGT_REF 3
+param set-default EKF2_GPS_CTRL 0
+param set-default LPE_FUSION 132
+param set-default ATT_EXT_HDG_M 0

@@ -1,0 +1,17 @@
+<launch>
+  <!-- Isolated 11319 master only. PX4's iris_vision airframe selects Vision
+       height; Gazebo world truth is deliberately NOT a real sensor. -->
+  <arg name="gui" default="false"/>
+  <arg name="stop_vision_after_depth" default="-1.0"/>
+  <arg name="inject_baro_gps_failure" default="false"/>
+  <include file="$(find mine_uav_control)/launch/task2_shaft_22m_px4_sitl.launch">
+    <arg name="vehicle" value="iris_vision"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="inject_px4_z_failure" value="$(arg inject_baro_gps_failure)"/>
+  </include>
+  <node pkg="mine_uav_control" type="sitl_shaft_vision_truth.py"
+        name="sitl_shaft_vision_truth" output="screen" required="true">
+    <param name="vehicle_model" value="iris_vision"/>
+    <param name="stop_after_depth" value="$(arg stop_vision_after_depth)"/>
+  </node>
+</launch>
