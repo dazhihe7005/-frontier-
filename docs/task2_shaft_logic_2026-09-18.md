@@ -173,3 +173,26 @@ The isolated `task2_shaft_22m_px4_sitl.launch` now accepts `gui:=true rviz:=true
 A separate SITL-only router defect was reproduced with callback tests before modification: it used only callback receipt time for PX4 pose freshness, so replaying an old `PoseStamped` with a fresh receipt time still permitted descent setpoints. The same missing validity gate let NaN/Inf position through; on first XY capture it could put a nonfinite coordinate into the PX4 target. The router now requires both receipt and message timestamps within `pose_timeout` and finite X/Y/Z before publishing descent or fallback hold. If it already owns OFFBOARD, invalid pose withdraws command readiness and requests the existing SITL AUTO.LOITER fallback; this assumes valid PX4 navigation and is not a no-Z safety solution. The original stale/nonfinite tests failed against old code and all 8 router lifecycle tests pass after the change, including a positive fresh-pose/intent target case.
 
 The post-change full 22 m headless PX4/Gazebo bag `/home/nuc/task2_logs/probes/task2_22m_pose_gate_20260918.bag` passed the standard analyzer: DESCENDING 17.373 s, RETURNING 59.424 s, COMPLETE 101.373 s, AUTO.LOITER 102.325 s; minimum body-outside bottom clearance 1.417 m, minimum side clearance 4.446 m and maximum XY deviation 0.133 m. All 1911 forwarded range samples in this bag match raw Gazebo ray samples. The 3146 recorded `/mavros/local_position/pose` messages all used `map`; header-to-record time discrepancy was -0.008 to +0.007 s. The bag is local evidence only, not uploaded. All launched 11319 SITL processes were stopped afterward; the real 11312 master and production `shaft_task_available=false` were untouched.
+
+## 45 m range-limited shaft regression
+
+The new `shaft_45m_logic_sitl.world` has the same 10×10 m interior, an entrance reference at world Z=+0.25 m and bottom top at Z=-44.85 m. `task2_shaft_45m_px4_sitl.launch` binds that world and geometry reference together, preventing a world-only override from accidentally retaining the 22 m truth-range constant. The actual default range remains the Gazebo downward ray with a 30 m maximum; independent depth remains ideal Gazebo world truth. No real depth source, no real laser, and no degraded PX4 Z are exercised.
+
+The full isolated PX4/Gazebo bag `/home/nuc/task2_logs/probes/task2_45m_range_transition_20260918.bag` recorded DESCENDING at 17.423 s, RETURNING at 106.323 s, COMPLETE at 194.273 s and AUTO.LOITER at 195.325 s. Minimum body-outside bottom clearance was 1.386 m, minimum side-wall clearance 4.477 m, and maximum XY deviation 0.135 m. All 3991 task range messages match a raw Gazebo ray message by timestamp and value. During descent, 666 task range samples were at the 30.0 m sensor maximum before finite sub-limit readings resumed; this Gazebo plugin uses `30.0`, not `+inf`, for its out-of-range condition. A saturated reading cannot be interpreted as a true 30.0 m floor distance.
+
+The old bag analyzer made exactly that interpretation, reporting a false 16.779 m ray/world discrepancy and failing the 0.1 m limit on this otherwise completed flight. The analyzer now treats `range >= max_range - 0.01 m` as a censored measurement when evaluating distance accuracy, while still requiring every forwarded value to match the raw Gazebo ray. It also provides `--require-range-reacquisition`, which requires at least one saturated descent sample followed by a sub-limit sample. On the same 45 m bag the corrected finite-range alignment discrepancy is 0.030 m and all requested assertions pass. The prior 22 m bag still passes its standard assertions, and deliberately fails `--require-range-reacquisition` because its bottom was always in range. These are log-auditor changes, not flight-controller changes.
+
+Three standalone unit tests in `test/test_task2_range_censoring.py` cover a censored 30 m reading, a resolved 17 m hit, and an infinite out-of-range reading. All pass with `python3 -m unittest /home/nuc/frontier-upload/test/test_task2_range_censoring.py -v` after sourcing ROS Noetic.
+
+To rerun on an isolated master (never use the real FCU master), use the PX4/Gazebo environment setup shown above and launch `roslaunch -p 11319 mine_uav_control task2_shaft_45m_px4_sitl.launch gui:=false rviz:=false`. Audit the local bag with:
+
+```bash
+source /opt/ros/noetic/setup.bash
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
+  /home/nuc/task2_logs/probes/task2_45m_range_transition_20260918.bag \
+  --bottom-top -44.85 --require-complete --require-ray-relay \
+  --require-range-reacquisition --min-bottom-margin 1 \
+  --max-xy-deviation 0.5 --max-range-alignment-error 0.1
+```
+
+The 45 m bag is local-only. This run verifies one additional idealized geometry beyond the 30 m sensor range; it does **not** establish a 400+ m PX4/Gazebo or real shaft safety case. Production Task 2 remains disabled.

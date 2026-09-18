@@ -697,3 +697,5 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 调度器/任务二后续强化：MAVROS 状态停止、竖井状态停止或选中任务后始终无法开始下探时，分别按 2.5 s、0.6 s、4 s 默认超时撤销授权；SITL 路由器还会拒绝过期 PX4 状态、重放速度意图与任务禁用后晚到的意图，并修复任务结束后 PX4 晚切模可能把下一次 CH11 任务永久锁住的问题。扩展后的调度器 ROS 测试、路由器 5 项状态转换测试均通过；最终代码再次通过 22 m ray 测距闭环（机体外最小离底余量 1.434 m），中途外部切模 SITL 也通过。以上仍不能替代真实 PX4 Z 丢失和 CH5 飞手接管验收，生产 `shaft_task_available=false` 保持不变。见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
 
 任务二 22 m 仿真若需同时看 Gazebo 与 RViz，可在隔离 ROS master 的 `task2_shaft_22m_px4_sitl.launch` 命令后添加 `gui:=true rviz:=true`；RViz 用于模拟 ray 点云与 PX4 轨迹，并非 FAST-LIO2 建图。任务二 SITL 路由器现拒绝过期/非有限 PX4 位姿；修复后 22 m 完整闭环和 8 项生命周期测试通过，细节见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
+
+新增 45 m 竖井 SITL 入口 `task2_shaft_45m_px4_sitl.launch`，覆盖下视 ray 量程仅 30 m 时的“量程饱和→重新测到井底→返航”过程；完整闭环通过，机体外最小离底余量约 1.386 m。原日志审计器把 30 m 饱和值当作真实距离而误报 16.779 m 误差，已按量程截断读数修正，并加入重新获取量程的显式断言。仍只使用 Gazebo 世界真值深度，不代表 400 m 或 PX4 Z 失效可安全工作；见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。

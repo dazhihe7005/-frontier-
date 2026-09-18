@@ -10,6 +10,20 @@ import sys
 import rosbag
 
 
+def is_saturated_range(reading, max_range):
+    """True when a finite reading is censored by the sensor's maximum range."""
+    return (math.isfinite(reading) and math.isfinite(max_range) and
+            max_range > 0.0 and reading >= max_range - 0.01)
+
+
+def finite_range_alignment_error(reading, max_range, true_distance):
+    """Return a distance error only when the sensor actually resolved a hit."""
+    if (reading is None or max_range is None or
+            not math.isfinite(reading) or is_saturated_range(reading, max_range)):
+        return None
+    return abs(reading - true_distance)
+
+
 def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
     statuses = []
     modes = []
@@ -22,6 +36,7 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
     depth_at_completion = None
     latest_depth = None
     latest_bottom_range = None
+    latest_bottom_max_range = None
     latest_vertical_velocity = None
     bottom_min_event = None
     max_range_alignment_error = 0.0
@@ -40,6 +55,8 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
     raw_ray_by_stamp = {}
     forwarded_ranges = []
     gate_events = []
+    saturated_range_samples = 0
+    range_reacquired_after_saturation = False
     with rosbag.Bag(path) as bag:
         for topic, msg, stamp in bag.read_messages(topics=[
             "/mine_uav/shaft/status", "/mine_uav/shaft/relative_depth_m",
@@ -54,7 +71,16 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
                 latest_depth = msg.data
             elif topic == "/mine_uav/shaft/bottom_range":
                 latest_bottom_range = msg.range
+                latest_bottom_max_range = msg.max_range
                 forwarded_ranges.append((msg.header.stamp.to_nsec(), msg.range))
+                if active and statuses[-1]["state"] == "DESCENDING":
+                    # The Gazebo range plugin reports max_range, not +inf,
+                    # when the bottom is farther than the sensor can see.
+                    if is_saturated_range(msg.range, msg.max_range):
+                        saturated_range_samples += 1
+                    elif saturated_range_samples > 0 and math.isfinite(msg.range) \
+                            and msg.range < msg.max_range - 0.1:
+                        range_reacquired_after_saturation = True
             elif topic == "/mine_uav/sitl/shaft_downward_range":
                 raw_ray_by_stamp.setdefault(msg.header.stamp.to_nsec(), []).append(
                     msg.range)
@@ -111,11 +137,12 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
                     math.hypot(pose.x - first_active_xy[0],
                                pose.y - first_active_xy[1]))
                 bottom_margin = pose.z - bottom_top - vehicle_radius
-                if latest_bottom_range is not None and math.isfinite(
-                        latest_bottom_range):
+                alignment_error = finite_range_alignment_error(
+                    latest_bottom_range, latest_bottom_max_range,
+                    pose.z - bottom_top)
+                if alignment_error is not None:
                     max_range_alignment_error = max(
-                        max_range_alignment_error,
-                        abs(latest_bottom_range - (pose.z - bottom_top)))
+                        max_range_alignment_error, alignment_error)
                 if bottom_margin < min_bottom_margin:
                     min_bottom_margin = bottom_margin
                     bottom_min_event = {"time": t, "state": statuses[-1]["state"],
@@ -166,6 +193,8 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
         "ray_raw_count": sum(len(values) for values in raw_ray_by_stamp.values()),
         "range_forwarded_count": len(forwarded_ranges),
         "range_matched_to_raw_ray_count": matched_ray_ranges,
+        "saturated_range_samples_during_descent": saturated_range_samples,
+        "range_reacquired_after_saturation": range_reacquired_after_saturation,
     }
 
 
@@ -184,6 +213,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-xy-deviation", type=float)
     parser.add_argument("--max-range-alignment-error", type=float)
     parser.add_argument("--require-ray-relay", action="store_true")
+    parser.add_argument("--require-range-reacquisition", action="store_true")
     parser.add_argument("--require-gate-event")
     args = parser.parse_args()
     result = analyze(args.bag, args.bottom_top,
@@ -222,6 +252,10 @@ if __name__ == "__main__":
             result["range_matched_to_raw_ray_count"] !=
             result["range_forwarded_count"]):
         failures.append("forwarded range differs from Gazebo ray source")
+    if args.require_range_reacquisition and (
+            result["saturated_range_samples_during_descent"] == 0 or
+            not result["range_reacquired_after_saturation"]):
+        failures.append("no max-range-to-finite-range transition during descent")
     if args.require_gate_event and \
             args.require_gate_event not in result["gate_events"]:
         failures.append("required depth/range gate event absent")

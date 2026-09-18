@@ -14,6 +14,8 @@
   <arg name="takeover_after_depth" default="6.0"/>
   <arg name="takeover_mode" default="AUTO.LOITER"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/shaft_22m_logic_sitl.world"/>
+  <arg name="bottom_top_world_z" default="-20.85"/>
+  <arg name="entrance_world_z" default="0.25"/>
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="interactive" value="false"/>
@@ -36,8 +38,8 @@
   </group>
   <node pkg="mine_uav_control" type="sitl_shaft_sensor_adapter.py"
         name="sitl_shaft_sensor_adapter" output="screen" required="true">
-    <param name="bottom_top_world_z" value="-20.85"/>
-    <param name="entrance_world_z" value="0.25"/>
+    <param name="bottom_top_world_z" value="$(arg bottom_top_world_z)"/>
+    <param name="entrance_world_z" value="$(arg entrance_world_z)"/>
     <param name="stop_range_after_depth" value="$(arg range_drop_after_depth)"/>
     <param name="stop_depth_after_depth" value="$(arg depth_drop_after_depth)"/>
     <param name="bad_sigma_after_depth" value="$(arg bad_sigma_after_depth)"/>
