@@ -60,6 +60,7 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
     with rosbag.Bag(path) as bag:
         for topic, msg, stamp in bag.read_messages(topics=[
             "/mine_uav/shaft/status", "/mine_uav/shaft/relative_depth_m",
+            "/mine_uav/shaft/depth_estimate",
             "/gazebo/model_states", "/mavros/state",
             "/mavros/setpoint_raw/local", "/mine_uav/shaft/bottom_range",
             "/mavros/local_position/odom",
@@ -69,6 +70,10 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
             t = round(stamp.to_sec(), 3)
             if topic == "/mine_uav/shaft/relative_depth_m":
                 latest_depth = msg.data
+            elif topic == "/mine_uav/shaft/depth_estimate":
+                # Qualified control-depth is sufficient for bags that omit
+                # the SITL-only diagnostic scalar.
+                latest_depth = msg.relative_depth_m
             elif topic == "/mine_uav/shaft/bottom_range":
                 latest_bottom_range = msg.range
                 latest_bottom_max_range = msg.max_range

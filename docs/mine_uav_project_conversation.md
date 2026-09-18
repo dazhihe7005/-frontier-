@@ -2649,3 +2649,9 @@ run16 前墙等待约 6.11 s，PX4 实际高度下降 0.515 m、x 前移 0.925 m
 ## 2026-09-18：用户询问任务二还差什么
 
 按当前代码和仿真证据答复：任务二状态机、ROS 输入质量门控及 SITL-only PX4 路由已具备；22 m、45 m 理想化竖井闭环通过，420 m 仅有运动学单测。生产配置仍为 `shaft_task_available: false`，必需的独立入口相对深度源、机载下视测距实测/标定、生产级单一指令路由与 CH11/CH5 实际接管、长期水平/航向保持和失去 PX4 Z 时的物理安全恢复均未完成。故障注入已出现无 Z 下井底接触；新增门控只证明及时停发错误指令，不证明能够安全悬停或返航。需先解决定位与故障处置，再做更长井深/异常 SITL、卸桨联调及分阶段实机验证；当前不应开启生产任务二。
+
+## 2026-09-18：继续任务二并评估 MuJoCo / Isaac Sim
+
+用户要求按优先级持续完成任务二，并问能否改用 MuJoCo 或 Isaac Sim（用户写作 Issacam）；若迁移很大或不适配当前 Ubuntu 20.04/ROS1，则不换。核查本机为 Ubuntu 20.04.6、ROS Noetic、Intel 9a49 核显、约 30 GiB 内存、Python 3.8，无 NVIDIA RTX。NVIDIA 官方 Isaac Sim 5.0 要求 Ubuntu 22.04/24.04、RTX 4080 起步；旧 4.x 曾支持 Ubuntu 20.04/Noetic，但 ROS1 bridge 已弃用且本机显卡不满足最低 RTX 要求。MuJoCo 官方支持 Linux，但 PX4 官方现行仿真目录不将 MuJoCo 列为现成集成；按本项目已有 Gazebo Classic SDF 模型、ROS Gazebo ray/世界真值和 PX4 插件判断，迁移需重做模型与 PX4/ROS/传感器桥接。因此遵从用户条件，不迁移，保留现有 Gazebo 仿真。官方依据：https://docs.isaacsim.omniverse.nvidia.com/5.0.0/installation/requirements.html 、https://docs.isaacsim.omniverse.nvidia.com/4.0.0/installation/install_ros.html 、https://mujoco.readthedocs.io/en/latest/programming/ 、https://docs.px4.io/main/en/simulation/ 。
+
+此前中断的隔离 11319 正常仿真已结束，发现只有 rosbag recorder 遗留，已用 SIGINT 正常封包；真实 11312 master 未动。任务二新增 SITL-only 的独立深度/PX4 Z 数值一致性门控：先用旧代码的失败测试复现“PX4 Z 变化少于真实深度但仍发下降 setpoint”；再要求合格深度输入，并比较首个任务 setpoint 时锁定的双源相对变化，差异超过 1 m 撤销指令、请求原有模式回退。正常 22 m 仿真在改后仍 COMPLETE，机体外离底 1.411 m、最大 XY 偏移 0.156 m、3751/3751 测距与原 ray 匹配。新增仅仿真渐进深度漂移注入（6 m 后 1 m/s，仍伪称质量合格）；故障 bag 中 33.101 s 撤销 command-ready，33.050 s 为最后 setpoint，撤销后零 setpoint，33.331 s 实际 AUTO.LOITER，后续 27.742 s 世界真值观测额外下沉 0.168 m。12 项路由测试、2 项漂移注入单测通过；审计脚本通过故障 bag、按预期拒绝无故障 bag。两份 bag 仅存 `/home/nuc/task2_logs/probes/`。这是双源矛盾的提前检测，不解决双源共同漂移、没有真实独立深度来源或 PX4 无 Z 时安全返航；生产任务二保持禁用。详见 `docs/task2_shaft_logic_2026-09-18.md`。

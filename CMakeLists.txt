@@ -97,6 +97,7 @@ if(CATKIN_ENABLE_TESTING)
   add_rostest(test/shaft_mission_ros.test)
   add_rostest(test/mission_scheduler_edges.test)
   catkin_add_nosetests(test/test_sitl_shaft_router_lifecycle.py)
+  catkin_add_nosetests(test/test_sitl_shaft_depth_drift.py)
   catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test

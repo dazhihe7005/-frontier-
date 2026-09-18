@@ -7,6 +7,8 @@
   <arg name="range_drop_after_depth" default="-1.0"/>
   <arg name="depth_drop_after_depth" default="-1.0"/>
   <arg name="bad_sigma_after_depth" default="-1.0"/>
+  <arg name="depth_drift_after_depth" default="-1.0"/>
+  <arg name="depth_drift_rate_mps" default="0.0"/>
   <arg name="range_source" default="gazebo"/>
   <arg name="required_range_frame"
        default="$(eval 'sitl_downward_range' if arg('range_source') == 'truth' else 'shaft_downward_range')"/>
@@ -45,6 +47,8 @@
     <param name="stop_range_after_depth" value="$(arg range_drop_after_depth)"/>
     <param name="stop_depth_after_depth" value="$(arg depth_drop_after_depth)"/>
     <param name="bad_sigma_after_depth" value="$(arg bad_sigma_after_depth)"/>
+    <param name="depth_drift_after_depth" value="$(arg depth_drift_after_depth)"/>
+    <param name="depth_drift_rate_mps" value="$(arg depth_drift_rate_mps)"/>
     <param name="range_source" value="$(arg range_source)"/>
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
@@ -69,7 +73,9 @@
     <param name="required_range_frame" value="$(arg required_range_frame)"/>
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_px4_router.py"
-        name="sitl_shaft_px4_router" output="screen" required="true"/>
+        name="sitl_shaft_px4_router" output="screen" required="true">
+    <param name="required_depth_source" value="gazebo_world_truth"/>
+  </node>
   <group if="$(arg inject_takeover)">
     <node pkg="mine_uav_control" type="sitl_shaft_takeover_injector.py"
           name="sitl_shaft_takeover_injector" output="screen" required="true">

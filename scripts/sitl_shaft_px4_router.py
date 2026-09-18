@@ -8,6 +8,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import EstimatorStatus, PositionTarget, State
 from mavros_msgs.srv import SetMode
+from mine_uav_control.msg import ShaftDepthEstimate
 from std_msgs.msg import Bool, String
 
 
@@ -17,6 +18,18 @@ class SitlShaftPx4Router:
         self.pose_timeout = float(rospy.get_param("~pose_timeout", 0.5))
         self.state_timeout = float(rospy.get_param("~state_timeout", 1.5))
         self.estimator_timeout = float(rospy.get_param("~estimator_timeout", 1.5))
+        self.depth_timeout = float(rospy.get_param("~depth_timeout", 0.5))
+        self.required_depth_source = rospy.get_param("~required_depth_source", "")
+        self.max_depth_sigma_m = float(rospy.get_param("~max_depth_sigma_m", 0.25))
+        self.max_depth_disagreement_m = float(
+            rospy.get_param("~max_depth_disagreement_m", 1.0))
+        if (not self.required_depth_source or
+                not math.isfinite(self.depth_timeout) or self.depth_timeout <= 0.0 or
+                not math.isfinite(self.max_depth_sigma_m) or
+                self.max_depth_sigma_m <= 0.0 or
+                not math.isfinite(self.max_depth_disagreement_m) or
+                self.max_depth_disagreement_m <= 0.0):
+            raise ValueError("SITL shaft depth consistency gate is unconfigured")
         self.enable = False
         self.owned = False
         self.takeover_latched = False
@@ -31,6 +44,9 @@ class SitlShaftPx4Router:
         self.state_time = rospy.Time(0)
         self.estimator = EstimatorStatus()
         self.estimator_time = rospy.Time(0)
+        self.depth = None
+        self.depth_time = rospy.Time(0)
+        self.depth_pose_reference = None
         self.last_fallback = rospy.Time(0)
         self.command_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=10
@@ -47,6 +63,8 @@ class SitlShaftPx4Router:
         rospy.Subscriber("/mavros/state", State, self.on_state)
         rospy.Subscriber("/mavros/estimator_status", EstimatorStatus,
                          self.on_estimator)
+        rospy.Subscriber("/mine_uav/shaft/depth_estimate", ShaftDepthEstimate,
+                         self.on_depth)
         rospy.Timer(rospy.Duration(0.05), self.tick)
         self.ready_pub.publish(Bool(data=False))
         rospy.logwarn("SITL-only shaft PX4 router; do not use with a real FCU")
@@ -54,6 +72,7 @@ class SitlShaftPx4Router:
     def on_enable(self, message):
         if not message.data:
             self.fixed_xy = None
+            self.depth_pose_reference = None
             self.takeover_latched = False
             self.intent = None  # A later task must supply a new command.
             self.intent_time = rospy.Time(0)
@@ -80,6 +99,10 @@ class SitlShaftPx4Router:
     def on_estimator(self, message):
         self.estimator = message
         self.estimator_time = rospy.Time.now()
+
+    def on_depth(self, message):
+        self.depth = message
+        self.depth_time = rospy.Time.now()
 
     def publish_ready(self, value):
         if self.ready != value:
@@ -142,6 +165,16 @@ class SitlShaftPx4Router:
             not self.intent.header.stamp.is_zero() and
             -0.05 <= (now - self.intent.header.stamp).to_sec() <=
             self.intent_timeout)
+        depth_fresh = self.depth is not None and (
+            -0.05 <= (now - self.depth_time).to_sec() <= self.depth_timeout and
+            not self.depth.header.stamp.is_zero() and
+            -0.05 <= (now - self.depth.header.stamp).to_sec() <=
+            self.depth_timeout and
+            self.depth.source_id == self.required_depth_source and
+            self.depth.valid and
+            math.isfinite(self.depth.relative_depth_m) and
+            math.isfinite(self.depth.sigma_m) and
+            0.0 <= self.depth.sigma_m <= self.max_depth_sigma_m)
         if self.owned and self.state.mode != "OFFBOARD":
             self.owned = False
             # External takeover is latched while the old task is still
@@ -157,6 +190,10 @@ class SitlShaftPx4Router:
             # PX4 itself reports unusable local position. No position hold
             # target can be trusted here; request fallback, but never claim
             # this guarantees safe hover without a valid PX4 Z estimate.
+            self.publish_ready(False)
+            self.request_fallback(now)
+            return
+        if self.owned and self.enable and not depth_fresh:
             self.publish_ready(False)
             self.request_fallback(now)
             return
@@ -176,11 +213,26 @@ class SitlShaftPx4Router:
                 self.request_fallback(now)
             return
         if (not self.enable or not state_fresh or not estimator_ok or
+                not depth_fresh or
                 not self.state.connected or
                 not self.state.armed or
                 self.state.mode != "OFFBOARD" or not pose_fresh or
                 not intent_fresh or self.status not in ("DESCENDING", "RETURNING")):
             self.publish_ready(False)
+            return
+        if self.depth_pose_reference is None:
+            self.depth_pose_reference = (
+                self.pose.pose.position.z, self.depth.relative_depth_m)
+        reference_z, reference_depth = self.depth_pose_reference
+        disagreement = abs((self.pose.pose.position.z - reference_z) +
+                           (self.depth.relative_depth_m - reference_depth))
+        if disagreement > self.max_depth_disagreement_m:
+            rospy.logerr_throttle(
+                2.0, "SITL shaft PX4 Z/depth disagree by %.2f m; withdrawing command",
+                disagreement)
+            self.publish_ready(False)
+            if self.owned:
+                self.request_fallback(now)
             return
         if self.fixed_xy is None:
             self.fixed_xy = (self.pose.pose.position.x, self.pose.pose.position.y)

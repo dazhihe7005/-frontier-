@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from mavros_msgs.msg import EstimatorStatus, State
+from mine_uav_control.msg import ShaftDepthEstimate
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from std_msgs.msg import Bool
 
@@ -43,6 +44,17 @@ def owned_router():
     router.estimator.pos_vert_abs_status_flag = True
     router.estimator_time = MODULE.rospy.Time(10)
     router.estimator_timeout = 1.5
+    router.depth = ShaftDepthEstimate()
+    router.depth.header.stamp = MODULE.rospy.Time(10)
+    router.depth.source_id = "gazebo_world_truth"
+    router.depth.valid = True
+    router.depth.sigma_m = 0.02
+    router.depth_time = MODULE.rospy.Time(10)
+    router.depth_timeout = 0.5
+    router.required_depth_source = "gazebo_world_truth"
+    router.max_depth_sigma_m = 0.25
+    router.max_depth_disagreement_m = 1.0
+    router.depth_pose_reference = None
     return router
 
 
@@ -236,6 +248,85 @@ class ShaftRouterLifecycleTest(unittest.TestCase):
         router.command_pub.publish.assert_not_called()
         router.request_fallback.assert_called_once()
         self.assertFalse(router.ready)
+
+    def test_px4_z_drift_against_independent_depth_stops_descent(self):
+        router = owned_router()
+        router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(10)
+        router.pose.pose.position.z = -4.0
+        router.pose_time = MODULE.rospy.Time(10)
+        router.intent = TwistStamped()
+        router.intent.header.stamp = MODULE.rospy.Time(10)
+        router.intent.twist.linear.z = -0.5
+        router.intent_time = MODULE.rospy.Time(10)
+        router.status = "DESCENDING"
+        router.depth = ShaftDepthEstimate()
+        router.depth.header.stamp = MODULE.rospy.Time(10)
+        router.depth.source_id = "gazebo_world_truth"
+        router.depth.relative_depth_m = 8.0
+        router.depth.valid = True
+        router.depth.sigma_m = 0.02
+        router.depth_time = MODULE.rospy.Time(10)
+        router.depth_timeout = 0.5
+        router.required_depth_source = "gazebo_world_truth"
+        router.max_depth_sigma_m = 0.25
+        router.max_depth_disagreement_m = 1.0
+        router.depth_pose_reference = (0.0, 0.0)
+        router.command_pub = MagicMock()
+        router.request_fallback = MagicMock()
+        with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                patch.object(MODULE.rospy.Time, "now",
+                             return_value=MODULE.rospy.Time(10)):
+            router.tick(None)
+        router.command_pub.publish.assert_not_called()
+        router.request_fallback.assert_called_once()
+        self.assertFalse(router.ready)
+
+    def test_stale_depth_cannot_start_or_continue_descent(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                router = owned_router()
+                router.owned = owned
+                router.pose = PoseStamped()
+                router.pose.header.stamp = MODULE.rospy.Time(10)
+                router.pose_time = MODULE.rospy.Time(10)
+                router.intent = TwistStamped()
+                router.intent.header.stamp = MODULE.rospy.Time(10)
+                router.intent.twist.linear.z = -0.5
+                router.intent_time = MODULE.rospy.Time(10)
+                router.status = "DESCENDING"
+                router.depth.header.stamp = MODULE.rospy.Time(1)
+                router.command_pub = MagicMock()
+                router.request_fallback = MagicMock()
+                with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                        patch.object(MODULE.rospy.Time, "now",
+                                     return_value=MODULE.rospy.Time(10)):
+                    router.tick(None)
+                router.command_pub.publish.assert_not_called()
+                self.assertFalse(router.ready)
+                if owned:
+                    router.request_fallback.assert_called_once()
+
+    def test_matching_px4_z_and_depth_allow_descent(self):
+        router = owned_router()
+        router.depth_pose_reference = (3.0, 0.0)
+        router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(10)
+        router.pose.pose.position.z = -2.0
+        router.pose_time = MODULE.rospy.Time(10)
+        router.depth.relative_depth_m = 5.0
+        router.intent = TwistStamped()
+        router.intent.header.stamp = MODULE.rospy.Time(10)
+        router.intent.twist.linear.z = -0.5
+        router.intent_time = MODULE.rospy.Time(10)
+        router.status = "DESCENDING"
+        router.command_pub = MagicMock()
+        with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                patch.object(MODULE.rospy.Time, "now",
+                             return_value=MODULE.rospy.Time(10)):
+            router.tick(None)
+        router.command_pub.publish.assert_called_once()
+        self.assertTrue(router.ready)
 
 
 if __name__ == "__main__":

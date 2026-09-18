@@ -35,6 +35,18 @@ class SitlShaftSensorAdapter:
         self.bad_sigma_after_depth = float(
             rospy.get_param("~bad_sigma_after_depth", -1.0)
         )
+        # Deliberately lie about depth while claiming good quality. This
+        # exercises PX4/depth disagreement detection, never real hardware.
+        self.depth_drift_after_depth = float(
+            rospy.get_param("~depth_drift_after_depth", -1.0)
+        )
+        self.depth_drift_rate_mps = float(
+            rospy.get_param("~depth_drift_rate_mps", 0.0)
+        )
+        if (not math.isfinite(self.depth_drift_rate_mps) or
+                self.depth_drift_rate_mps < 0.0):
+            raise ValueError("depth_drift_rate_mps must be finite and nonnegative")
+        self.depth_drift_start = None
         self.last_publish = rospy.Time(0)
         self.pad_present = True
         self.latest_depth = None
@@ -43,6 +55,9 @@ class SitlShaftSensorAdapter:
         )
         self.depth_estimate_pub = rospy.Publisher(
             "/mine_uav/shaft/depth_estimate", ShaftDepthEstimate, queue_size=10
+        )
+        self.depth_bias_pub = rospy.Publisher(
+            "/mine_uav/sitl/shaft_depth_bias_m", Float64, queue_size=10
         )
         self.range_pub = rospy.Publisher(
             "/mine_uav/shaft/bottom_range", Range, queue_size=10
@@ -67,6 +82,17 @@ class SitlShaftSensorAdapter:
             return
         self.range_pub.publish(message)
 
+    def injected_depth_bias(self, true_depth, now):
+        if self.depth_drift_after_depth < 0.0 or self.depth_drift_rate_mps == 0.0:
+            return 0.0
+        if self.depth_drift_start is None:
+            if true_depth < self.depth_drift_after_depth:
+                return 0.0
+            self.depth_drift_start = now
+            rospy.logwarn("SITL fault injection: declared-good depth begins drifting")
+        elapsed = max(0.0, (now - self.depth_drift_start).to_sec())
+        return self.depth_drift_rate_mps * elapsed
+
     def on_models(self, message):
         if not rospy.get_param("/use_sim_time", False):
             rospy.logerr_throttle(2.0, "SITL shaft sensor adapter requires /use_sim_time")
@@ -90,13 +116,15 @@ class SitlShaftSensorAdapter:
         self.last_publish = now
         depth = self.entrance_world_z - z
         self.latest_depth = depth
+        injected_bias = self.injected_depth_bias(depth, now)
+        self.depth_bias_pub.publish(Float64(data=injected_bias))
         if (self.stop_depth_after_depth < 0.0 or
                 depth < self.stop_depth_after_depth):
             self.depth_pub.publish(Float64(data=depth))
             estimate = ShaftDepthEstimate()
             estimate.header.stamp = now
             estimate.header.frame_id = "gazebo_world"
-            estimate.relative_depth_m = depth
+            estimate.relative_depth_m = depth + injected_bias
             estimate.sigma_m = (
                 1.0 if self.bad_sigma_after_depth >= 0.0 and
                 depth >= self.bad_sigma_after_depth else self.depth_sigma_m
