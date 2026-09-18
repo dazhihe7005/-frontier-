@@ -1,12 +1,13 @@
 # Task 2: shaft mission logic prototype (2026-09-18)
 
-Status: **isolated 22 m PX4/Gazebo interface flight passed**, using ideal Gazebo world-truth depth/range; no physical sensor or degraded-Z validation. Task 2 remains disabled in production `config/mission_scheduler.yaml` (`shaft_task_available: false`). The generic mission node publishes `/mine_uav/shaft/velocity_intent_enu`; only the explicitly named SITL launch connects this to MAVROS and arms a simulated vehicle.
+Status: **isolated 22 m PX4/Gazebo flight passed with a Gazebo downward ray range**, but depth still comes from ideal Gazebo world truth. No physical depth/laser source or degraded PX4-Z validation exists. Task 2 remains disabled in production `config/mission_scheduler.yaml` (`shaft_task_available: false`). The generic mission node publishes `/mine_uav/shaft/velocity_intent_enu`; only the explicitly named SITL launch connects this to MAVROS and arms a simulated vehicle.
 
 ## Control contract
 
 - `/mine_uav/mission/shaft_enable` (`std_msgs/Bool`) enables a mission. False resets to IDLE; a new true edge recaptures the entrance depth.
-- `/mine_uav/shaft/relative_depth_m` (`std_msgs/Float64`) must come from a separately validated depth source; positive is downward. It is **not** supplied by the downward-facing bottom rangefinder. The ROS node currently checks freshness and value finiteness, not whether the producer is physically independent or accurate.
-- `/mine_uav/shaft/bottom_range` (`sensor_msgs/Range`) is downward distance. Positive infinity means no target within range. Freshness, sensor min/max and debounce are checked.
+- `/mine_uav/shaft/depth_estimate` (`mine_uav_control/ShaftDepthEstimate`) is the **control input**: time-stamped entrance-relative depth (positive down), declared standard uncertainty, validity, and source ID. The node rejects stale/future stamps, an unconfigured or mismatched source, invalid quality, and uncertainty above its configured bound. The configured source/frame are blank in generic/production configuration, so the node cannot command motion until a validated source is explicitly configured. `/mine_uav/shaft/relative_depth_m` remains **diagnostics only** for the SITL adapter, analyzer and takeover trigger. A source's self-declared uncertainty is not an independent proof of accuracy or provenance.
+- `/mine_uav/shaft/bottom_range` (`sensor_msgs/Range`) is downward distance. Positive infinity means no target within range. Timestamp freshness, configured frame ID, sensor min/max and debounce are checked. The frame ID check is a contract, not proof that a physical laser points down.
+- `/mine_uav/shaft/input_gate` (`std_msgs/String`) reports why the node refuses inputs (`UNCONFIGURED`, `WAIT_DEPTH`, `SOURCE_MISMATCH`, `STALE_DEPTH`, `BAD_DEPTH_QUALITY`, `BAD_OR_STALE_RANGE`) or `OPEN`.
 - `/mine_uav/shaft/velocity_intent_enu` (`geometry_msgs/TwistStamped`) contains only an ENU Z velocity. Descend is negative, return is positive. The separate SITL-only router holds XY and handles a single MAVROS setpoint stream. Production XY control, yaw, corridor clearance, PX4 mode and setpoint arbitration are **not implemented**.
 - `/mine_uav/shaft/status` reports IDLE, DESCENDING, RETURNING, COMPLETE or FAULT_NO_SAFE_AUTONOMOUS_RECOVERY. A fault suppresses intent; it does **not** guarantee the vehicle can hover, stop or return.
 
@@ -20,11 +21,13 @@ The COMPLETE and FAULT states now remain latched even if sensors subsequently st
 
 ## Next validation gates
 
-1. Select and independently validate a real depth/entrance-reference source. A bottom-only laser cannot locate the starting elevation for return; commanded speed integrated over time is insufficient as a safety-critical substitute.
-2. Add a source-quality/uncertainty contract and a way to handle loss at depth. Currently FAULT has no guaranteed safe autonomous recovery.
-3. Replace the synthetic Gazebo-truth range with a Gazebo ray sensor, deliberately degrade localization, then verify real RC manual takeover, collision margin, return and failsafes at multiple shaft depths including 400+ m. Keep real-flight selection disabled until these pass.
+1. Select, calibrate and independently validate a real depth/entrance-reference source and the PX4 navigation source needed to hold the shaft trajectory. A bottom-only laser cannot locate the starting elevation for return; commanded speed integrated over time is insufficient as a safety-critical substitute. The software quality gate below is not calibration.
+2. Define and validate a recovery policy when the real depth source or PX4 Z estimate fails at depth. Current FAULT withdraws intent and requests PX4 mode fallback only in the SITL router; it cannot guarantee safe hover or return without reliable navigation. Add real XY/yaw clearance, battery/airflow/communications budgets and a production single-owner PX4 router only after sources and safety behavior are specified.
+3. Replace the Gazebo ray approximation with the actual downward laser, deliberately degrade PX4 localization, verify real RC CH5 takeover and failsafes, and test depth/battery margins at multiple shaft sizes including 400+ m. Keep real-flight selection disabled until these pass.
 
 ## 22 m PX4/Gazebo interface probe (same day)
+
+The first flights in this section used a computed world-truth range. The current default uses the Gazebo ray and qualified depth interface documented in the final section below; the historical bags are retained for causal comparison.
 
 A separate simulation launch, `launch/task2_shaft_22m_px4_sitl.launch`, now runs PX4 SITL, a 10×10 m shaft of about 22 m depth, the existing simulated takeoff operator, a temporary entrance platform, the scheduler with **SITL-only** `shaft_task_available=true`, the shaft state machine, and a **SITL-only** single-owner MAVROS router. The router holds the captured XY position while sending vertical velocity, does not request OFFBOARD, and requests AUTO.LOITER on completion/fault. If the pilot/PX4 leaves OFFBOARD externally, it latches the takeover until enable goes low. Production `mission_scheduler.yaml` remains disabled for Task 2.
 
@@ -95,3 +98,37 @@ python3 /home/nuc/frontier-upload/scripts/analyze_task2_takeover_bag.py \
 ```
 
 The analyzer also correctly fails when asked to verify `--expected-mode POSCTL` against the LOITER bag. This verifies command withdrawal after an accepted external mode exit with ideal SITL localization, **not** physical RC override, no-Z flight, or safe hover with a failed real positioning source. Production Task 2 remains unavailable.
+
+## Gazebo ray range and fail-closed depth input (same day)
+
+The shared SITL model now includes a downward one-beam Gazebo ray sensor. The 22 m launch defaults to `range_source:=gazebo`; the adapter relays the `sensor_msgs/Range` from `/mine_uav/sitl/shaft_downward_range` to the mission input only after deleting the temporary entrance platform. It still uses **Gazebo world truth for the independent entrance-relative depth**. The previous synthetic range is retained only as an explicit `range_source:=truth` regression option; launch selects the matching required range frame automatically. This is a ray/range interface test, not a MID360s or real laser packet emulator.
+
+The mission node no longer accepts the unqualified `/mine_uav/shaft/relative_depth_m` diagnostic scalar as its control input. It requires `ShaftDepthEstimate` with source ID, measurement timestamp, declared sigma and valid flag, plus the configured downward range frame. Default `config/shaft_mission_logic.yaml` leaves required source and frame blank, failing closed outside an explicitly configured test/validated real source. The SITL launch sets `gazebo_world_truth` and `shaft_downward_range` and declares a simulated 0.02 m sigma; that number is only a simulation declaration. Because a ROS publisher can claim any source ID/sigma, the interface **does not authenticate a source or prove physical accuracy**. The real depth producer and independent calibration are still missing.
+
+The isolated PX4/Gazebo bags are local-only evidence in `/home/nuc/task2_logs/probes/`:
+
+| Bag suffix | Input/fault | Observed result |
+| --- | --- | --- |
+| `task2_22m_gazebo_ray_20260918.bag` | Gazebo ray, pre-quality-gate baseline | RETURNING 59.471 s, COMPLETE 101.471 s; minimum body-outside bottom margin 1.409 m; max range/world error 0.028 m. |
+| `task2_22m_ray_depth_dropout_20260918.bag` | Depth stream stops at 6 m while ray range continues, pre-quality-gate baseline | FAULT 32.921 s, AUTO.LOITER 0.404 s later; 27.697 s post-fault observation, max additional descent 0.173 m. |
+| `task2_22m_ray_quality_gate_20260918.bag` | Final depth message contract and Gazebo ray | `input_gate=OPEN`, RETURNING 59.503 s, COMPLETE 101.453 s; minimum body-outside bottom margin 1.406 m, minimum side margin 4.453 m, max XY deviation 0.143 m, max range/world error 0.029 m. All 2124 forwarded range samples in the bag match a raw ray sample by timestamp and value. |
+| `task2_22m_ray_bad_sigma_20260918.bag` | At 6 m, the simulated depth producer reports sigma 1.0 m, above the 0.25 m gate | `BAD_DEPTH_QUALITY` and FAULT at 32.624 s; AUTO.LOITER 0.698 s later; 27.15 s post-fault observation, max additional descent 0.166 m. |
+
+Run the normal 22 m SITL with the launch command above, omitting `inject_takeover:=true`; `range_source:=gazebo` is now the default. For fault injection add exactly one of `depth_drop_after_depth:=6.0`, `range_drop_after_depth:=6.0`, or `bad_sigma_after_depth:=6.0`. These arguments affect **only** the isolated SITL adapter. Re-audit the final normal and quality-fault bags:
+
+```bash
+source /opt/ros/noetic/setup.bash
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_ray_quality_gate_20260918.bag \
+  --require-complete --require-ray-relay --require-gate-event OPEN \
+  --min-bottom-margin 1 --max-xy-deviation 0.5 --max-range-alignment-error 0.1
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_ray_bad_sigma_20260918.bag \
+  --require-fault --require-gate-event BAD_DEPTH_QUALITY \
+  --max-fault-to-loiter 1 --max-post-fault-descent 1 \
+  --min-post-fault-observation 10
+```
+
+`rostest mine_uav_control shaft_mission_ros.test` passes 3 tests, including wrong source, excessive sigma, invalid flag, replayed depth timestamp, wrong range frame and active fault. Six shaft state-machine GTests and the CH7/CH11 scheduler edge integration test pass. The 420 m result remains a perfect-sensor kinematic unit test, **not** a 420 m PX4/Gazebo or physical flight. No reliable real Z/depth source, physical laser, real RC takeover or safe recovery under PX4 Z loss has been validated. Production Task 2 must remain disabled.
+
+As a fail-closed default check, the generic `task2_shaft_logic.launch` was started alone on isolated ROS master port 11323 without test overrides: `/mine_uav/shaft/input_gate=UNCONFIGURED`, mission status `IDLE`, and no PX4 router was launched. The process was then stopped. The pre-existing 11312 master was left untouched.

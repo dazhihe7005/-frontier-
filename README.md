@@ -687,3 +687,5 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 调度器现按 CH7/CH11 的稳定电平变化分别启动任务一/任务二；新版 ROS 边沿测试和两任务各自的 SITL 已通过。任务二专用 SITL 还可用 `range_drop_after_depth:=6.0` 在下探 6 m 后停止模拟测距，检查传感器超时、任务撤销和 PX4 模式交接。延长观测的故障试验中，从 FAULT 到 AUTO.LOITER 约 0.539 s，后续 24.667 s 内最大额外下沉约 0.152 m；这是标准 SITL 定位有效时的结果，不能外推到无可靠 Z 的实井。详见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
 
 雷达未装机期间，新增任务二“下探中从 OFFBOARD 外部切模”的可重复 SITL 测试：`task2_shaft_22m_px4_sitl.launch inject_takeover:=true` 在 6 m 深度请求 `AUTO.LOITER`，必须由 `/mavros/state` 确认（仅 `mode_sent=true` 不算成功）。实际确认后调度器约 0.078 s 退回 HOLD，36.137 s 内没有恢复 OFFBOARD 或继续发送 setpoint。`POSCTL` 模拟请求曾被 PX4 拒绝；真实遥控器 CH5 人工接管仍未验证。证据与复核命令见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)，实机任务二仍禁用。
+
+任务二最新软件验证：22 m SITL 默认已换成 Gazebo 向下 ray 测距（不再由世界真值直接计算测距），独立深度仍为 Gazebo 世界真值。任务控制输入改为含时间戳、来源 ID、声明误差和有效标志的 `ShaftDepthEstimate`；通用配置故意留空来源和测距帧，未明确配置即拒绝运动。最终 ray+质量门控闭环约 101.45 s 完成，机体外最小离底余量约 1.406 m，bag 内 2124 帧任务测距与原始 ray 测距逐帧一致；深度声明误差在 6 m 变为 1 m 时，门控报错、任务撤销并在约 0.698 s 后切 AUTO.LOITER。ROS 级质量/来源/重放时间戳/错误帧测试 3/3、状态机单测 6/6 通过。**这些是仿真与接口验收，不是可靠真实 Z、真实下视激光或 400 m 真机安全证明；生产任务二仍禁用。**详细数据及复核命令见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。

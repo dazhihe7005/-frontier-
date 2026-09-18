@@ -5,6 +5,7 @@ add_compile_options(-std=c++14 -Wall -Wextra -Wpedantic)
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
+  message_generation
   message_filters
   mavros_msgs
   nav_msgs
@@ -18,10 +19,14 @@ find_package(catkin REQUIRED COMPONENTS
   visualization_msgs
 )
 
+add_message_files(FILES ShaftDepthEstimate.msg)
+generate_messages(DEPENDENCIES std_msgs)
+
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES arc_trajectory super_exploration_decider_lib
   CATKIN_DEPENDS geometry_msgs message_filters mavros_msgs nav_msgs
+                 message_runtime
                  pcl_conversions quadrotor_msgs roscpp sensor_msgs std_msgs std_srvs
                  super_planner
                  visualization_msgs
@@ -83,6 +88,8 @@ add_executable(shaft_mission_node
   src/shaft_mission_node.cpp
 )
 target_link_libraries(shaft_mission_node ${catkin_LIBRARIES})
+add_dependencies(shaft_mission_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
+                 ${catkin_EXPORTED_TARGETS})
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)

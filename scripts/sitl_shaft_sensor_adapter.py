@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-"""SITL-only ideal independent depth/range from Gazebo world geometry."""
+"""SITL-only world-truth depth with selectable truth or Gazebo ray range."""
 
 import math
 
 import rospy
 from gazebo_msgs.msg import ModelStates
+from mine_uav_control.msg import ShaftDepthEstimate
 from sensor_msgs.msg import Range
 from std_msgs.msg import Float64
 
@@ -19,14 +20,29 @@ class SitlShaftSensorAdapter:
             rospy.get_param("~entrance_world_z", 0.25)
         )
         self.max_range = float(rospy.get_param("~max_range", 30.0))
+        self.depth_sigma_m = float(rospy.get_param("~depth_sigma_m", 0.02))
+        self.range_source = rospy.get_param("~range_source", "truth")
+        if self.range_source not in ("truth", "gazebo"):
+            raise ValueError("range_source must be 'truth' or 'gazebo'")
         # SITL-only fault injection: stop the independent bottom range stream
         # after reaching this entrance-relative depth. Negative disables it.
         self.stop_range_after_depth = float(
             rospy.get_param("~stop_range_after_depth", -1.0)
         )
+        self.stop_depth_after_depth = float(
+            rospy.get_param("~stop_depth_after_depth", -1.0)
+        )
+        self.bad_sigma_after_depth = float(
+            rospy.get_param("~bad_sigma_after_depth", -1.0)
+        )
         self.last_publish = rospy.Time(0)
+        self.pad_present = True
+        self.latest_depth = None
         self.depth_pub = rospy.Publisher(
             "/mine_uav/shaft/relative_depth_m", Float64, queue_size=10
+        )
+        self.depth_estimate_pub = rospy.Publisher(
+            "/mine_uav/shaft/depth_estimate", ShaftDepthEstimate, queue_size=10
         )
         self.range_pub = rospy.Publisher(
             "/mine_uav/shaft/bottom_range", Range, queue_size=10
@@ -34,7 +50,22 @@ class SitlShaftSensorAdapter:
         rospy.Subscriber(
             "/gazebo/model_states", ModelStates, self.on_models, queue_size=10
         )
-        rospy.logwarn("SITL shaft adapter uses Gazebo WORLD TRUTH, not a physical sensor")
+        if self.range_source == "gazebo":
+            rospy.Subscriber("/mine_uav/sitl/shaft_downward_range", Range,
+                             self.on_gazebo_range, queue_size=10)
+        rospy.logwarn("SITL shaft depth uses WORLD TRUTH; bottom range source=%s",
+                      self.range_source)
+
+    def on_gazebo_range(self, message):
+        if not rospy.get_param("/use_sim_time", False):
+            return
+        if self.pad_present or self.latest_depth is None:
+            return
+        if (self.stop_range_after_depth >= 0.0 and
+                self.latest_depth >= self.stop_range_after_depth):
+            rospy.logwarn_once("SITL fault injection: bottom range stream stopped")
+            return
+        self.range_pub.publish(message)
 
     def on_models(self, message):
         if not rospy.get_param("/use_sim_time", False):
@@ -42,7 +73,8 @@ class SitlShaftSensorAdapter:
             return
         # Do not misinterpret the temporary entrance platform as the bottom.
         # This also prevents motion before the platform is removed.
-        if "shaft_launch_pad" in message.name:
+        self.pad_present = "shaft_launch_pad" in message.name
+        if self.pad_present:
             return
         try:
             z = message.pose[message.name.index("iris")].position.z
@@ -57,7 +89,25 @@ class SitlShaftSensorAdapter:
             return
         self.last_publish = now
         depth = self.entrance_world_z - z
-        self.depth_pub.publish(Float64(data=depth))
+        self.latest_depth = depth
+        if (self.stop_depth_after_depth < 0.0 or
+                depth < self.stop_depth_after_depth):
+            self.depth_pub.publish(Float64(data=depth))
+            estimate = ShaftDepthEstimate()
+            estimate.header.stamp = now
+            estimate.header.frame_id = "gazebo_world"
+            estimate.relative_depth_m = depth
+            estimate.sigma_m = (
+                1.0 if self.bad_sigma_after_depth >= 0.0 and
+                depth >= self.bad_sigma_after_depth else self.depth_sigma_m
+            )
+            estimate.valid = True
+            estimate.source_id = "gazebo_world_truth"
+            self.depth_estimate_pub.publish(estimate)
+        else:
+            rospy.logwarn_once("SITL fault injection: depth stream stopped")
+        if self.range_source == "gazebo":
+            return
         if (self.stop_range_after_depth >= 0.0 and
                 depth >= self.stop_range_after_depth):
             rospy.logwarn_once(

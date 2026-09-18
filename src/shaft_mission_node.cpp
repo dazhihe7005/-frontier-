@@ -1,13 +1,14 @@
 #include <cmath>
+#include <stdexcept>
 #include <string>
 
 #include <geometry_msgs/TwistStamped.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Range.h>
 #include <std_msgs/Bool.h>
-#include <std_msgs/Float64.h>
 #include <std_msgs/String.h>
 
+#include "mine_uav_control/ShaftDepthEstimate.h"
 #include "mine_uav_control/shaft_mission.hpp"
 
 namespace {
@@ -17,9 +18,16 @@ class ShaftMissionNode {
   ShaftMissionNode() : private_nh_("~"), mission_(loadConfig()) {
     private_nh_.param("input_timeout", input_timeout_, 0.4);
     private_nh_.param("control_rate", control_rate_, 20.0);
+    private_nh_.param<std::string>("required_depth_source", required_depth_source_, "");
+    private_nh_.param<std::string>("required_range_frame", required_range_frame_, "");
+    private_nh_.param("max_depth_sigma_m", max_depth_sigma_m_, 0.25);
+    if (!std::isfinite(control_rate_) || control_rate_ <= 0.0 ||
+        !std::isfinite(input_timeout_) || input_timeout_ <= 0.0) {
+      throw std::invalid_argument("shaft input_timeout and control_rate must be positive");
+    }
     enable_sub_ = nh_.subscribe("/mine_uav/mission/shaft_enable", 1,
                                 &ShaftMissionNode::enableCallback, this);
-    depth_sub_ = nh_.subscribe("/mine_uav/shaft/relative_depth_m", 10,
+    depth_sub_ = nh_.subscribe("/mine_uav/shaft/depth_estimate", 10,
                                &ShaftMissionNode::depthCallback, this);
     range_sub_ = nh_.subscribe("/mine_uav/shaft/bottom_range", 10,
                                &ShaftMissionNode::rangeCallback, this);
@@ -27,6 +35,8 @@ class ShaftMissionNode {
         "/mine_uav/shaft/velocity_intent_enu", 10);
     status_pub_ = nh_.advertise<std_msgs::String>(
         "/mine_uav/shaft/status", 1, true);
+    gate_pub_ = nh_.advertise<std_msgs::String>(
+        "/mine_uav/shaft/input_gate", 1, true);
     timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate_),
                              &ShaftMissionNode::tick, this);
     ROS_WARN("Shaft mission emits abstract velocity intent only; no PX4 output is connected");
@@ -57,8 +67,12 @@ class ShaftMissionNode {
     enabled_ = message->data;
   }
 
-  void depthCallback(const std_msgs::Float64::ConstPtr& message) {
-    depth_ = message->data;
+  void depthCallback(const mine_uav_control::ShaftDepthEstimate::ConstPtr& message) {
+    depth_ = message->relative_depth_m;
+    depth_sigma_ = message->sigma_m;
+    depth_source_ = message->source_id;
+    depth_good_ = message->valid;
+    depth_stamp_ = message->header.stamp;
     depth_time_ = ros::Time::now();
   }
 
@@ -66,22 +80,59 @@ class ShaftMissionNode {
     range_ = message->range;
     range_min_ = message->min_range;
     range_max_ = message->max_range;
+    range_frame_ = message->header.frame_id;
+    range_stamp_ = message->header.stamp;
     range_time_ = ros::Time::now();
+  }
+
+  bool freshStamp(const ros::Time& stamp, const ros::Time& now) const {
+    if (stamp.isZero()) return false;
+    const double age = (now - stamp).toSec();
+    return age >= -0.05 && age <= input_timeout_;
+  }
+
+  void publishGate(const std::string& value) {
+    if (value == last_gate_) return;
+    last_gate_ = value;
+    std_msgs::String message;
+    message.data = value;
+    gate_pub_.publish(message);
   }
 
   void tick(const ros::TimerEvent& event) {
     const ros::Time now = ros::Time::now();
     mine_uav_control::ShaftMission::Input in;
     in.enabled = enabled_;
-    in.depth_valid = !depth_time_.isZero() &&
-                     (now - depth_time_).toSec() <= input_timeout_;
+    const bool configured = !required_depth_source_.empty() &&
+        !required_range_frame_.empty() && std::isfinite(max_depth_sigma_m_) &&
+        max_depth_sigma_m_ > 0.0 && std::isfinite(input_timeout_) &&
+        input_timeout_ > 0.0 && std::isfinite(control_rate_) &&
+        control_rate_ > 0.0;
+    const bool depth_fresh = !depth_time_.isZero() &&
+        (now - depth_time_).toSec() >= -0.05 &&
+        (now - depth_time_).toSec() <= input_timeout_ &&
+        freshStamp(depth_stamp_, now);
+    in.depth_valid = configured && depth_fresh && depth_good_ &&
+        depth_source_ == required_depth_source_ && std::isfinite(depth_) &&
+        std::isfinite(depth_sigma_) && depth_sigma_ >= 0.0 &&
+        depth_sigma_ <= max_depth_sigma_m_;
     in.depth = depth_;
-    in.range_fresh = !range_time_.isZero() &&
-                     (now - range_time_).toSec() <= input_timeout_;
+    in.range_fresh = configured && !range_time_.isZero() &&
+        (now - range_time_).toSec() >= -0.05 &&
+        (now - range_time_).toSec() <= input_timeout_ &&
+        freshStamp(range_stamp_, now) &&
+        range_frame_ == required_range_frame_;
     in.bottom_range = range_;
     in.range_min = range_min_;
     in.range_max = range_max_;
     in.dt = (event.current_real - event.last_real).toSec();
+    if (!configured) publishGate("UNCONFIGURED");
+    else if (depth_time_.isZero()) publishGate("WAIT_DEPTH");
+    else if (depth_source_ != required_depth_source_) publishGate("SOURCE_MISMATCH");
+    else if (!depth_fresh) publishGate("STALE_DEPTH");
+    else if (!in.depth_valid) publishGate("BAD_DEPTH_QUALITY");
+    else if (!in.range_fresh) publishGate("BAD_OR_STALE_RANGE");
+    else publishGate("OPEN");
     const auto result = mission_.step(in);
     std_msgs::String status;
     switch (result.state) {
@@ -119,15 +170,26 @@ class ShaftMissionNode {
   ros::Subscriber range_sub_;
   ros::Publisher command_pub_;
   ros::Publisher status_pub_;
+  ros::Publisher gate_pub_;
   ros::Timer timer_;
   mine_uav_control::ShaftMission mission_;
   ros::Time depth_time_;
+  ros::Time depth_stamp_;
   ros::Time range_time_;
+  ros::Time range_stamp_;
   double depth_{0.0};
+  double depth_sigma_{INFINITY};
+  bool depth_good_{false};
+  std::string depth_source_;
+  std::string range_frame_;
+  std::string required_depth_source_;
+  std::string required_range_frame_;
+  std::string last_gate_;
   double range_{INFINITY};
   double range_min_{0.0};
   double range_max_{30.0};
   double input_timeout_{0.4};
+  double max_depth_sigma_m_{0.25};
   double control_rate_{20.0};
   bool enabled_{false};
 };

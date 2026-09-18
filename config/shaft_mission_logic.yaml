@@ -1,5 +1,10 @@
 # Task 2 logic-only prototype. No PX4 publisher is connected.
 # Positive relative depth is downward; velocity intent uses ROS ENU (+z up).
+# Required source/frame intentionally blank outside explicit SITL or test launch.
+# Without a validated independent depth producer and downward sensor, no motion.
+required_depth_source: ""
+required_range_frame: ""
+max_depth_sigma_m: 0.25
 descent_speed: 0.5
 return_speed: 0.5
 bottom_trigger: 2.0

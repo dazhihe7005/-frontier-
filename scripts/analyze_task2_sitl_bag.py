@@ -37,18 +37,30 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
     deepest_world_z_after_fault = math.inf
     fault_time = None
     last_world_time = None
+    raw_ray_by_stamp = {}
+    forwarded_ranges = []
+    gate_events = []
     with rosbag.Bag(path) as bag:
         for topic, msg, stamp in bag.read_messages(topics=[
             "/mine_uav/shaft/status", "/mine_uav/shaft/relative_depth_m",
             "/gazebo/model_states", "/mavros/state",
             "/mavros/setpoint_raw/local", "/mine_uav/shaft/bottom_range",
             "/mavros/local_position/odom",
+            "/mine_uav/sitl/shaft_downward_range",
+            "/mine_uav/shaft/input_gate",
         ]):
             t = round(stamp.to_sec(), 3)
             if topic == "/mine_uav/shaft/relative_depth_m":
                 latest_depth = msg.data
             elif topic == "/mine_uav/shaft/bottom_range":
                 latest_bottom_range = msg.range
+                forwarded_ranges.append((msg.header.stamp.to_nsec(), msg.range))
+            elif topic == "/mine_uav/sitl/shaft_downward_range":
+                raw_ray_by_stamp.setdefault(msg.header.stamp.to_nsec(), []).append(
+                    msg.range)
+            elif topic == "/mine_uav/shaft/input_gate":
+                if not gate_events or gate_events[-1] != msg.data:
+                    gate_events.append(msg.data)
             elif topic == "/mavros/local_position/odom":
                 latest_vertical_velocity = msg.twist.twist.linear.z
             elif topic == "/mine_uav/shaft/status":
@@ -117,6 +129,9 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
                 deepest_world_z = min(deepest_world_z, pose.z)
                 if latest_depth is not None:
                     deepest_relative = max(deepest_relative, latest_depth)
+    matched_ray_ranges = sum(
+        any(abs(value - raw) <= 1e-5 for raw in raw_ray_by_stamp.get(stamp, []))
+        for stamp, value in forwarded_ranges)
     return {
         "statuses": statuses,
         "modes": modes,
@@ -147,6 +162,10 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4):
         "min_side_margin": min_side_margin,
         "max_xy_deviation": max_xy_deviation,
         "position_setpoint_count": position_setpoint_count,
+        "gate_events": gate_events,
+        "ray_raw_count": sum(len(values) for values in raw_ray_by_stamp.values()),
+        "range_forwarded_count": len(forwarded_ranges),
+        "range_matched_to_raw_ray_count": matched_ray_ranges,
     }
 
 
@@ -164,6 +183,8 @@ if __name__ == "__main__":
     parser.add_argument("--min-bottom-margin", type=float)
     parser.add_argument("--max-xy-deviation", type=float)
     parser.add_argument("--max-range-alignment-error", type=float)
+    parser.add_argument("--require-ray-relay", action="store_true")
+    parser.add_argument("--require-gate-event")
     args = parser.parse_args()
     result = analyze(args.bag, args.bottom_top,
                      args.shaft_half_width, args.vehicle_radius)
@@ -195,6 +216,15 @@ if __name__ == "__main__":
     if args.max_range_alignment_error is not None and \
             result["max_range_alignment_error"] > args.max_range_alignment_error:
         failures.append("range/world alignment error above threshold")
+    if args.require_ray_relay and (
+            result["ray_raw_count"] == 0 or
+            result["range_forwarded_count"] == 0 or
+            result["range_matched_to_raw_ray_count"] !=
+            result["range_forwarded_count"]):
+        failures.append("forwarded range differs from Gazebo ray source")
+    if args.require_gate_event and \
+            args.require_gate_event not in result["gate_events"]:
+        failures.append("required depth/range gate event absent")
     if failures:
         print("FAIL: " + ", ".join(failures), file=sys.stderr)
         sys.exit(1)

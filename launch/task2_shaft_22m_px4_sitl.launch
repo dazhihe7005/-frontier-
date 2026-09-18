@@ -1,9 +1,14 @@
 <launch>
   <!-- Isolated ROS master only: this launch arms a simulated PX4. Both sensor
-       adapter and router refuse to operate without /use_sim_time. The 22 m
-       range is synthetic, not a Gazebo ray sensor or real laser. -->
+       adapter and router refuse to operate without /use_sim_time. Depth is
+       Gazebo world truth; bottom range may come from a Gazebo ray, not real laser. -->
   <arg name="gui" default="false"/>
   <arg name="range_drop_after_depth" default="-1.0"/>
+  <arg name="depth_drop_after_depth" default="-1.0"/>
+  <arg name="bad_sigma_after_depth" default="-1.0"/>
+  <arg name="range_source" default="gazebo"/>
+  <arg name="required_range_frame"
+       default="$(eval 'sitl_downward_range' if arg('range_source') == 'truth' else 'shaft_downward_range')"/>
   <arg name="inject_takeover" default="false"/>
   <arg name="takeover_after_depth" default="6.0"/>
   <arg name="takeover_mode" default="AUTO.LOITER"/>
@@ -26,6 +31,9 @@
     <param name="bottom_top_world_z" value="-20.85"/>
     <param name="entrance_world_z" value="0.25"/>
     <param name="stop_range_after_depth" value="$(arg range_drop_after_depth)"/>
+    <param name="stop_depth_after_depth" value="$(arg depth_drop_after_depth)"/>
+    <param name="bad_sigma_after_depth" value="$(arg bad_sigma_after_depth)"/>
+    <param name="range_source" value="$(arg range_source)"/>
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
         name="sitl_shaft_release_pad" output="screen" required="true"/>
@@ -45,6 +53,8 @@
   <node pkg="mine_uav_control" type="shaft_mission_node"
         name="shaft_mission_node" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+    <param name="required_depth_source" value="gazebo_world_truth"/>
+    <param name="required_range_frame" value="$(arg required_range_frame)"/>
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_px4_router.py"
         name="sitl_shaft_px4_router" output="screen" required="true"/>

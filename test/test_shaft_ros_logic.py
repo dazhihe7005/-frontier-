@@ -8,30 +8,38 @@ import unittest
 
 import rospy
 import rostest
+from mine_uav_control.msg import ShaftDepthEstimate
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Range
-from std_msgs.msg import Bool, Float64, String
+from std_msgs.msg import Bool, String
 
 
 class ShaftRosLogicTest(unittest.TestCase):
     def setUp(self):
         self.lock = threading.Lock()
         self.depth = 0.0
+        self.depth_sigma = 0.02
+        self.depth_source = "ros_test_depth"
+        self.depth_valid = True
+        self.depth_stamp_offset = 0.0
+        self.range_frame = "ros_test_range"
         self.bottom_range = float("inf")
         self.publish_range = True
         self.status = None
+        self.input_gate = None
         self.latest_command = None
         self.last_command_time = 0.0
         self.enable_pub = rospy.Publisher(
             "/mine_uav/mission/shaft_enable", Bool, queue_size=1, latch=True
         )
         self.depth_pub = rospy.Publisher(
-            "/mine_uav/shaft/relative_depth_m", Float64, queue_size=10
+            "/mine_uav/shaft/depth_estimate", ShaftDepthEstimate, queue_size=10
         )
         self.range_pub = rospy.Publisher(
             "/mine_uav/shaft/bottom_range", Range, queue_size=10
         )
         rospy.Subscriber("/mine_uav/shaft/status", String, self.on_status)
+        rospy.Subscriber("/mine_uav/shaft/input_gate", String, self.on_gate)
         rospy.Subscriber(
             "/mine_uav/shaft/velocity_intent_enu", TwistStamped, self.on_command
         )
@@ -46,6 +54,10 @@ class ShaftRosLogicTest(unittest.TestCase):
         with self.lock:
             self.status = message.data
 
+    def on_gate(self, message):
+        with self.lock:
+            self.input_gate = message.data
+
     def on_command(self, message):
         with self.lock:
             self.latest_command = message
@@ -54,12 +66,24 @@ class ShaftRosLogicTest(unittest.TestCase):
     def publish_inputs(self, _event):
         with self.lock:
             depth = self.depth
+            depth_sigma = self.depth_sigma
+            depth_source = self.depth_source
+            depth_valid = self.depth_valid
+            depth_stamp_offset = self.depth_stamp_offset
+            range_frame = self.range_frame
             bottom_range = self.bottom_range
             publish_range = self.publish_range
-        self.depth_pub.publish(Float64(data=depth))
+        estimate = ShaftDepthEstimate()
+        estimate.header.stamp = rospy.Time.now() + rospy.Duration(depth_stamp_offset)
+        estimate.relative_depth_m = depth
+        estimate.sigma_m = depth_sigma
+        estimate.source_id = depth_source
+        estimate.valid = depth_valid
+        self.depth_pub.publish(estimate)
         if publish_range:
             message = Range()
             message.header.stamp = rospy.Time.now()
+            message.header.frame_id = range_frame
             message.radiation_type = Range.INFRARED
             message.min_range = 0.2
             message.max_range = 30.0
@@ -113,6 +137,62 @@ class ShaftRosLogicTest(unittest.TestCase):
             self.publish_range = False
         self.wait_for(lambda: self.status == "FAULT_NO_SAFE_AUTONOMOUS_RECOVERY",
                       "stale-range fault")
+
+    def test_depth_quality_gate_and_active_fault(self):
+        self.wait_for(lambda: self.status == "IDLE", "idle")
+        self.wait_for(lambda: self.depth_pub.get_num_connections() > 0 and
+                      self.range_pub.get_num_connections() > 0, "sensor subscribers")
+        with self.lock:
+            self.depth_source = "unapproved_source"
+        self.wait_for(lambda: self.input_gate == "SOURCE_MISMATCH",
+                      "source mismatch gate")
+        self.enable_pub.publish(Bool(data=True))
+        time.sleep(0.3)
+        with self.lock:
+            self.assertEqual(self.status, "IDLE")
+            self.depth_source = "ros_test_depth"
+            self.depth_sigma = 1.0
+        self.wait_for(lambda: self.input_gate == "BAD_DEPTH_QUALITY",
+                      "depth uncertainty gate")
+        time.sleep(0.3)
+        with self.lock:
+            self.assertEqual(self.status, "IDLE")
+            self.depth_sigma = 0.02
+        self.wait_for(lambda: self.status == "DESCENDING", "quality accepted")
+        with self.lock:
+            self.depth_valid = False
+        self.wait_for(lambda: self.status == "FAULT_NO_SAFE_AUTONOMOUS_RECOVERY",
+                      "active quality fault")
+        with self.lock:
+            last_command = self.last_command_time
+        time.sleep(0.2)
+        with self.lock:
+            self.assertEqual(last_command, self.last_command_time)
+
+    def test_replayed_depth_and_wrong_range_frame(self):
+        self.wait_for(lambda: self.status == "IDLE", "idle")
+        self.wait_for(lambda: self.depth_pub.get_num_connections() > 0 and
+                      self.range_pub.get_num_connections() > 0, "sensor subscribers")
+        with self.lock:
+            self.depth_stamp_offset = -2.0
+        self.wait_for(lambda: self.input_gate == "STALE_DEPTH",
+                      "replayed depth rejected")
+        self.enable_pub.publish(Bool(data=True))
+        time.sleep(0.2)
+        with self.lock:
+            self.assertEqual(self.status, "IDLE")
+            self.range_frame = "sideways_laser"
+            self.depth_stamp_offset = 0.0
+        self.wait_for(lambda: self.input_gate == "BAD_OR_STALE_RANGE",
+                      "wrong range frame rejected")
+        with self.lock:
+            self.assertEqual(self.status, "IDLE")
+            self.range_frame = "ros_test_range"
+        self.wait_for(lambda: self.status == "DESCENDING", "fresh inputs accepted")
+        with self.lock:
+            self.depth_stamp_offset = -2.0
+        self.wait_for(lambda: self.status == "FAULT_NO_SAFE_AUTONOMOUS_RECOVERY",
+                      "active replayed depth fault")
 
 
 if __name__ == "__main__":
