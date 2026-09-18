@@ -6,7 +6,7 @@ import math
 
 import rospy
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import PositionTarget, State
+from mavros_msgs.msg import EstimatorStatus, PositionTarget, State
 from mavros_msgs.srv import SetMode
 from std_msgs.msg import Bool, String
 
@@ -16,6 +16,7 @@ class SitlShaftPx4Router:
         self.intent_timeout = float(rospy.get_param("~intent_timeout", 0.3))
         self.pose_timeout = float(rospy.get_param("~pose_timeout", 0.5))
         self.state_timeout = float(rospy.get_param("~state_timeout", 1.5))
+        self.estimator_timeout = float(rospy.get_param("~estimator_timeout", 1.5))
         self.enable = False
         self.owned = False
         self.takeover_latched = False
@@ -28,6 +29,8 @@ class SitlShaftPx4Router:
         self.status = "IDLE"
         self.state = State()
         self.state_time = rospy.Time(0)
+        self.estimator = EstimatorStatus()
+        self.estimator_time = rospy.Time(0)
         self.last_fallback = rospy.Time(0)
         self.command_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=10
@@ -42,6 +45,8 @@ class SitlShaftPx4Router:
         rospy.Subscriber("/mine_uav/shaft/status", String, self.on_status)
         rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.on_pose)
         rospy.Subscriber("/mavros/state", State, self.on_state)
+        rospy.Subscriber("/mavros/estimator_status", EstimatorStatus,
+                         self.on_estimator)
         rospy.Timer(rospy.Duration(0.05), self.tick)
         self.ready_pub.publish(Bool(data=False))
         rospy.logwarn("SITL-only shaft PX4 router; do not use with a real FCU")
@@ -71,6 +76,10 @@ class SitlShaftPx4Router:
     def on_state(self, message):
         self.state = message
         self.state_time = rospy.Time.now()
+
+    def on_estimator(self, message):
+        self.estimator = message
+        self.estimator_time = rospy.Time.now()
 
     def publish_ready(self, value):
         if self.ready != value:
@@ -109,6 +118,17 @@ class SitlShaftPx4Router:
         state_age = (now - self.state_time).to_sec()
         state_fresh = (not self.state_time.is_zero() and
                        -0.05 <= state_age <= self.state_timeout)
+        estimator_age = (now - self.estimator_time).to_sec()
+        estimator_ok = (
+            not self.estimator_time.is_zero() and
+            -0.05 <= estimator_age <= self.estimator_timeout and
+            not self.estimator.header.stamp.is_zero() and
+            -0.05 <= (now - self.estimator.header.stamp).to_sec() <=
+            self.estimator_timeout and
+            (self.estimator.pos_horiz_rel_status_flag or
+             self.estimator.pos_horiz_abs_status_flag) and
+            (self.estimator.pos_vert_abs_status_flag or
+             self.estimator.pos_vert_agl_status_flag))
         pose_fresh = self.pose is not None and (
             -0.05 <= (now - self.pose_time).to_sec() <= self.pose_timeout and
             not self.pose.header.stamp.is_zero() and
@@ -133,6 +153,13 @@ class SitlShaftPx4Router:
         if self.takeover_latched:
             self.publish_ready(False)
             return
+        if self.owned and not estimator_ok:
+            # PX4 itself reports unusable local position. No position hold
+            # target can be trusted here; request fallback, but never claim
+            # this guarantees safe hover without a valid PX4 Z estimate.
+            self.publish_ready(False)
+            self.request_fallback(now)
+            return
         if self.owned and not state_fresh:
             self.publish_ready(False)
             if pose_fresh:
@@ -148,7 +175,8 @@ class SitlShaftPx4Router:
                     self.publish_hold(now)
                 self.request_fallback(now)
             return
-        if (not self.enable or not state_fresh or not self.state.connected or
+        if (not self.enable or not state_fresh or not estimator_ok or
+                not self.state.connected or
                 not self.state.armed or
                 self.state.mode != "OFFBOARD" or not pose_fresh or
                 not intent_fresh or self.status not in ("DESCENDING", "RETURNING")):

@@ -8,7 +8,7 @@ import pathlib
 import unittest
 from unittest.mock import MagicMock, patch
 
-from mavros_msgs.msg import State
+from mavros_msgs.msg import EstimatorStatus, State
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from std_msgs.msg import Bool
 
@@ -37,6 +37,12 @@ def owned_router():
     router.state.armed = True
     router.state_time = MODULE.rospy.Time(10)
     router.state_timeout = 1.5
+    router.estimator = EstimatorStatus()
+    router.estimator.header.stamp = MODULE.rospy.Time(10)
+    router.estimator.pos_horiz_abs_status_flag = True
+    router.estimator.pos_vert_abs_status_flag = True
+    router.estimator_time = MODULE.rospy.Time(10)
+    router.estimator_timeout = 1.5
     return router
 
 
@@ -209,6 +215,27 @@ class ShaftRouterLifecycleTest(unittest.TestCase):
         self.assertEqual((target.position.x, target.position.y), (1.0, 2.0))
         self.assertEqual(target.velocity.z, -0.5)
         self.assertTrue(router.ready)
+
+    def test_lost_px4_vertical_estimate_stops_descent_immediately(self):
+        router = owned_router()
+        router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(10)
+        router.pose_time = MODULE.rospy.Time(10)
+        router.intent = TwistStamped()
+        router.intent.header.stamp = MODULE.rospy.Time(10)
+        router.intent.twist.linear.z = -0.5
+        router.intent_time = MODULE.rospy.Time(10)
+        router.status = "DESCENDING"
+        router.estimator.pos_vert_abs_status_flag = False
+        router.command_pub = MagicMock()
+        router.request_fallback = MagicMock()
+        with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                patch.object(MODULE.rospy.Time, "now",
+                             return_value=MODULE.rospy.Time(10)):
+            router.tick(None)
+        router.command_pub.publish.assert_not_called()
+        router.request_fallback.assert_called_once()
+        self.assertFalse(router.ready)
 
 
 if __name__ == "__main__":

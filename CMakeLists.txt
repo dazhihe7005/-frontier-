@@ -97,6 +97,7 @@ if(CATKIN_ENABLE_TESTING)
   add_rostest(test/shaft_mission_ros.test)
   add_rostest(test/mission_scheduler_edges.test)
   catkin_add_nosetests(test/test_sitl_shaft_router_lifecycle.py)
+  catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp
@@ -158,6 +159,7 @@ catkin_install_python(PROGRAMS
   scripts/sitl_shaft_px4_router.py
   scripts/sitl_shaft_release_pad.py
   scripts/sitl_shaft_takeover_injector.py
+  scripts/sitl_shaft_px4_z_failure_injector.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

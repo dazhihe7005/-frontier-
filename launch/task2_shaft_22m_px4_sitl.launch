@@ -13,6 +13,8 @@
   <arg name="inject_takeover" default="false"/>
   <arg name="takeover_after_depth" default="6.0"/>
   <arg name="takeover_mode" default="AUTO.LOITER"/>
+  <arg name="inject_px4_z_failure" default="false"/>
+  <arg name="px4_z_failure_after_depth" default="6.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/shaft_22m_logic_sitl.world"/>
   <arg name="bottom_top_world_z" default="-20.85"/>
   <arg name="entrance_world_z" default="0.25"/>
@@ -73,6 +75,12 @@
           name="sitl_shaft_takeover_injector" output="screen" required="true">
       <param name="trigger_depth" value="$(arg takeover_after_depth)"/>
       <param name="target_mode" value="$(arg takeover_mode)"/>
+    </node>
+  </group>
+  <group if="$(arg inject_px4_z_failure)">
+    <node pkg="mine_uav_control" type="sitl_shaft_px4_z_failure_injector.py"
+          name="sitl_shaft_px4_z_failure_injector" output="screen" required="true">
+      <param name="trigger_depth" value="$(arg px4_z_failure_after_depth)"/>
     </node>
   </group>
 </launch>

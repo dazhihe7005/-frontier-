@@ -196,3 +196,7 @@ python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
 ```
 
 The 45 m bag is local-only. This run verifies one additional idealized geometry beyond the 30 m sensor range; it does **not** establish a 400+ m PX4/Gazebo or real shaft safety case. Production Task 2 remains disabled.
+
+## PX4 estimator Z-loss result
+
+The missing PX4-Z failure case has now been injected in isolated 22 m SITL. It exposed bottom contact in the pre-guard run; a new SITL-only estimator-status gate reduces post-invalid raw setpoints from 80 to zero, but the guarded run became inconclusive for physical recovery after Gazebo slowed and MAVROS disconnected. **Task 2 remains unsafe without reliable PX4 Z and a validated independent recovery source.** Full chronology, A/B limitations, replay commands and the `SYS_FAILURE_EN` reset requirement are in [the PX4 Z-loss report](task2_px4_z_loss_report_2026-09-18.md).

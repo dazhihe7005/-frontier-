@@ -699,3 +699,5 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 任务二 22 m 仿真若需同时看 Gazebo 与 RViz，可在隔离 ROS master 的 `task2_shaft_22m_px4_sitl.launch` 命令后添加 `gui:=true rviz:=true`；RViz 用于模拟 ray 点云与 PX4 轨迹，并非 FAST-LIO2 建图。任务二 SITL 路由器现拒绝过期/非有限 PX4 位姿；修复后 22 m 完整闭环和 8 项生命周期测试通过，细节见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
 
 新增 45 m 竖井 SITL 入口 `task2_shaft_45m_px4_sitl.launch`，覆盖下视 ray 量程仅 30 m 时的“量程饱和→重新测到井底→返航”过程；完整闭环通过，机体外最小离底余量约 1.386 m。原日志审计器把 30 m 饱和值当作真实距离而误报 16.779 m 误差，已按量程截断读数修正，并加入重新获取量程的显式断言。仍只使用 Gazebo 世界真值深度，不代表 400 m 或 PX4 Z 失效可安全工作；见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
+
+**重要安全结论：任务二在 PX4 失去可靠 Z 时尚不安全。** 隔离 SITL 中关闭模拟 GPS 和气压计后，旧路由器仍继续下发 80 帧下降目标，机体最终在 Gazebo 触底；新估计器门控将失效后目标减为 0，正常 22 m 闭环仍通过，但故障复测因仿真失速/断连无法证明安全回收。生产任务二继续禁用。证据和边界见[PX4 Z 失效专项报告](docs/task2_px4_z_loss_report_2026-09-18.md)。
