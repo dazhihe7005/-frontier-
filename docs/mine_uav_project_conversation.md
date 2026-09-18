@@ -2589,3 +2589,23 @@ run16 前墙等待约 6.11 s，PX4 实际高度下降 0.515 m、x 前移 0.925 m
 修正后调度器默认在 MAVROS 状态停止 2.5 s、任务二状态停止 0.6 s、任务二选中后 4 s 仍未下探时撤销授权；仿真时钟回退会使旧数据失效并重新建立 RC 基线。路由器仅在旧任务仍使能时锁存外部接管，禁用时清理旧速度意图；独立拒绝超过 1.5 s 的 PX4 状态或时间戳过期的速度意图。新的调度器 ROS 测试覆盖三种超时与之后 CH11 再启动，1/1 通过；路由器状态转换测试 5/5 通过，包含“退出任务后晚切模仍能再启动”和“飞手接管不被抢回”。 另复现了任务禁用后排队中的旧速度意图仍被接收的竞态，已令路由器在未使能时拒绝意图；该用例在修复前失败、修复后通过，并纳入 catkin nosetests。
 
 最终代码的 22 m Gazebo ray+深度质量门控闭环重新通过：17.455 s DESCENDING、59.455 s RETURNING、101.456 s COMPLETE、102.520 s PX4 AUTO.LOITER；机体外离底最小 1.384 m、侧墙最小 4.445 m、XY 最大偏移 0.141 m，2006 帧转发测距都与原始 ray 对应。中途外部模式服务切 AUTO.LOITER 的复测中，PX4 于 33.520 s 实际切模，0.080 s 后调度器撤销任务、0.031 s 后路由器不再就绪，后续 28.097 s 无 OFFBOARD 重入或新增 setpoint。bag 本地保留于 `/home/nuc/task2_logs/probes/`，复核指令与限制写入 `docs/task2_shaft_logic_2026-09-18.md`。仿真不能验证真实 CH5 接管或失去可靠 Z 时的悬停/返航，生产配置继续 `shaft_task_available=false`。 晚到意图修复后的真正最终代码又重跑 22 m 正常闭环：17.424 s 下探、59.424 s 返航、101.274 s 完成、102.322 s PX4 AUTO.LOITER；机体外离底最小 1.434 m、侧墙最小 4.476 m、XY 最大偏移 0.139 m，2106 帧转发测距逐帧匹配原始 ray。bag 为 `/home/nuc/task2_logs/probes/task2_22m_final_handoff_20260918.bag`。
+
+## 2026-09-18：真机拆桨联调中途暂停
+
+用户接上 NUC、PX4、MID360s，要求核对坐标系及指令链。现场 /dev/ttyUSB0 对应 CH340，MID360s 192.168.1.157 可达；11312 ROS master 留有 /use_sim_time=true，联调前改为 false。仅启动 `px4_fastlio_localization.launch`（没有 SUPER/任务指令），雷达点云约 10 Hz、IMU 200 Hz、FAST-LIO2 /Odometry 10 Hz、/mavros/vision_pose/pose_cov 30 Hz；MAVROS connected=true、armed=false、AUTO.LOITER。视觉桥报告 STREAMING/healthy=true。PX4 参数实读 EKF2_EV_CTRL=9（视觉水平位置+航向）、EKF2_HGT_REF=2（测距高度参考）；视觉 Z 约 -0.04 m，PX4 本地 Z 约 +1.17 m，尚不能判定任务指令高度坐标对齐。/mavros/estimator_status 的 const_pos_mode=true，单凭视觉话题有数据不能确认当前确实融合视觉水平位置。遥控器未接入，MAVROS 诊断 rc receiver=Fail，这一点由用户确认。
+
+仅进行一次 3 秒、20 Hz、未解锁、未切模式的原地保持设定点探针；/mavros/setpoint_raw/target_local 收到 27 个回传，但位置为 NaN，不能据此证明飞控按目标运行；PX4 始终 AUTO.LOITER、未解锁。尚未完成动态 X/Y/Z/偏航轴向检验，也未验证 OFFBOARD/任务一真实执行。之后用户表示连接已断开，要求先等；已停止本轮 roslaunch 及其雷达、FAST-LIO2、MAVROS、视觉桥子进程，没有继续触碰硬件。待用户确认重新接通再续测。
+
+## 2026-09-18：恢复连接后的拆桨位姿与指令联调
+
+用户重新接好雷达、NUC、PX4，并接入遥控器，随后表示遥控器暂不处理。再次运行仅定位链路，确认雷达 10 Hz、IMU 200 Hz、Fast-LIO2 10 Hz、送 MAVROS 的视觉位姿 30 Hz，PX4 串口连接。初期遥控诊断和水平位置控制均 Fail；雷达被用户单独左右晃动后，PX4 水平位姿跟随视觉位姿，x/y 控制诊断转 Ok，运动期间 const_pos_mode 曾 false，静止后又 true。遥控诊断稍后也转 Ok，但用户要求忽略，因此未验收 CH5/CH7。雷达未按已知刚性机体关系一起运动，不能凭该动作验证真正安装外参。
+
+用户询问左右晃雷达在 PX4 看来是机头还是机身方向。18 秒数据中，PX4 估计位移投影到其机体前/左轴的范围约 0.037/0.113 m，视觉约 0.042/0.111 m；用户明确向雷达左侧移动的采样末段，PX4 机体左向分量由近零到 +0.060 m，说明在当前估计框架内以横向分量为主。不过视觉航向也输入 PX4，因此这个结果不能替代雷达相对真实机体的安装角校准。用户问“高度差仍未解决”时，解释视觉桥输出 Z 约 -0.05 m、PX4 本地 Z 约 +0.95～1.03 m，同一 SUPER 目标 Z 不等于 PX4 本地目标 Z；PX4 配置选择测距高度参考、视觉 Z 未使能，但具体当下高度融合源未用估计器日志确证。差值随时间变化，不能盲填固定补偿。
+
+进行临时指令桥探针时设置 automatic_mode_switch=false，始终不解锁、不切 OFFBOARD，仅重复 PX4 当前位置的保持目标；桥输出 160 帧，MAVROS setpoint 输入 169 帧，末端 xyz 一致，PX4 前后均 STABILIZED/未解锁。这证明 NUC 指令桥→MAVROS 通路，尚不证明 PX4 实际 OFFBOARD 执行。雷达单独移动会被 PX4 误当成整机运动，故测试结束已停本轮雷达驱动、FAST-LIO2、MAVROS、视觉/指令桥。独立详细证据与未完成项见 `docs/real_mid360_px4_bench_integration_2026-09-18.md`。本轮 Fast-LIO2 按既有配置在本机产生约 638 MB 的 `PCD/scans.pcd`，未删除也未上传。
+
+## 2026-09-18：按用户要求启用视觉 Z、关闭测距 EKF 融合
+
+用户确认旧高度差确实与 Fast-LIO2 Z 未参与 PX4 融合有关，明确授权将视觉 Z 加入 EKF 并停止机载激光测距的 EKF 融合。通过 MAVROS 的 MAVLink 参数服务（与 QGC 参数修改同一飞控设置）在 PX4 connected=true、armed=false 时先拉取并备份原值：EKF2_EV_CTRL=9、EKF2_HGT_REF=2、EKF2_RNG_CTRL=2、EKF2_BARO_CTRL=1。按 PX4 官方融合位定义写入并回读 EKF2_EV_CTRL=11、EKF2_HGT_REF=3、EKF2_RNG_CTRL=0；气压计保持 1。飞控接受 reboot 命令且重新连通后再次强制拉取参数，值仍是 11/3/0/1。这里关闭的是测距在 EKF 中的融合，不是关闭测距硬件，也不使任务二的独立见底信号自动可用。
+
+为避免本轮重启 Fast-LIO2 覆盖上一轮 638 MB 点云，在仅定位启动文件加入默认不变的 save_pcd 参数，复测时指定 save_pcd:=false；启动参数确认为 false，结束后原 scans.pcd 的大小与 14:40 时间戳均未改变。复测 25 s 时间配对的视觉/PX4 本地 Z 差在 -0.002 至 +0.004 m，下一段 25 s 静止采样最大瞬时差约 0.005 m；原约 1 m 偏差在静止台架条件下消失。用户尚未完成已请求的上下动作，故动态 Z 跟随仍未验证，雷达未刚性安装，真实任务轨迹、OFFBOARD 执行与有桨飞行亦未验收。由于单独移动雷达会向 PX4 发送虚假的机体位姿，复测结束已停本轮雷达、FAST-LIO2、MAVROS 和视觉桥进程；11312 ROS master 保留。详细数据及回滚值见 `docs/real_mid360_px4_bench_integration_2026-09-18.md`。

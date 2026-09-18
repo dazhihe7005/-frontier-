@@ -131,6 +131,10 @@ export ROS_MASTER_URI=http://localhost:11312
 roslaunch mine_uav_control px4_fastlio_localization.launch rviz:=false
 ```
 
+仅做短时拆桨定位复测、且要保留上一次 Fast-LIO2 生成的
+`FAST_LIO/PCD/scans.pcd` 时，可在末尾加 `save_pcd:=false`。该开关只覆盖
+本次 ROS 启动的 PCD 保存参数，不更改算法配置文件；默认仍为原配置的保存行为。
+
 如需同时查看点云，把最后一项改为 `rviz:=true`。保持上述终端运行，在另一个终端检查：
 
 ```bash

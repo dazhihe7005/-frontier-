@@ -5,12 +5,16 @@
        default="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"/>
   <arg name="px4_baud" default="500000"/>
   <arg name="rviz" default="false"/>
+  <arg name="save_pcd" default="true"/>
 
   <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360s.launch"/>
 
   <include file="$(find fast_lio)/launch/mapping_mid360.launch">
     <arg name="rviz" value="$(arg rviz)"/>
   </include>
+  <!-- Optional bench probe: keep the previous large PCD file untouched. -->
+  <param unless="$(arg save_pcd)" name="/pcd_save/pcd_save_en"
+         type="bool" value="false"/>
 
   <include file="$(find mine_uav_control)/launch/px4_serial.launch">
     <arg name="device" value="$(arg px4_device)"/>
