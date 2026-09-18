@@ -15,6 +15,7 @@ class SitlShaftPx4Router:
     def __init__(self):
         self.intent_timeout = float(rospy.get_param("~intent_timeout", 0.3))
         self.pose_timeout = float(rospy.get_param("~pose_timeout", 0.5))
+        self.state_timeout = float(rospy.get_param("~state_timeout", 1.5))
         self.enable = False
         self.owned = False
         self.takeover_latched = False
@@ -26,6 +27,7 @@ class SitlShaftPx4Router:
         self.fixed_xy = None
         self.status = "IDLE"
         self.state = State()
+        self.state_time = rospy.Time(0)
         self.last_fallback = rospy.Time(0)
         self.command_pub = rospy.Publisher(
             "/mavros/setpoint_raw/local", PositionTarget, queue_size=10
@@ -48,10 +50,12 @@ class SitlShaftPx4Router:
         if not message.data:
             self.fixed_xy = None
             self.takeover_latched = False
+            self.intent = None  # A later task must supply a new command.
+            self.intent_time = rospy.Time(0)
         self.enable = message.data
 
     def on_intent(self, message):
-        if message.header.frame_id != "map" or not math.isfinite(
+        if not self.enable or message.header.frame_id != "map" or not math.isfinite(
                 message.twist.linear.z):
             return
         self.intent = message
@@ -66,6 +70,7 @@ class SitlShaftPx4Router:
 
     def on_state(self, message):
         self.state = message
+        self.state_time = rospy.Time.now()
 
     def publish_ready(self, value):
         if self.ready != value:
@@ -101,17 +106,32 @@ class SitlShaftPx4Router:
             rospy.logerr_throttle(2.0, "SITL shaft router requires /use_sim_time")
             return
         now = rospy.Time.now()
+        state_age = (now - self.state_time).to_sec()
+        state_fresh = (not self.state_time.is_zero() and
+                       -0.05 <= state_age <= self.state_timeout)
         pose_fresh = self.pose is not None and (
-            now - self.pose_time).to_sec() <= self.pose_timeout
+            -0.05 <= (now - self.pose_time).to_sec() <= self.pose_timeout)
         intent_fresh = self.intent is not None and (
-            now - self.intent_time).to_sec() <= self.intent_timeout
+            -0.05 <= (now - self.intent_time).to_sec() <= self.intent_timeout and
+            not self.intent.header.stamp.is_zero() and
+            -0.05 <= (now - self.intent.header.stamp).to_sec() <=
+            self.intent_timeout)
         if self.owned and self.state.mode != "OFFBOARD":
             self.owned = False
-            self.takeover_latched = True
+            # External takeover is latched while the old task is still
+            # enabled. A completion/fault already revoked by the scheduler
+            # must not re-latch after its one false enable message.
+            self.takeover_latched = self.enable
             self.publish_ready(False)
             return  # A pilot/PX4 takeover must not be undone.
         if self.takeover_latched:
             self.publish_ready(False)
+            return
+        if self.owned and not state_fresh:
+            self.publish_ready(False)
+            if pose_fresh:
+                self.publish_hold(now)
+            self.request_fallback(now)
             return
         if self.owned and (not self.enable or not pose_fresh or
                            not intent_fresh or self.status not in
@@ -122,7 +142,8 @@ class SitlShaftPx4Router:
                     self.publish_hold(now)
                 self.request_fallback(now)
             return
-        if (not self.enable or not self.state.connected or not self.state.armed or
+        if (not self.enable or not state_fresh or not self.state.connected or
+                not self.state.armed or
                 self.state.mode != "OFFBOARD" or not pose_fresh or
                 not intent_fresh or self.status not in ("DESCENDING", "RETURNING")):
             self.publish_ready(False)

@@ -132,3 +132,36 @@ python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
 `rostest mine_uav_control shaft_mission_ros.test` passes 3 tests, including wrong source, excessive sigma, invalid flag, replayed depth timestamp, wrong range frame and active fault. Six shaft state-machine GTests and the CH7/CH11 scheduler edge integration test pass. The 420 m result remains a perfect-sensor kinematic unit test, **not** a 420 m PX4/Gazebo or physical flight. No reliable real Z/depth source, physical laser, real RC takeover or safe recovery under PX4 Z loss has been validated. Production Task 2 must remain disabled.
 
 As a fail-closed default check, the generic `task2_shaft_logic.launch` was started alone on isolated ROS master port 11323 without test overrides: `/mine_uav/shaft/input_gate=UNCONFIGURED`, mission status `IDLE`, and no PX4 router was launched. The process was then stopped. The pre-existing 11312 master was left untouched.
+
+## Scheduler and Task 2 ownership watchdogs
+
+The CH7/CH11 scheduler and SITL-only Task 2 router were audited for mission handoff, not just a single successful flight. Three scheduler gaps had the same root pattern: stale positive state was retained indefinitely. `/mavros/state` had no freshness check; a stopped state stream left the last `connected=true` usable forever. `/mine_uav/shaft/status` had no freshness check; a dead shaft node could leave Task 2 selected. Finally, a shaft node that stayed `IDLE` for lack of sensor input never caused the scheduler to time out. Each was reproduced in the extended ROS edge test before the scheduler change (the first exposed case kept Task 2 selected past the expected MAVROS timeout). The scheduler now revokes Task 2 after stale MAVROS state (default 2.5 s), stale shaft status (default 0.6 s), or failure to reach `DESCENDING`/`RETURNING` within 4 s of selection. A backward `/clock` jump also invalidates cached freshness and rebuilds RC switch baselines. The test uses shorter override values to exercise all three exits, then verifies a fresh CH11 edge can select Task 2 again. These timeouts withdraw NUC task authority; they are not a proof that PX4 can safely hold altitude on a lost estimator.
+
+A separate route-ownership defect was confirmed by a callback-level regression: if the scheduler sent its one `shaft_enable=false` on completion while PX4 was still in OFFBOARD, then PX4 changed mode a moment later, the router latched the mode exit **after** the false edge. No further false message was guaranteed, so a later CH11 run could remain blocked. The router now latches an external takeover only while that task is still enabled; on disable it also discards the previous velocity intent and rejects any late-arriving intent while disabled. It independently rejects stale PX4-state heartbeats (default 1.5 s) and replayed intent timestamps, withdrawing command readiness and requesting the SITL fallback instead of continuing a descent command. Five callback-level tests cover delayed exit/restart, pilot takeover latch, stale PX4 state, replayed intent and a late intent after disable; the delayed-exit and late-intent tests failed against the old router and pass after these changes. Real RC takeover is still untested.
+
+The final code was rerun in isolated 22 m PX4/Gazebo SITL with the Gazebo ray and depth quality gate. Normal bag `/home/nuc/task2_logs/probes/task2_22m_scheduler_router_watchdogs_20260918.bag`: DESCENDING 17.455 s, RETURNING 59.455 s, COMPLETE 101.456 s, PX4 AUTO.LOITER 102.520 s; minimum body-outside bottom margin 1.384 m, minimum side margin 4.445 m, max XY deviation 0.141 m; all 2006 forwarded bottom-range samples in the bag match raw ray samples. Mid-descent mode exit bag `/home/nuc/task2_logs/probes/task2_22m_takeover_watchdogs_20260918.bag`: PX4 actually entered AUTO.LOITER at 33.520 s, scheduler withdrew Task 2 0.080 s later, command-ready became false 0.031 s later, and over 28.097 s there was no observed OFFBOARD re-entry or further setpoint. Bags are local only. The normal flight and mode-service takeover passed their analyzers; no physical CH5 or real no-Z response is implied.
+
+After the late-intent race fix, the **actual final code** was rerun once more in the normal 22 m SITL. `/home/nuc/task2_logs/probes/task2_22m_final_handoff_20260918.bag` shows DESCENDING 17.424 s, RETURNING 59.424 s, COMPLETE 101.274 s, AUTO.LOITER 102.322 s, minimum body-outside bottom margin 1.434 m, minimum side margin 4.476 m and max XY deviation 0.139 m. All 2106 forwarded range samples recorded in this bag match the raw Gazebo ray by timestamp and value. The callback-level late-intent regression is additionally registered with catkin nosetests (5/5 passed). The previous takeover bag predates only the disabled-intent filter; that filter rejects messages while disabled and does not change the enabled takeover path. Real takeover remains untested.
+
+```bash
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_final_handoff_20260918.bag \
+  --require-complete --require-ray-relay --min-bottom-margin 1 \
+  --max-xy-deviation 0.5 --max-range-alignment-error 0.1
+```
+
+Recheck with:
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+rostest mine_uav_control mission_scheduler_edges.test
+python3 -m unittest discover -s /home/nuc/frontier-upload/test \
+  -p test_sitl_shaft_router_lifecycle.py -v
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_scheduler_router_watchdogs_20260918.bag \
+  --require-complete --require-ray-relay --require-gate-event OPEN \
+  --min-bottom-margin 1 --max-xy-deviation 0.5 --max-range-alignment-error 0.1
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_takeover_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_takeover_watchdogs_20260918.bag
+```

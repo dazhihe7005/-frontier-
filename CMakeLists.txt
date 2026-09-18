@@ -96,6 +96,7 @@ if(CATKIN_ENABLE_TESTING)
   add_rostest(test/super_bridge_manual_override.test)
   add_rostest(test/shaft_mission_ros.test)
   add_rostest(test/mission_scheduler_edges.test)
+  catkin_add_nosetests(test/test_sitl_shaft_router_lifecycle.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp

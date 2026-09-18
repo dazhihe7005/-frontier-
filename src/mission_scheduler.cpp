@@ -38,6 +38,12 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
   private_nh_.param("switch_stable_time", switch_stable_time_, switch_stable_time_);
   private_nh_.param("rc_timeout", rc_timeout_, rc_timeout_);
   private_nh_.param("odometry_timeout", odometry_timeout_, odometry_timeout_);
+  private_nh_.param("mavros_state_timeout", mavros_state_timeout_,
+                    mavros_state_timeout_);
+  private_nh_.param("shaft_status_timeout", shaft_status_timeout_,
+                    shaft_status_timeout_);
+  private_nh_.param("shaft_start_timeout", shaft_start_timeout_,
+                    shaft_start_timeout_);
   private_nh_.param("decision_rate", decision_rate_, decision_rate_);
   private_nh_.param("require_odometry", require_odometry_, require_odometry_);
   private_nh_.param("require_mavros_connection", require_mavros_connection_,
@@ -64,6 +70,16 @@ MissionScheduler::MissionScheduler(const ros::NodeHandle& nh,
   }
   if (!std::isfinite(odometry_timeout_) || odometry_timeout_ <= 0.0) {
     odometry_timeout_ = 1.0;
+  }
+  if (!std::isfinite(mavros_state_timeout_) || mavros_state_timeout_ <= 0.0) {
+    mavros_state_timeout_ = 2.5;
+  }
+  if (!std::isfinite(shaft_status_timeout_) || shaft_status_timeout_ <= 0.0) {
+    shaft_status_timeout_ = 0.6;
+  }
+  if (!std::isfinite(shaft_start_timeout_) ||
+      shaft_start_timeout_ <= shaft_status_timeout_) {
+    shaft_start_timeout_ = std::max(4.0, shaft_status_timeout_ + 1.0);
   }
   if (!std::isfinite(decision_rate_) || decision_rate_ <= 0.0) {
     decision_rate_ = 10.0;
@@ -126,6 +142,7 @@ void MissionScheduler::odometryCallback(const nav_msgs::Odometry::ConstPtr&) {
 }
 
 void MissionScheduler::mavrosStateCallback(const mavros_msgs::State::ConstPtr& message) {
+  last_mavros_state_time_ = ros::Time::now();
   const bool manual_mode = message->mode == "MANUAL" ||
                            message->mode == "POSCTL" ||
                            message->mode == "ALTCTL" ||
@@ -152,6 +169,8 @@ void MissionScheduler::goafFinishedCallback(const std_msgs::Bool::ConstPtr& mess
 }
 
 void MissionScheduler::shaftStatusCallback(const std_msgs::String::ConstPtr& message) {
+  last_shaft_status_time_ = ros::Time::now();
+  have_shaft_status_ = true;
   shaft_status_ = message->data;
   if (active_task_ == Task::kShaftExploration &&
       (shaft_status_ == "DESCENDING" || shaft_status_ == "RETURNING")) {
@@ -171,6 +190,9 @@ MissionScheduler::RcLevel MissionScheduler::classifyRc(uint16_t value) const {
 
 bool MissionScheduler::updateEdge(RcEdge* edge, RcLevel level,
                                   const ros::Time& now) {
+  if (!edge->pending_since.isZero() && now < edge->pending_since) {
+    *edge = RcEdge();  // /clock moved backwards: rebuild a safe baseline.
+  }
   if (level == RcLevel::kInvalid) {
     edge->pending = RcLevel::kInvalid;
     return false;
@@ -201,8 +223,12 @@ void MissionScheduler::timerCallback(const ros::TimerEvent&) {
   const bool rc_fresh = have_rc_ && ageSec(last_rc_time_, now) <= rc_timeout_;
   const bool odometry_fresh =
       have_odometry_ && ageSec(last_odometry_time_, now) <= odometry_timeout_;
+  const bool mavros_state_fresh = have_mavros_state_ &&
+      ageSec(last_mavros_state_time_, now) <= mavros_state_timeout_;
   const bool mavros_ok = !require_mavros_connection_ ||
-                         (have_mavros_state_ && mavros_connected_);
+                         (mavros_state_fresh && mavros_connected_);
+  const bool shaft_status_fresh = have_shaft_status_ &&
+      ageSec(last_shaft_status_time_, now) <= shaft_status_timeout_;
   const bool was_rearming = rearm_pending_;
   // Consume edges even while busy, so an ignored switch cannot start a task
   // later when the current task finishes. A stale RC link never creates an edge.
@@ -233,7 +259,7 @@ void MissionScheduler::timerCallback(const ros::TimerEvent&) {
   if (!rc_fresh || !goaf_channel_available_ || !shaft_channel_available_) {
     reason = "rc_lost_or_channel_unavailable";
   } else if (!mavros_ok) {
-    reason = "mavros_disconnected";
+    reason = mavros_state_fresh ? "mavros_disconnected" : "mavros_state_lost";
   } else if (active_task_ == Task::kGoafExploration &&
              require_odometry_ && !odometry_fresh) {
     reason = "fastlio2_odometry_lost";
@@ -243,6 +269,13 @@ void MissionScheduler::timerCallback(const ros::TimerEvent&) {
              (shaft_status_ == "COMPLETE" ||
               shaft_status_ == "FAULT_NO_SAFE_AUTONOMOUS_RECOVERY")) {
     reason = shaft_status_ == "COMPLETE" ? "task2_complete" : "task2_fault";
+  } else if (active_task_ == Task::kShaftExploration &&
+             ageSec(shaft_activation_time_, now) > shaft_status_timeout_ &&
+             !shaft_status_fresh) {
+    reason = "task2_status_lost";
+  } else if (active_task_ == Task::kShaftExploration && !shaft_started_ &&
+             ageSec(shaft_activation_time_, now) > shaft_start_timeout_) {
+    reason = "task2_start_timeout";
   } else if (active_task_ != Task::kHold && external_mode_exit_pending_) {
     reason = "px4_offboard_exited";
   }
@@ -282,6 +315,10 @@ void MissionScheduler::timerCallback(const ros::TimerEvent&) {
          << " auto_enabled=" << (auto_enabled_ ? "true" : "false")
          << " rc_age=" << (have_rc_ ? ageSec(last_rc_time_, now) : -1.0)
          << " odom_age=" << (have_odometry_ ? ageSec(last_odometry_time_, now) : -1.0)
+         << " mavros_age=" << (have_mavros_state_ ?
+             ageSec(last_mavros_state_time_, now) : -1.0)
+         << " shaft_status_age=" << (have_shaft_status_ ?
+             ageSec(last_shaft_status_time_, now) : -1.0)
          << " mavros_connected=" << (mavros_connected_ ? "true" : "false")
          << " armed=" << (mavros_armed_ ? "true" : "false")
          << " reason=" << last_reason_
@@ -306,6 +343,7 @@ void MissionScheduler::applyTask(Task task, const std::string& reason,
   if (task == Task::kShaftExploration) {
     shaft_started_ = false;
     shaft_status_.clear();
+    shaft_activation_time_ = ros::Time::now();
   }
   if (task == Task::kHold && previous_task != Task::kHold) {
     // A switch movement that began while the old task was active must not
@@ -370,7 +408,9 @@ double MissionScheduler::ageSec(const ros::Time& stamp, const ros::Time& now) co
   if (stamp.isZero()) {
     return std::numeric_limits<double>::infinity();
   }
-  return std::max(0.0, (now - stamp).toSec());
+  const double age = (now - stamp).toSec();
+  return age < -0.05 ? std::numeric_limits<double>::infinity() :
+                      std::max(0.0, age);
 }
 
 }  // namespace mine_uav_control

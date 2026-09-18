@@ -9,10 +9,15 @@ low_threshold: 1300
 high_threshold: 1700
 switch_stable_time: 0.5
 rc_timeout: 1.0
+mavros_state_timeout: 2.5
 
 # Task 2 remains blocked in production until its real sensor and PX4 control
 # chain is validated. Its dedicated SITL launch may override this flag.
 shaft_task_available: false
+# Task 2 must publish status continuously. Revoke authority if its node dies
+# or if it never reaches DESCENDING/RETURNING after being selected.
+shaft_status_timeout: 0.6
+shaft_start_timeout: 4.0
 
 # Task-one Fast-LIO2 gate. Task two uses its own depth and range validation.
 odometry_topic: "/Odometry"

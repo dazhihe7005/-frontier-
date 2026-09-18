@@ -84,6 +84,9 @@ class MissionScheduler {
   double switch_stable_time_{0.5};
   double rc_timeout_{1.0};
   double odometry_timeout_{1.0};
+  double mavros_state_timeout_{2.5};
+  double shaft_status_timeout_{0.6};
+  double shaft_start_timeout_{4.0};
   double decision_rate_{10.0};
   bool require_odometry_{true};
   bool require_mavros_connection_{false};
@@ -92,6 +95,7 @@ class MissionScheduler {
   bool have_rc_{false};
   bool have_odometry_{false};
   bool have_mavros_state_{false};
+  bool have_shaft_status_{false};
   bool mavros_connected_{false};
   bool mavros_armed_{false};
 
@@ -115,6 +119,9 @@ class MissionScheduler {
 
   ros::Time last_rc_time_;
   ros::Time last_odometry_time_;
+  ros::Time last_mavros_state_time_;
+  ros::Time last_shaft_status_time_;
+  ros::Time shaft_activation_time_;
 };
 
 }  // namespace mine_uav_control

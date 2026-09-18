@@ -7,9 +7,13 @@
     <param name="switch_stable_time" value="0.12"/>
     <param name="rc_timeout" value="0.5"/>
     <param name="odometry_timeout" value="0.5"/>
+    <param name="mavros_state_timeout" value="0.45"/>
+    <param name="shaft_status_timeout" value="0.35"/>
+    <param name="shaft_start_timeout" value="0.8"/>
     <param name="shaft_task_available" value="true"/>
+    <param name="require_mavros_connection" value="true"/>
     <param name="decision_rate" value="30.0"/>
   </node>
   <test test-name="mission_scheduler_edges" pkg="mine_uav_control"
-        type="test_mission_scheduler_edges.py" time-limit="30"/>
+        type="test_mission_scheduler_edges.py" time-limit="40"/>
 </launch>
