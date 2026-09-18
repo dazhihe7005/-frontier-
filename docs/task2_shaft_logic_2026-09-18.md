@@ -22,7 +22,7 @@ The COMPLETE and FAULT states now remain latched even if sensors subsequently st
 
 1. Select and independently validate a real depth/entrance-reference source. A bottom-only laser cannot locate the starting elevation for return; commanded speed integrated over time is insufficient as a safety-critical substitute.
 2. Add a source-quality/uncertainty contract and a way to handle loss at depth. Currently FAULT has no guaranteed safe autonomous recovery.
-3. Replace the synthetic Gazebo-truth range with a Gazebo ray sensor, deliberately degrade localization, then verify manual takeover, collision margin, return and failsafes at multiple shaft depths including 400+ m. Keep real-flight selection disabled until these pass.
+3. Replace the synthetic Gazebo-truth range with a Gazebo ray sensor, deliberately degrade localization, then verify real RC manual takeover, collision margin, return and failsafes at multiple shaft depths including 400+ m. Keep real-flight selection disabled until these pass.
 
 ## 22 m PX4/Gazebo interface probe (same day)
 
@@ -33,7 +33,7 @@ Two separate root causes were exposed before obtaining a passing flight:
 1. Without an entrance platform, the disarmed Gazebo vehicle fell to the shaft bottom before the simulated pilot armed it. The first run therefore took off from the bottom and cannot be interpreted as a shaft mission. A named temporary platform now supports initial takeoff and is deleted only after an armed stable hover; the mission waits without motion for valid sensor frames after enable.
 2. With that platform, the first full 22 m closed loop still had only **0.504 m** minimum body-outside bottom clearance (0.4 m equivalent radius). The synthetic range was generated from PX4 odometry whose origin was established after the vehicle settled on the platform, but its nominal bottom depth was fixed relative to the earlier spawn position. At the physical lowest point, sensor range said **1.804 m** while actual center-to-floor distance was **0.904 m**. Across the flight the maximum range/world discrepancy was **1.086 m**. This constant-frame error, not a proved PX4 braking failure, explains the missed 1 m clearance requirement. That failure bag is `/home/nuc/task2_logs/probes/task2_22m_pad_px4_sitl_20260918.bag`.
 
-The adapter now uses Gazebo world truth to generate idealized, internally aligned depth and bottom range, and publishes nothing while the entrance pad is present. The same 22 m flight then reached RETURNING at 60.109 s and COMPLETE at 102.159 s, followed by PX4 AUTO.LOITER at 102.520 s; no task fault or in-task disarm. Minimum body-outside bottom clearance was **1.373 m**, minimum side-wall clearance **4.465 m**, and maximum XY deviation from the initial active position **0.142 m**. The maximum range/world disagreement fell to **0.032 m**. The pass bag is `/home/nuc/task2_logs/probes/task2_22m_world_truth_px4_sitl_20260918.bag`. Both bags are local evidence, not in GitHub. A later small router change latches external OFFBOARD takeover and has syntax/launch validation but **has not been rerun in PX4 SITL**.
+The adapter now uses Gazebo world truth to generate idealized, internally aligned depth and bottom range, and publishes nothing while the entrance pad is present. The same 22 m flight then reached RETURNING at 60.109 s and COMPLETE at 102.159 s, followed by PX4 AUTO.LOITER at 102.520 s; no task fault or in-task disarm. Minimum body-outside bottom clearance was **1.373 m**, minimum side-wall clearance **4.465 m**, and maximum XY deviation from the initial active position **0.142 m**. The maximum range/world disagreement fell to **0.032 m**. The pass bag is `/home/nuc/task2_logs/probes/task2_22m_world_truth_px4_sitl_20260918.bag`. Both bags are local evidence, not in GitHub. A later router change latches external OFFBOARD takeover; it has now been rerun in PX4 SITL using the separate mode-exit test below.
 
 To re-audit the passing bag:
 
@@ -65,4 +65,33 @@ python3 /home/nuc/frontier-upload/scripts/analyze_task2_sitl_bag.py \
   --max-post-fault-descent 1.0 --min-post-fault-observation 10
 ```
 
-The analyzer deliberately does not apply its range-alignment threshold to a range-loss bag: the most recent range becomes stale by design. Remaining blockers are a physically independent depth/entrance reference, actual laser integration, degraded-Z tests, a non-GPS recovery policy, manual takeover checks, and 400+ m/airflow/battery validation. None is solved by this fault injection.
+The analyzer deliberately does not apply its range-alignment threshold to a range-loss bag: the most recent range becomes stale by design. Remaining blockers are a physically independent depth/entrance reference, actual laser integration, degraded-Z tests, a non-GPS recovery policy, real RC takeover checks, and 400+ m/airflow/battery validation. None is solved by this fault injection.
+
+## External OFFBOARD exit while descending (SITL only)
+
+With the real MID360s not mounted, we tested another radar-independent boundary: whether Task 2 keeps commanding the vehicle after PX4 leaves OFFBOARD. An initial attempt sent `POSCTL` with `/mavros/set_mode` at about 6.0 m depth. MAVROS returned `mode_sent=true`, but PX4 logged command result 1 and `/mavros/state` stayed in OFFBOARD. That is **not** a successful manual takeover. With the same isolated 22 m SITL, requesting `AUTO.LOITER` produced PX4 command result 0 and an observed `/mavros/state` mode change. This is an external **mode-service** exit, not a physical RC CH5 takeover.
+
+The reproducible injector `scripts/sitl_shaft_takeover_injector.py` is opt-in (`inject_takeover:=true`), checks simulated time and the launch's local UDP FCU URL, sends one mode request after 6 m descent, then distinguishes `SENT_WAIT_CONFIRM` from `CONFIRMED` using PX4's actual `/mavros/state`. In `/home/nuc/task2_logs/probes/task2_22m_auto_takeover_20260918.bag`, shaft descent began at 17.369 s; the injector sent at 32.601 s, and PX4 was observed in AUTO.LOITER at 33.522 s. The scheduler entered HOLD 0.078 s later and the task command-ready flag went false 0.028 s later. Over the next 36.137 s of observation, there was no observed OFFBOARD re-entry and **zero** new MAVROS position/raw setpoints. This first bag predates the extra local FCU URL guard. A second flight with that guard and the stricter auditor, `/home/nuc/task2_logs/probes/task2_22m_auto_takeover_guarded_20260918.bag`, again confirmed OFFBOARD during descent followed by actual AUTO.LOITER at 33.526 s, HOLD 0.074 s later, command-ready false 0.024 s later, no observed OFFBOARD re-entry or new setpoints over 17.646 s. Both bags stay local, not in GitHub.
+
+To repeat and audit (isolated SITL only; never against a real FCU):
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/nuc/super_ws/devel/setup.bash
+source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
+  /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
+export ROS_MASTER_URI=http://localhost:11319
+export GAZEBO_MASTER_URI=http://localhost:11499
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic:${ROS_PACKAGE_PATH}
+roslaunch -p 11319 mine_uav_control task2_shaft_22m_px4_sitl.launch \
+  gui:=false inject_takeover:=true takeover_after_depth:=6.0
+```
+
+Record the listed mode, mission, readiness and setpoint topics during the run; audit the saved evidence with:
+
+```bash
+python3 /home/nuc/frontier-upload/scripts/analyze_task2_takeover_bag.py \
+  /home/nuc/task2_logs/probes/task2_22m_auto_takeover_guarded_20260918.bag
+```
+
+The analyzer also correctly fails when asked to verify `--expected-mode POSCTL` against the LOITER bag. This verifies command withdrawal after an accepted external mode exit with ideal SITL localization, **not** physical RC override, no-Z flight, or safe hover with a failed real positioning source. Production Task 2 remains unavailable.

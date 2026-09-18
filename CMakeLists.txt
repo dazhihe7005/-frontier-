@@ -148,6 +148,7 @@ catkin_install_python(PROGRAMS
   scripts/sitl_shaft_sensor_adapter.py
   scripts/sitl_shaft_px4_router.py
   scripts/sitl_shaft_release_pad.py
+  scripts/sitl_shaft_takeover_injector.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

@@ -4,6 +4,9 @@
        range is synthetic, not a Gazebo ray sensor or real laser. -->
   <arg name="gui" default="false"/>
   <arg name="range_drop_after_depth" default="-1.0"/>
+  <arg name="inject_takeover" default="false"/>
+  <arg name="takeover_after_depth" default="6.0"/>
+  <arg name="takeover_mode" default="AUTO.LOITER"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/shaft_22m_logic_sitl.world"/>
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -45,4 +48,11 @@
   </node>
   <node pkg="mine_uav_control" type="sitl_shaft_px4_router.py"
         name="sitl_shaft_px4_router" output="screen" required="true"/>
+  <group if="$(arg inject_takeover)">
+    <node pkg="mine_uav_control" type="sitl_shaft_takeover_injector.py"
+          name="sitl_shaft_takeover_injector" output="screen" required="true">
+      <param name="trigger_depth" value="$(arg takeover_after_depth)"/>
+      <param name="target_mode" value="$(arg takeover_mode)"/>
+    </node>
+  </group>
 </launch>

@@ -685,3 +685,5 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 任务二后续完成首个 **22 m PX4/Gazebo 接口闭环**：专用启动文件 `task2_shaft_22m_px4_sitl.launch` 仅在仿真中启用任务二，并用 Gazebo 世界真值模拟独立深度与下视测距；PX4 经 OFFBOARD 下探、井底触发、返航，完成后切 AUTO.LOITER。bag 显示离底最小机体外余量 1.373 m、XY 最大偏移 0.142 m。第一次完整闭环因理想测距基准错约 0.9 m 只剩 0.504 m 余量，失败与修正的 A/B 证据均在[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。**这不等于真实 400 m 竖井或无可靠 Z 定位已验证**；生产调度器仍禁用任务二，未接真实测距、独立深度源或人工接管验证。
 
 调度器现按 CH7/CH11 的稳定电平变化分别启动任务一/任务二；新版 ROS 边沿测试和两任务各自的 SITL 已通过。任务二专用 SITL 还可用 `range_drop_after_depth:=6.0` 在下探 6 m 后停止模拟测距，检查传感器超时、任务撤销和 PX4 模式交接。延长观测的故障试验中，从 FAULT 到 AUTO.LOITER 约 0.539 s，后续 24.667 s 内最大额外下沉约 0.152 m；这是标准 SITL 定位有效时的结果，不能外推到无可靠 Z 的实井。详见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
+
+雷达未装机期间，新增任务二“下探中从 OFFBOARD 外部切模”的可重复 SITL 测试：`task2_shaft_22m_px4_sitl.launch inject_takeover:=true` 在 6 m 深度请求 `AUTO.LOITER`，必须由 `/mavros/state` 确认（仅 `mode_sent=true` 不算成功）。实际确认后调度器约 0.078 s 退回 HOLD，36.137 s 内没有恢复 OFFBOARD 或继续发送 setpoint。`POSCTL` 模拟请求曾被 PX4 拒绝；真实遥控器 CH5 人工接管仍未验证。证据与复核命令见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)，实机任务二仍禁用。
