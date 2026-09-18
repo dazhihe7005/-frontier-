@@ -2557,3 +2557,7 @@ run16 前墙等待约 6.11 s，PX4 实际高度下降 0.515 m、x 前移 0.925 m
 ## 2026-09-18：任务一真机实验可行性评估
 
 用户询问任务一能否进行真机实验。复核当前启动文件与已保存仿真证据后，结论是：可以进行拆桨的真机链路、通道、定位融合、坐标方向和人工接管验证；目前不应直接做有桨采空区自主飞行。关键差异是 `task1_real.launch` 使用 `config/super_task1.yaml`，而最近在迷宫/空旷场景通过机体外 ≥1 m 净距验收的是隔离 SITL 的 `config/super_task1_strict_clearance_probe.yaml`，该探针明示不能直接用于真实飞行。旧默认配置迷宫仿真曾出现机体外仅约 0.136 m 的墙距。真实 MID360s/Fast-LIO2 外参、PX4 融合及帧方向、CH5 飞手接管、失联与定位中断后的模式行为均未完成实机验收。新调度器在任务运行中忽略 CH7/CH11 再次拨动，所以 CH7 拨回低位并不是中止键；README 中旧的“CH7 低位停止”段落已过时，不能作为现场流程。真机桥默认退出 POSCTL，但定位失效时不能假设 POSCTL 必然安全悬停。建议逐级执行：拆桨联调与手持移动核坐标/模式/失效保护；通过后才讨论空旷、隔离、具备接管条件的系留或低风险飞行，最后才是洞内自主探测。没有新增飞行代码或放飞授权。
+
+## 2026-09-18：MID360s 到 Fast-LIO2 现场链路测试
+
+用户已接入 MID360s，询问能否收到 Fast-LIO 数据。现场只检查雷达到 NUC 的定位链路，未启动 PX4/任务一。NUC 雷达口 `enp89s0=192.168.1.10/24`，`192.168.1.157` ping 2/2 成功。起初仅存原有 11312 ROS master，驱动与 Fast-LIO 未运行；该 master 还残留 `/use_sim_time=true` 且 `/clock` 无发布者，不适合真实雷达频率/定位测试。改用隔离的真实时间 11320 master，启动 `msg_MID360s.launch`，驱动识别 device type 35；实测 `/livox/lidar` 约 10 Hz、`/livox/imu` 约 200 Hz。临时加载 Fast-LIO 的 mid360 参数并覆盖 `/pcd_save/pcd_save_en=false`，运行 `fastlio_mapping` 后，`/Odometry` 与 `/cloud_registered` 均约 10 Hz，frame_id `camera_init`，点云抽样宽度 4442 点，里程计姿态/位置可读取。配置输入 `/livox/lidar`、`/livox/imu`，外参平移 `[-0.011,-0.02329,0.04412]` m，`det_range=100` m；这仅是已加载参数，不等于真机外参或测距精度通过标定。上述结果证明雷达→驱动→Fast-LIO 发布链通畅，不证明任务决策器收到数据、PX4 EKF2 已融合、坐标系正确或定位精度足够。测试后关闭本轮 driver/Fast-LIO/11320 master，保留原 11312 master 未改。
