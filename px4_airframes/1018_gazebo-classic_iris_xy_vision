@@ -1,0 +1,15 @@
+#!/bin/sh
+# SITL-only shaft airframe: external vision horizontal position only.
+# Vertical position is deliberately NOT fused from external vision.
+
+. ${R}etc/init.d-posix/airframes/10015_gazebo-classic_iris
+
+# External vision contributes XY only. GPS is disabled.
+param set-default EKF2_EV_DELAY 5
+param set-default EKF2_EV_CTRL 1
+param set-default EKF2_GPS_CTRL 0
+
+# Baseline A/B uses barometer only as PX4's internal vertical reference.
+# The Task 2 depth estimate remains side optical-flow integration.
+param set-default EKF2_HGT_REF 0
+param set-default EKF2_BARO_CTRL 1

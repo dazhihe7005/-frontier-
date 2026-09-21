@@ -11,7 +11,6 @@ import rospy
 from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Pose
 
-
 PATH = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "sitl_shaft_vision_truth.py"
 SPEC = importlib.util.spec_from_file_location("sitl_shaft_vision_truth", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -19,18 +18,11 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SitlVisionTruthTest(unittest.TestCase):
-    def test_rejects_real_master_or_fcu(self):
-        with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11312"}), \
-                patch.object(rospy, "get_param", return_value=True):
-            self.assertFalse(MODULE.SitlShaftVisionTruth.sitl_only())
-        with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11319"}), \
-                patch.object(rospy, "get_param", side_effect=lambda key, default=None:
-                             True if key == "/use_sim_time" else "serial:///dev/ttyUSB0"):
-            self.assertFalse(MODULE.SitlShaftVisionTruth.sitl_only())
-
     def make_adapter(self, stop_after_depth=-1.0):
         adapter = object.__new__(MODULE.SitlShaftVisionTruth)
         adapter.vehicle_model = "iris_vision"
+        adapter.allowed_master_port = 11319
+        adapter.expected_fcu_url = MODULE.SitlShaftVisionTruth.FCU_URL
         adapter.entrance_world_z = 0.25
         adapter.stop_after_depth = stop_after_depth
         adapter.publish_rate = 30.0
@@ -41,6 +33,24 @@ class SitlVisionTruthTest(unittest.TestCase):
         adapter.pub = MagicMock()
         adapter.active_pub = MagicMock()
         return adapter
+
+    def test_rejects_real_master_or_fcu(self):
+        adapter = self.make_adapter()
+        with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11312"}), \
+                patch.object(rospy, "get_param", return_value=True):
+            self.assertFalse(adapter.sitl_only())
+        with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11319"}), \
+                patch.object(rospy, "get_param", side_effect=lambda key, default=None:
+                             True if key == "/use_sim_time" else "serial:///dev/ttyUSB0"):
+            self.assertFalse(adapter.sitl_only())
+
+    def test_allows_explicit_isolated_master_port(self):
+        adapter = self.make_adapter()
+        adapter.allowed_master_port = 11329
+        with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11329"}), \
+                patch.object(rospy, "get_param", side_effect=lambda key, default=None:
+                             True if key == "/use_sim_time" else adapter.expected_fcu_url):
+            self.assertTrue(adapter.sitl_only())
 
     def model(self, z):
         model = ModelStates()

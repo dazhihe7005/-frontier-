@@ -706,4 +706,8 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 
 新增隔离 22 m `task2_shaft_22m_vision_px4_sitl.launch`：Gazebo 世界真值全位姿经 MAVROS 进入 PX4 外部视觉，PX4 ULog 确认视觉高度参与融合。关闭模拟气压计/GPS 后任务仍完整返航；再断开视觉后 PX4 Z 失效，路由能停发指令，但仿真失速/断连，**未证明安全回收**。这是纯仿真接口实验，不是真实独立深度源；本机 PX4 SITL 的 `iris_vision` 机型需要[项目内的机型配置](px4_airframes/1013_gazebo-classic_iris_vision)，它不会自动安装到其他 PX4 工作树。完整证据与限制见[视觉高度实验报告](docs/task2_vision_height_sitl_2026-09-18.md)。
 
+2026-09-20 真机 PX4 只读探针确认下视 `stp23` 测距实例量程为 0.30–8.00 m，`EKF2_RNG_CTRL=0`，任务二现以 **5.00 m** 为激光减速/返航确认阈值，并对下降到上升的换向施加 0.5 m/s² 速度斜率限制。当前传感器串口通信存在但全部帧被驱动判为无效，尚不能接入任务控制；侧面光流入口相对深度源等待硬件安装后实现。生产 `shaft_task_available=false` 未改变。详见[真机测距探针记录](docs/task2_real_rangefinder_probe_2026-09-20.md)。
+
+2026-09-21 最新任务二代码通过隔离 **500 m PX4/Gazebo nominal SITL**：任务层深度只使用侧面光流积分代理，下视测距仅 0.3–8 m；5 m 开始限加速度刹车，最低 Range 3.646 m，命令加速度不超过 0.5 m/s²，完整返航后进入 AUTO.LOITER。该结果不代表真实 500 m 飞行已安全，尤其积分漂移仍不可由任务状态机自行观测。详见[500 m 光流深度验收报告](docs/task2_500m_opticalflow_acceptance_2026-09-21.md)。
+
 故障注入器为显式 opt-in；其参数权限改成仅在注入瞬间短暂开启，已验证触发前后 `SYS_FAILURE_EN=0`。若仿真异常退出，下一次启动前仍需检查并复位该 SITL 参数；不要在真机使用故障注入启动项。

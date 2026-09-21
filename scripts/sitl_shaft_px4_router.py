@@ -23,6 +23,10 @@ class SitlShaftPx4Router:
         self.max_depth_sigma_m = float(rospy.get_param("~max_depth_sigma_m", 0.25))
         self.max_depth_disagreement_m = float(
             rospy.get_param("~max_depth_disagreement_m", 1.0))
+        self.require_px4_vertical_position = bool(
+            rospy.get_param("~require_px4_vertical_position", True))
+        self.require_px4_depth_agreement = bool(
+            rospy.get_param("~require_px4_depth_agreement", True))
         if (not self.required_depth_source or
                 not math.isfinite(self.depth_timeout) or self.depth_timeout <= 0.0 or
                 not math.isfinite(self.max_depth_sigma_m) or
@@ -142,6 +146,11 @@ class SitlShaftPx4Router:
         state_fresh = (not self.state_time.is_zero() and
                        -0.05 <= state_age <= self.state_timeout)
         estimator_age = (now - self.estimator_time).to_sec()
+        estimator_vertical_ok = (
+            (self.estimator.pos_vert_abs_status_flag or
+             self.estimator.pos_vert_agl_status_flag)
+            if self.require_px4_vertical_position
+            else self.estimator.velocity_vert_status_flag)
         estimator_ok = (
             not self.estimator_time.is_zero() and
             -0.05 <= estimator_age <= self.estimator_timeout and
@@ -150,16 +159,17 @@ class SitlShaftPx4Router:
             self.estimator_timeout and
             (self.estimator.pos_horiz_rel_status_flag or
              self.estimator.pos_horiz_abs_status_flag) and
-            (self.estimator.pos_vert_abs_status_flag or
-             self.estimator.pos_vert_agl_status_flag))
+            estimator_vertical_ok)
         pose_fresh = self.pose is not None and (
             -0.05 <= (now - self.pose_time).to_sec() <= self.pose_timeout and
             not self.pose.header.stamp.is_zero() and
             -0.05 <= (now - self.pose.header.stamp).to_sec() <=
             self.pose_timeout and
-            all(math.isfinite(value) for value in (
-                self.pose.pose.position.x, self.pose.pose.position.y,
-                self.pose.pose.position.z)))
+            math.isfinite(self.pose.pose.position.x) and
+            math.isfinite(self.pose.pose.position.y) and
+            (math.isfinite(self.pose.pose.position.z)
+             if (self.require_px4_vertical_position or
+                 self.require_px4_depth_agreement) else True))
         intent_fresh = self.intent is not None and (
             -0.05 <= (now - self.intent_time).to_sec() <= self.intent_timeout and
             not self.intent.header.stamp.is_zero() and
@@ -220,20 +230,21 @@ class SitlShaftPx4Router:
                 not intent_fresh or self.status not in ("DESCENDING", "RETURNING")):
             self.publish_ready(False)
             return
-        if self.depth_pose_reference is None:
-            self.depth_pose_reference = (
-                self.pose.pose.position.z, self.depth.relative_depth_m)
-        reference_z, reference_depth = self.depth_pose_reference
-        disagreement = abs((self.pose.pose.position.z - reference_z) +
-                           (self.depth.relative_depth_m - reference_depth))
-        if disagreement > self.max_depth_disagreement_m:
-            rospy.logerr_throttle(
-                2.0, "SITL shaft PX4 Z/depth disagree by %.2f m; withdrawing command",
-                disagreement)
-            self.publish_ready(False)
-            if self.owned:
-                self.request_fallback(now)
-            return
+        if self.require_px4_depth_agreement:
+            if self.depth_pose_reference is None:
+                self.depth_pose_reference = (
+                    self.pose.pose.position.z, self.depth.relative_depth_m)
+            reference_z, reference_depth = self.depth_pose_reference
+            disagreement = abs((self.pose.pose.position.z - reference_z) +
+                               (self.depth.relative_depth_m - reference_depth))
+            if disagreement > self.max_depth_disagreement_m:
+                rospy.logerr_throttle(
+                    2.0, "SITL shaft PX4 Z/depth disagree by %.2f m; withdrawing command",
+                    disagreement)
+                self.publish_ready(False)
+                if self.owned:
+                    self.request_fallback(now)
+                return
         if self.fixed_xy is None:
             self.fixed_xy = (self.pose.pose.position.x, self.pose.pose.position.y)
         target = PositionTarget()

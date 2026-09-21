@@ -17,6 +17,8 @@ SPEC.loader.exec_module(MODULE)
 class SitlPx4ZFailureInjectorSafetyTest(unittest.TestCase):
     def setUp(self):
         self.injector = object.__new__(MODULE.SitlPx4ZFailureInjector)
+        self.injector.expected_fcu_url = self.injector.FCU_URL
+        self.injector.allowed_master_port = 11319
 
     def test_real_master_is_rejected_even_with_sim_time_and_udp_url(self):
         with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11312"}), \
@@ -38,6 +40,13 @@ class SitlPx4ZFailureInjectorSafetyTest(unittest.TestCase):
 
     def test_only_isolated_local_udp_sitl_is_accepted(self):
         with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11319"}), \
+                patch.object(MODULE.rospy, "get_param",
+                             side_effect=lambda key, default: True if key == "/use_sim_time" else self.injector.FCU_URL):
+            self.assertTrue(self.injector.sitl_only())
+
+    def test_explicit_isolated_master_port_is_accepted(self):
+        self.injector.allowed_master_port = 11335
+        with patch.dict(MODULE.os.environ, {"ROS_MASTER_URI": "http://localhost:11335"}), \
                 patch.object(MODULE.rospy, "get_param",
                              side_effect=lambda key, default: True if key == "/use_sim_time" else self.injector.FCU_URL):
             self.assertTrue(self.injector.sitl_only())

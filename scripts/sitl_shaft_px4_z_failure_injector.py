@@ -21,8 +21,16 @@ class SitlPx4ZFailureInjector:
 
     def __init__(self):
         self.trigger_depth = float(rospy.get_param("~trigger_depth", 6.0))
+        self.expected_fcu_url = rospy.get_param("~expected_fcu_url", self.FCU_URL)
+        self.allowed_master_port = int(rospy.get_param("~allowed_master_port", 11319))
+        self.trigger_depth_topic = rospy.get_param(
+            "~trigger_depth_topic", "/mine_uav/shaft/relative_depth_m")
+        self.disable_baro = bool(rospy.get_param("~disable_baro", True))
+        self.disable_gps = bool(rospy.get_param("~disable_gps", True))
         if self.trigger_depth <= 0:
             raise ValueError("trigger_depth must be positive")
+        if not self.disable_baro and not self.disable_gps:
+            raise ValueError("at least one simulated PX4 source must be disabled")
         self.state = State()
         self.depth = None
         self.shaft_status = "IDLE"
@@ -34,7 +42,7 @@ class SitlPx4ZFailureInjector:
             "/mine_uav/sitl/px4_z_failure_status", String,
             queue_size=1, latch=True)
         rospy.Subscriber("/mavros/state", State, self.on_state, queue_size=5)
-        rospy.Subscriber("/mine_uav/shaft/relative_depth_m", Float64,
+        rospy.Subscriber(self.trigger_depth_topic, Float64,
                          self.on_depth, queue_size=5)
         rospy.Subscriber("/mine_uav/shaft/status", String,
                          self.on_shaft_status, queue_size=5)
@@ -62,9 +70,9 @@ class SitlPx4ZFailureInjector:
             master_port = urlparse(os.environ.get("ROS_MASTER_URI", "")).port
         except ValueError:
             return False
-        return (master_port == 11319 and
+        return (master_port == getattr(self, "allowed_master_port", 11319) and
                 rospy.get_param("/use_sim_time", False) and
-                rospy.get_param("/mavros/fcu_url", "") == self.FCU_URL)
+                rospy.get_param("/mavros/fcu_url", "") == self.expected_fcu_url)
 
     def setup(self):
         try:
@@ -100,7 +108,12 @@ class SitlPx4ZFailureInjector:
                 self.publish("FAILURE_PERMISSION_ENABLE_FAILED")
                 return
             self.publish("SITL_FAILURE_INJECTION_ENABLED")
-            for unit, label in ((3, "BARO"), (4, "GPS")):
+            sources = []
+            if getattr(self, "disable_baro", True):
+                sources.append((3, "BARO"))
+            if getattr(self, "disable_gps", True):
+                sources.append((4, "GPS"))
+            for unit, label in sources:
                 response = self.command(
                     broadcast=False, command=420, confirmation=0,
                     param1=float(unit), param2=1.0, param3=0.0,
@@ -109,9 +122,11 @@ class SitlPx4ZFailureInjector:
                     self.publish("FAILURE_COMMAND_REJECTED:" + label)
                     return
             self.injected = True
-            self.publish("INJECTED_BARO_GPS_OFF")
-            rospy.logwarn("PX4 SITL baro and GPS OFF injected at %.2f m",
-                          self.depth)
+            labels = "_".join(label for _unit, label in sources)
+            injected_status = "INJECTED_" + labels + "_OFF"
+            self.publish(injected_status)
+            rospy.logwarn("PX4 SITL %s OFF injected at %.2f m",
+                          labels, self.depth)
         except rospy.ServiceException as error:
             self.publish("INJECTION_OR_PARAM_RESET_SERVICE_ERROR")
             rospy.logerr("PX4 SITL failure injection service error: %s", error)
@@ -124,8 +139,15 @@ class SitlPx4ZFailureInjector:
                 except rospy.ServiceException:
                     disabled = False
                 if disabled:
-                    suffix = ("INJECTED_BARO_GPS_OFF_PERMISSION_DISABLED"
-                              if self.injected else "FAILURE_ABORTED_PERMISSION_DISABLED")
+                    if self.injected:
+                        sources = []
+                        if getattr(self, "disable_baro", True):
+                            sources.append("BARO")
+                        if getattr(self, "disable_gps", True):
+                            sources.append("GPS")
+                        suffix = "INJECTED_" + "_".join(sources) + "_OFF_PERMISSION_DISABLED"
+                    else:
+                        suffix = "FAILURE_ABORTED_PERMISSION_DISABLED"
                     self.publish(suffix)
                 else:
                     self.publish("FAILURE_PARAM_RESET_FAILED")

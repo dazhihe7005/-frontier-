@@ -22,6 +22,9 @@ class SitlShaftSensorAdapter:
         )
         self.max_range = float(rospy.get_param("~max_range", 30.0))
         self.depth_sigma_m = float(rospy.get_param("~depth_sigma_m", 0.02))
+        self.publish_depth_estimate = bool(
+            rospy.get_param("~publish_depth_estimate", True)
+        )
         self.range_source = rospy.get_param("~range_source", "truth")
         if self.range_source not in ("truth", "gazebo"):
             raise ValueError("range_source must be 'truth' or 'gazebo'")
@@ -64,7 +67,7 @@ class SitlShaftSensorAdapter:
             "/mine_uav/shaft/bottom_range", Range, queue_size=10
         )
         rospy.Subscriber(
-            "/gazebo/model_states", ModelStates, self.on_models, queue_size=10
+            "/gazebo/model_states", ModelStates, self.on_models, queue_size=1
         )
         if self.range_source == "gazebo":
             rospy.Subscriber("/mine_uav/sitl/shaft_downward_range", Range,
@@ -119,22 +122,23 @@ class SitlShaftSensorAdapter:
         self.latest_depth = depth
         injected_bias = self.injected_depth_bias(depth, now)
         self.depth_bias_pub.publish(Float64(data=injected_bias))
-        if (self.stop_depth_after_depth < 0.0 or
-                depth < self.stop_depth_after_depth):
-            self.depth_pub.publish(Float64(data=depth))
-            estimate = ShaftDepthEstimate()
-            estimate.header.stamp = now
-            estimate.header.frame_id = "gazebo_world"
-            estimate.relative_depth_m = depth + injected_bias
-            estimate.sigma_m = (
-                1.0 if self.bad_sigma_after_depth >= 0.0 and
-                depth >= self.bad_sigma_after_depth else self.depth_sigma_m
-            )
-            estimate.valid = True
-            estimate.source_id = "gazebo_world_truth"
-            self.depth_estimate_pub.publish(estimate)
-        else:
-            rospy.logwarn_once("SITL fault injection: depth stream stopped")
+        if self.publish_depth_estimate:
+            if (self.stop_depth_after_depth < 0.0 or
+                    depth < self.stop_depth_after_depth):
+                self.depth_pub.publish(Float64(data=depth))
+                estimate = ShaftDepthEstimate()
+                estimate.header.stamp = now
+                estimate.header.frame_id = "gazebo_world"
+                estimate.relative_depth_m = depth + injected_bias
+                estimate.sigma_m = (
+                    1.0 if self.bad_sigma_after_depth >= 0.0 and
+                    depth >= self.bad_sigma_after_depth else self.depth_sigma_m
+                )
+                estimate.valid = True
+                estimate.source_id = "gazebo_world_truth"
+                self.depth_estimate_pub.publish(estimate)
+            else:
+                rospy.logwarn_once("SITL fault injection: depth stream stopped")
         if self.range_source == "gazebo":
             return
         if (self.stop_range_after_depth >= 0.0 and

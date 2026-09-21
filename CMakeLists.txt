@@ -100,6 +100,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sitl_shaft_depth_drift.py)
   catkin_add_nosetests(test/test_sitl_shaft_vision_truth.py)
   catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
+  catkin_add_nosetests(test/test_sitl_shaft_optical_flow_depth.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp
@@ -116,6 +117,12 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_offboard_mode_guard
     test/test_offboard_mode_guard.cpp
   )
+  catkin_add_gtest(test_control_dt
+    test/test_control_dt.cpp
+  )
+  if(TARGET test_control_dt)
+    target_link_libraries(test_control_dt ${GTEST_MAIN_LIBRARIES})
+  endif()
   catkin_add_gtest(test_anisotropic_clearance
     test/test_anisotropic_clearance.cpp
   )
@@ -158,6 +165,7 @@ catkin_install_python(PROGRAMS
   scripts/sitl_shaft_rviz_frames.py
   scripts/sitl_task_operator.py
   scripts/sitl_shaft_sensor_adapter.py
+  scripts/sitl_shaft_optical_flow_depth.py
   scripts/sitl_shaft_vision_truth.py
   scripts/sitl_shaft_px4_router.py
   scripts/sitl_shaft_release_pad.py

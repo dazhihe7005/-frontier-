@@ -9,6 +9,7 @@
 #include <std_msgs/String.h>
 
 #include "mine_uav_control/ShaftDepthEstimate.h"
+#include "mine_uav_control/control_dt.hpp"
 #include "mine_uav_control/shaft_mission.hpp"
 
 namespace {
@@ -125,7 +126,17 @@ class ShaftMissionNode {
     in.bottom_range = range_;
     in.range_min = range_min_;
     in.range_max = range_max_;
-    in.dt = (event.current_real - event.last_real).toSec();
+    const double actual_dt =
+        (event.current_real - event.last_real).toSec();
+    const double expected_dt =
+        (event.current_expected - event.last_expected).toSec();
+    in.dt = mine_uav_control::task2ControlDt(actual_dt, expected_dt);
+    if (actual_dt >= 0.0 && actual_dt <= 1e-9 && in.dt > 0.0) {
+      ROS_WARN_THROTTLE(5.0,
+                        "Task2 timer repeated current_real stamp; using "
+                        "expected dt %.6f s instead of zero",
+                        in.dt);
+    }
     if (!configured) publishGate("UNCONFIGURED");
     else if (depth_time_.isZero()) publishGate("WAIT_DEPTH");
     else if (depth_source_ != required_depth_source_) publishGate("SOURCE_MISMATCH");
@@ -134,6 +145,22 @@ class ShaftMissionNode {
     else if (!in.range_fresh) publishGate("BAD_OR_STALE_RANGE");
     else publishGate("OPEN");
     const auto result = mission_.step(in);
+    if (result.state == mine_uav_control::ShaftMission::State::kFault) {
+      ROS_ERROR(
+          "ShaftMission fault input: enabled=%d dt=%.6f expected_dt=%.6f "
+          "depth_valid=%d depth=%.6f depth_age=%.6f depth_stamp_age=%.6f "
+          "range_fresh=%d range=%.6f range=[%.3f,%.3f] "
+          "range_age=%.6f range_stamp_age=%.6f gate=%s",
+          in.enabled, in.dt,
+          (event.current_expected - event.last_expected).toSec(),
+          in.depth_valid, in.depth,
+          depth_time_.isZero() ? INFINITY : (now - depth_time_).toSec(),
+          depth_stamp_.isZero() ? INFINITY : (now - depth_stamp_).toSec(),
+          in.range_fresh, in.bottom_range, in.range_min, in.range_max,
+          range_time_.isZero() ? INFINITY : (now - range_time_).toSec(),
+          range_stamp_.isZero() ? INFINITY : (now - range_stamp_).toSec(),
+          last_gate_.c_str());
+    }
     std_msgs::String status;
     switch (result.state) {
       case mine_uav_control::ShaftMission::State::kIdle:

@@ -7,7 +7,9 @@ required_range_frame: ""
 max_depth_sigma_m: 0.25
 descent_speed: 0.5
 return_speed: 0.5
-bottom_trigger: 2.0
+# Downward laser: at <=5 m, decelerate immediately, confirm the reading, then
+# reverse into the return leg. The laser is not an EKF input or depth source.
+bottom_trigger: 5.0
 bottom_stop_margin: 0.8
 bottom_confirm_seconds: 0.3
 max_depth: 450.0

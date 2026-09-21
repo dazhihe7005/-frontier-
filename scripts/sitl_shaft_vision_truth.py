@@ -17,6 +17,10 @@ class SitlShaftVisionTruth:
 
     def __init__(self):
         self.vehicle_model = rospy.get_param("~vehicle_model", "iris_vision")
+        self.allowed_master_port = int(
+            rospy.get_param("~allowed_master_port", 11319))
+        self.expected_fcu_url = rospy.get_param(
+            "~expected_fcu_url", self.FCU_URL)
         self.entrance_world_z = float(rospy.get_param("~entrance_world_z", 0.25))
         self.stop_after_depth = float(rospy.get_param("~stop_after_depth", -1.0))
         self.publish_rate = float(rospy.get_param("~publish_rate", 30.0))
@@ -33,19 +37,18 @@ class SitlShaftVisionTruth:
             "/mine_uav/sitl/vision_truth_active", Bool, queue_size=1,
             latch=True)
         rospy.Subscriber("/gazebo/model_states", ModelStates,
-                         self.on_models, queue_size=10)
+                         self.on_models, queue_size=1)
         self.active_pub.publish(Bool(data=False))
 
-    @staticmethod
-    def sitl_only():
+    def sitl_only(self):
         try:
             port = urlparse(os.environ.get("ROS_MASTER_URI", "")).port
         except ValueError:
             return False
-        return (port == 11319 and
+        return (port == self.allowed_master_port and
                 rospy.get_param("/use_sim_time", False) and
                 rospy.get_param("/mavros/fcu_url", "") ==
-                SitlShaftVisionTruth.FCU_URL)
+                self.expected_fcu_url)
 
     def on_models(self, message):
         now = rospy.Time.now()

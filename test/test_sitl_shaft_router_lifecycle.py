@@ -54,6 +54,8 @@ def owned_router():
     router.required_depth_source = "gazebo_world_truth"
     router.max_depth_sigma_m = 0.25
     router.max_depth_disagreement_m = 1.0
+    router.require_px4_vertical_position = True
+    router.require_px4_depth_agreement = True
     router.depth_pose_reference = None
     return router
 
@@ -306,6 +308,34 @@ class ShaftRouterLifecycleTest(unittest.TestCase):
                 self.assertFalse(router.ready)
                 if owned:
                     router.request_fallback.assert_called_once()
+
+    def test_velocity_only_mode_allows_descent_without_absolute_z(self):
+        router = owned_router()
+        router.require_px4_vertical_position = False
+        router.require_px4_depth_agreement = False
+        router.estimator.pos_vert_abs_status_flag = False
+        router.estimator.pos_vert_agl_status_flag = False
+        router.estimator.velocity_vert_status_flag = True
+        router.pose = PoseStamped()
+        router.pose.header.stamp = MODULE.rospy.Time(10)
+        router.pose.pose.position.x = 1.0
+        router.pose.pose.position.y = 2.0
+        router.pose.pose.position.z = math.nan
+        router.pose_time = MODULE.rospy.Time(10)
+        router.intent = TwistStamped()
+        router.intent.header.stamp = MODULE.rospy.Time(10)
+        router.intent.twist.linear.z = -0.5
+        router.intent_time = MODULE.rospy.Time(10)
+        router.status = "DESCENDING"
+        router.command_pub = MagicMock()
+        with patch.object(MODULE.rospy, "get_param", return_value=True), \
+                patch.object(MODULE.rospy.Time, "now",
+                             return_value=MODULE.rospy.Time(10)):
+            router.tick(None)
+        target = router.command_pub.publish.call_args.args[0]
+        self.assertEqual((target.position.x, target.position.y), (1.0, 2.0))
+        self.assertEqual(target.velocity.z, -0.5)
+        self.assertTrue(router.ready)
 
     def test_matching_px4_z_and_depth_allow_descent(self):
         router = owned_router()

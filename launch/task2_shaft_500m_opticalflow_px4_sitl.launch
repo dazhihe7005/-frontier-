@@ -1,0 +1,102 @@
+<launch>
+  <!-- Isolated SITL only. 500 m shaft, 0.3-8 m downward range, and a
+       side-flow integration surrogate for entrance-relative depth. -->
+  <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="vehicle" default="iris_xy_vision"/>
+  <arg name="sitl_master_port" default="11319"/>
+  <arg name="inject_px4_z_failure" default="false"/>
+  <arg name="px4_z_failure_after_depth" default="50.0"/>
+  <arg name="flow_scale" default="1.0"/>
+  <arg name="flow_drift_rate_mps" default="0.0"/>
+  <arg name="flow_sigma_m" default="0.05"/>
+  <arg name="world" default="$(find mine_uav_control)/worlds/shaft_500m_logic_sitl.world"/>
+  <arg name="bottom_top_world_z" default="-499.75"/>
+  <arg name="vehicle_sdf" default="$(find mine_uav_control)/models/iris_mid360_shaft_8m/iris_mid360_shaft_8m.sdf"/>
+
+  <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="interactive" value="false"/>
+    <arg name="vehicle" value="$(arg vehicle)"/>
+    <arg name="sdf" value="$(arg vehicle_sdf)"/>
+    <arg name="world" value="$(arg world)"/>
+    <arg name="x" value="0"/><arg name="y" value="0"/><arg name="z" value="1.15"/>
+    <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
+  </include>
+
+  <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
+        name="sitl_localization_adapter" output="screen" required="true"/>
+
+  <!-- SITL-only horizontal-position surrogate. PX4 airframe fuses EV XY only;
+       its Z component is deliberately ignored by EKF2_EV_CTRL=1. -->
+  <node pkg="mine_uav_control" type="sitl_shaft_vision_truth.py"
+        name="sitl_shaft_xy_vision_truth" output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
+    <param name="allowed_master_port" value="$(arg sitl_master_port)"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="sitl_shaft_sensor_adapter.py"
+        name="sitl_shaft_sensor_adapter" output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
+    <param name="bottom_top_world_z" value="$(arg bottom_top_world_z)"/>
+    <param name="entrance_world_z" value="0.25"/>
+    <param name="range_source" value="gazebo"/>
+    <param name="publish_depth_estimate" value="false"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="sitl_shaft_optical_flow_depth.py"
+        name="sitl_shaft_optical_flow_depth" output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
+    <param name="source_id" value="sitl_side_optical_flow_integrated"/>
+    <param name="scale" value="$(arg flow_scale)"/>
+    <param name="drift_rate_mps" value="$(arg flow_drift_rate_mps)"/>
+    <param name="base_sigma_m" value="$(arg flow_sigma_m)"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
+        name="sitl_shaft_release_pad" output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="sitl_task_operator.py"
+        name="sitl_task_operator" output="screen" required="true">
+    <param name="allow_auto_arm" value="true"/>
+    <param name="auto_enable_delay" value="8.0"/>
+    <param name="task_switch_pwm" value="2000"/>
+    <param name="bridge_ready_topic" value="/mine_uav/task2/command_ready"/>
+  </node>
+  <node pkg="mine_uav_control" type="mission_scheduler"
+        name="mission_scheduler" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/mission_scheduler.yaml"/>
+    <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
+    <param name="shaft_task_available" value="true"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="shaft_mission_node"
+        name="shaft_mission_node" output="screen" required="true">
+    <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+    <param name="required_depth_source" value="sitl_side_optical_flow_integrated"/>
+    <param name="required_range_frame" value="shaft_downward_range"/>
+    <param name="max_depth" value="505.0"/>
+    <param name="max_duration" value="2400.0"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="sitl_shaft_px4_router.py"
+        name="sitl_shaft_px4_router" output="screen" required="true">
+    <param name="required_depth_source" value="sitl_side_optical_flow_integrated"/>
+    <param name="require_px4_vertical_position" value="false"/>
+    <param name="require_px4_depth_agreement" value="false"/>
+  </node>
+  <group if="$(arg inject_px4_z_failure)">
+    <node pkg="mine_uav_control" type="sitl_shaft_px4_z_failure_injector.py"
+          name="sitl_shaft_px4_z_failure_injector" output="screen" required="true">
+      <param name="allowed_master_port" value="$(arg sitl_master_port)"/>
+      <param name="trigger_depth" value="$(arg px4_z_failure_after_depth)"/>
+      <param name="trigger_depth_topic" value="/mine_uav/sitl/side_flow_integrated_depth_m"/>
+      <!-- GPS is already disabled by the XY-vision airframe. This injection
+           removes the remaining PX4 absolute-Z aid (barometer). -->
+      <param name="disable_baro" value="true"/>
+      <param name="disable_gps" value="false"/>
+    </node>
+  </group>
+</launch>

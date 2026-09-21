@@ -14,7 +14,9 @@ class ShaftMission {
   struct Config {
     double descent_speed{0.5};
     double return_speed{0.5};
-    double bottom_trigger{2.0};
+    // A fresh downward-laser reading at or below this distance starts
+    // acceleration-limited braking and bottom confirmation.
+    double bottom_trigger{5.0};
     double bottom_stop_margin{0.8};
     double bottom_confirm_seconds{0.3};
     double max_depth{450.0};
@@ -50,6 +52,7 @@ class ShaftMission {
       elapsed_ = 0.0;
       confirm_ = 0.0;
       have_previous_depth_ = false;
+      commanded_vertical_speed_ = 0.0;
       return {state_, 0.0, false};
     }
     if (state_ == State::kFault || state_ == State::kComplete) {
@@ -57,6 +60,7 @@ class ShaftMission {
     }
     if (!config_valid_) {
       state_ = State::kFault;
+      commanded_vertical_speed_ = 0.0;
       return {state_, 0.0, false};
     }
     if (state_ == State::kIdle &&
@@ -69,11 +73,13 @@ class ShaftMission {
         !in.depth_valid || !std::isfinite(in.depth) ||
         !in.range_fresh || !validRange(in)) {
       state_ = State::kFault;
+      commanded_vertical_speed_ = 0.0;
       return {state_, 0.0, false};
     }
     if (have_previous_depth_ &&
         std::abs(in.depth - previous_depth_) > config_.max_depth_jump) {
       state_ = State::kFault;
+      commanded_vertical_speed_ = 0.0;
       return {state_, 0.0, false};
     }
     previous_depth_ = in.depth;
@@ -81,6 +87,7 @@ class ShaftMission {
     if (state_ == State::kIdle) {
       home_depth_ = in.depth;
       state_ = State::kDescending;
+      commanded_vertical_speed_ = 0.0;
     }
     elapsed_ += in.dt;
     const double traveled = in.depth - home_depth_;
@@ -88,11 +95,13 @@ class ShaftMission {
         traveled < -config_.entrance_tolerance - config_.max_depth_jump ||
         traveled > config_.max_depth) {
       state_ = State::kFault;
+      commanded_vertical_speed_ = 0.0;
       return {state_, 0.0, false};
     }
     if (state_ == State::kDescending) {
-      if (std::isfinite(in.bottom_range) &&
-          in.bottom_range <= config_.bottom_trigger) {
+      const bool bottom_close = std::isfinite(in.bottom_range) &&
+          in.bottom_range <= config_.bottom_trigger;
+      if (bottom_close) {
         confirm_ += in.dt;
       } else {
         confirm_ = 0.0;
@@ -100,19 +109,28 @@ class ShaftMission {
       if (confirm_ >= config_.bottom_confirm_seconds) {
         state_ = State::kReturning;
       } else {
-        const double available = std::isfinite(in.bottom_range)
-                                     ? in.bottom_range - config_.bottom_stop_margin
-                                     : INFINITY;
-        const double braking_speed =
-            std::sqrt(2.0 * config_.max_acceleration * std::max(0.0, available));
-        return {state_, -std::min(config_.descent_speed, braking_speed), true};
+        // At the configured bottom threshold, begin braking immediately while the
+        // reading is confirmed. A transient close reading therefore slows the
+        // vehicle but cannot reverse it. Outside the threshold, retain the
+        // stopping-distance guard as an additional bound.
+        double target_speed = 0.0;
+        if (!bottom_close) {
+          const double available = std::isfinite(in.bottom_range)
+                                       ? in.bottom_range - config_.bottom_stop_margin
+                                       : INFINITY;
+          const double braking_speed = std::sqrt(
+              2.0 * config_.max_acceleration * std::max(0.0, available));
+          target_speed = -std::min(config_.descent_speed, braking_speed);
+        }
+        return {state_, slewSpeed(target_speed, in.dt), true};
       }
     }
     if (traveled <= config_.entrance_tolerance) {
       state_ = State::kComplete;
+      commanded_vertical_speed_ = 0.0;
       return {state_, 0.0, false};
     }
-    return {state_, config_.return_speed, true};
+    return {state_, slewSpeed(config_.return_speed, in.dt), true};
   }
 
   State state() const { return state_; }
@@ -146,6 +164,14 @@ class ShaftMission {
            std::isfinite(c.max_acceleration) && c.max_acceleration > 0.0;
   }
 
+  double slewSpeed(double target, double dt) {
+    const double max_delta = config_.max_acceleration * dt;
+    const double delta = std::max(-max_delta, std::min(max_delta,
+                                                       target - commanded_vertical_speed_));
+    commanded_vertical_speed_ += delta;
+    return commanded_vertical_speed_;
+  }
+
   Config config_;
   bool config_valid_{false};
   State state_{State::kIdle};
@@ -153,6 +179,7 @@ class ShaftMission {
   double previous_depth_{0.0};
   double elapsed_{0.0};
   double confirm_{0.0};
+  double commanded_vertical_speed_{0.0};
   bool have_previous_depth_{false};
 };
 
