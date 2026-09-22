@@ -69,11 +69,23 @@ class SitlShaftSensorAdapter:
         rospy.Subscriber(
             "/gazebo/model_states", ModelStates, self.on_models, queue_size=1
         )
+        if not self.publish_depth_estimate:
+            rospy.Subscriber(
+                "/mine_uav/shaft/depth_estimate", ShaftDepthEstimate,
+                self.on_external_depth, queue_size=10)
         if self.range_source == "gazebo":
             rospy.Subscriber("/mine_uav/sitl/shaft_downward_range", Range,
                              self.on_gazebo_range, queue_size=10)
-        rospy.logwarn("SITL shaft depth uses WORLD TRUTH; bottom range source=%s",
-                      self.range_source)
+        if self.publish_depth_estimate:
+            rospy.logwarn("SITL shaft depth uses WORLD TRUTH; bottom range source=%s",
+                          self.range_source)
+        else:
+            rospy.loginfo("SITL shaft bottom range source=%s; depth comes from an external estimator",
+                          self.range_source)
+
+    def on_external_depth(self, message):
+        if message.valid and math.isfinite(message.relative_depth_m):
+            self.latest_depth = message.relative_depth_m
 
     def on_gazebo_range(self, message):
         if not rospy.get_param("/use_sim_time", False):
@@ -105,6 +117,8 @@ class SitlShaftSensorAdapter:
         # This also prevents motion before the platform is removed.
         self.pad_present = "shaft_launch_pad" in message.name
         if self.pad_present:
+            return
+        if not self.publish_depth_estimate:
             return
         try:
             z = message.pose[message.name.index(self.vehicle_model)].position.z

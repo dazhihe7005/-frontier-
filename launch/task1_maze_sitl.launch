@@ -16,7 +16,6 @@
     <arg name="decider_vehicle_radius" value="$(arg decider_vehicle_radius)"/>
     <arg name="decider_vertical_vehicle_radius" value="$(arg decider_vertical_vehicle_radius)"/>
     <arg name="world_geometry_filter" value="true"/>
-    <arg name="sensor_offset_z" value="0.60"/>
     <arg name="global_cloud_voxel_size" value="0.30"/>
     <arg name="world" value="$(find mine_uav_control)/worlds/goaf_serpentine_maze.world"/>
     <arg name="vehicle_sdf" value="$(find mine_uav_control)/models/iris_mid360_long_range/iris_mid360_long_range.sdf"/>

@@ -2,29 +2,70 @@
 <sdf version="1.6">
   <world name="goaf_mine">
     <include><uri>model://sun</uri></include>
-    <include><uri>model://ground_plane</uri></include>
 
-    <!-- Open entrance at x=-2; side walls and far wall form the three
-         continuous surfaces used by the task-one completion strategy. -->
-    <model name="left_wall">
+    <scene>
+      <!-- Underground inspection illumination. The cavern remains dark, but
+           the grey relief is visible in Gazebo without changing geometry. -->
+      <ambient>0.38 0.39 0.40 1</ambient>
+      <background>0.025 0.030 0.035 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <gui fullscreen="0">
+      <camera name="goaf_overview">
+        <pose>-4.6 0 2.15 0 0.06 0</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+
+    <!-- Low-output inspection lamps make geometric relief readable in the
+         Gazebo client. They have no effect on lidar rays or collisions. -->
+    <light name="entrance_work_light" type="point">
+      <pose>-1.0 0 2.8 0 0 0</pose>
+      <diffuse>0.52 0.54 0.57 1</diffuse>
+      <specular>0.04 0.04 0.04 1</specular>
+      <attenuation><range>13</range><constant>0.35</constant><linear>0.045</linear><quadratic>0.010</quadratic></attenuation>
+      <cast_shadows>true</cast_shadows>
+    </light>
+    <light name="middle_work_light" type="point">
+      <pose>8.0 0 2.7 0 0 0</pose>
+      <diffuse>0.42 0.44 0.47 1</diffuse>
+      <specular>0.03 0.03 0.03 1</specular>
+      <attenuation><range>12</range><constant>0.40</constant><linear>0.050</linear><quadratic>0.012</quadratic></attenuation>
+      <cast_shadows>true</cast_shadows>
+    </light>
+    <light name="deep_work_light" type="point">
+      <pose>17.0 0 2.6 0 0 0</pose>
+      <diffuse>0.35 0.37 0.40 1</diffuse>
+      <specular>0.025 0.025 0.025 1</specular>
+      <attenuation><range>11</range><constant>0.45</constant><linear>0.055</linear><quadratic>0.014</quadratic></attenuation>
+      <cast_shadows>true</cast_shadows>
+    </light>
+
+    <!-- Nominal mean size: 24 m long, 8 m wide and 4 m high. The actual
+         surfaces contain deterministic multi-scale variation. -->
+    <include>
+      <uri>model://goaf_rock_24x8x4</uri>
+    </include>
+
+    <!-- A small rough-coloured staging apron outside the open entrance. It
+         does not replace any cavern surface and is not used for mapping. -->
+    <model name="entrance_apron">
       <static>true</static>
-      <pose>10 4 2 0 0 0</pose>
-      <link name="link"><collision name="collision"><geometry><box><size>24 0.2 4</size></box></geometry></collision><visual name="visual"><geometry><box><size>24 0.2 4</size></box></geometry></visual></link>
-    </model>
-    <model name="right_wall">
-      <static>true</static>
-      <pose>10 -4 2 0 0 0</pose>
-      <link name="link"><collision name="collision"><geometry><box><size>24 0.2 4</size></box></geometry></collision><visual name="visual"><geometry><box><size>24 0.2 4</size></box></geometry></visual></link>
-    </model>
-    <model name="far_wall">
-      <static>true</static>
-      <pose>22 0 2 0 0 0</pose>
-      <link name="link"><collision name="collision"><geometry><box><size>0.2 8 4</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 8 4</size></box></geometry></visual></link>
-    </model>
-    <model name="ceiling">
-      <static>true</static>
-      <pose>10 0 4 0 0 0</pose>
-      <link name="link"><collision name="collision"><geometry><box><size>24 8 0.2</size></box></geometry></collision><visual name="visual"><geometry><box><size>24 8 0.2</size></box></geometry></visual></link>
+      <pose>-4.0 0 -0.12 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>4.0 8.2 0.20</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>4.0 8.2 0.20</size></box></geometry>
+          <material>
+            <ambient>0.18 0.19 0.20 1</ambient>
+            <diffuse>0.30 0.31 0.32 1</diffuse>
+            <specular>0.01 0.01 0.01 1</specular>
+          </material>
+        </visual>
+      </link>
     </model>
   </world>
 </sdf>

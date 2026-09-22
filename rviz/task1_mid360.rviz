@@ -69,7 +69,7 @@ Visualization Manager:
       Size (Pixels): 2
       Size (m): 0.025
       Style: Points
-      Topic: /mine_uav/sitl/global_cloud
+      Topic: /Laser_map
       Unreliable: false
       Use Fixed Frame: true
       Value: true
@@ -83,7 +83,7 @@ Visualization Manager:
       Length: 0.30
       Line Style: Lines
       Line Width: 0.04
-      Name: PX4 Path
+      Name: FAST-LIO2 Path
       Offset:
         X: 0
         Y: 0
@@ -93,7 +93,7 @@ Visualization Manager:
       Radius: 0.04
       Shaft Diameter: 0.08
       Shaft Length: 0.10
-      Topic: /mine_uav/sitl/px4_path
+      Topic: /path
       Unreliable: false
       Value: true
     - Class: rviz/MarkerArray

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="shaft_rock_500m">
+    <static>true</static>
+    <link name="rock_shell">
+      <collision name="collision">
+        <geometry><mesh><uri>model://shaft_rock_500m/meshes/shaft_rock_inner.obj</uri></mesh></geometry>
+        <surface>
+          <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          <contact><ode><kp>1000000</kp><kd>100</kd></ode></contact>
+        </surface>
+      </collision>
+      <visual name="visual">
+        <geometry><mesh><uri>model://shaft_rock_500m/meshes/shaft_rock_inner.obj</uri></mesh></geometry>
+        <material>
+          <ambient>0.20 0.21 0.22 1</ambient>
+          <diffuse>0.36 0.37 0.38 1</diffuse>
+          <specular>0.025 0.025 0.025 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

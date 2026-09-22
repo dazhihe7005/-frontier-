@@ -2,32 +2,31 @@
 <sdf version="1.6">
   <model name="iris_mid360_long_range">
     <include>
-      <uri>model://iris</uri>
+      <uri>model://mine_uav_800_no_gps</uri>
       <name>iris</name>
     </include>
 
     <link name="mid360_link">
-      <!-- Mount above the simulated Iris rotor disk. At 0.14 m, the lower
-           five scan rings strike the vehicle at 0.24 to 0.31 m and never see
-           the chamber floor/lower walls. This is a SITL mounting fixture,
-           not a real MID360 extrinsic calibration. -->
-      <pose>0 0 0.60 0 0 0</pose>
+      <!-- Same physical MID360S mount as every other Task 1/Task 2 wrapper:
+           FLU +X forward and 25 deg pitch toward -Z. -->
+      <pose>0.1315 0 0.223 0 0.436332313 0</pose>
       <inertial>
-        <mass>0.03</mass>
+        <!-- Livox MID360S mass used by the canonical vehicle: 265 g. -->
+        <mass>0.265</mass>
         <inertia>
-          <ixx>1.0e-5</ixx>
-          <iyy>1.0e-5</iyy>
-          <izz>1.0e-5</izz>
+          <ixx>1.50e-4</ixx>
+          <iyy>1.50e-4</iyy>
+          <izz>1.40e-4</izz>
         </inertia>
       </inertial>
       <collision name="collision">
         <geometry>
-          <cylinder><radius>0.035</radius><length>0.04</length></cylinder>
+          <cylinder><radius>0.0325</radius><length>0.06</length></cylinder>
         </geometry>
       </collision>
       <visual name="visual">
         <geometry>
-          <cylinder><radius>0.035</radius><length>0.04</length></cylinder>
+          <cylinder><radius>0.0325</radius><length>0.06</length></cylinder>
         </geometry>
         <material>
           <ambient>0.1 0.1 0.1 1</ambient>

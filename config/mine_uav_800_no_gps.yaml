@@ -1,0 +1,124 @@
+# Canonical physical inputs shared by Task 1, Task 2 and future SITL worlds.
+# Values under `provisional` are simulation approximations, not bench data.
+schema_version: 1
+
+vehicle:
+  model: mine_uav_800_no_gps
+  configuration: quad_x
+  total_mass_kg: 6.0
+  # Measured from the four U7 centres in the authoritative STEP assembly.
+  adjacent_motor_span_m: 0.439002
+  diagonal_motor_span_m: 0.620842582
+  motor_center_xy_m: 0.219501
+  reported_frame_size_m: 0.8
+  reported_frame_size_interpretation: overall_frame_class_not_motor_wheelbase
+  gps_present: false
+  body_frame:
+    convention: right_handed_flu
+    x_axis: forward
+    y_axis: left
+    z_axis: up
+  centre_of_mass: near_body_centre
+
+localization:
+  lidar:
+    manufacturer: Livox
+    model: MID360S
+    mass_kg: 0.265
+    horizontal_offset_from_vehicle_centre_m: 0.1315
+    height_above_vehicle_top_m: 0.173
+    downward_pitch_deg: 25.0
+    # FLU pose: the STEP assembly confirms that the lidar is forward of the
+    # vehicle centre. The z value uses the 0.050 m body-top reference plus the
+    # user-supplied 0.173 m installation height.
+    pose_flu_xyz_m: [0.1315, 0.0, 0.223]
+    pose_flu_rpy_rad: [0.0, 0.436332313, 0.0]
+  horizontal_source: fast_lio2_external_vision
+
+battery:
+  pack_count: 2
+  topology: parallel
+  cells_in_series: 6
+  manufacturer: DJI
+  aircraft_family: Matrice_4D_4TD
+  model: BPX230-6768-22.14
+  chemistry: LiNiMnCoO2_NMC
+  nominal_voltage_v: 22.14
+  full_voltage_v: 25.5
+  nominal_cell_voltage_v: 3.69
+  full_cell_voltage_v: 4.25
+  per_pack_capacity_mah: 6768
+  total_capacity_mah: 13536
+  per_pack_energy_wh: 149.9
+  total_energy_wh: 299.8
+  per_pack_mass_kg: 0.640
+  total_battery_mass_kg: 1.280
+  per_pack_size_m: [0.154, 0.096, 0.059]
+  discharge_rate_c: 4.0
+  per_pack_current_at_4c_a: 27.072
+  parallel_current_at_4c_a: 54.144
+  per_pack_nominal_power_at_4c_w: 599.0
+  parallel_nominal_power_at_4c_w: 1198.0
+  # Internal resistance and a voltage-versus-state-of-charge curve are unknown.
+
+esc:
+  model: LANRC_60A_4in1
+  firmware: BLHeli_S
+  protocol: DSHOT600
+  supported_cells: [2, 6]
+  continuous_current_per_channel_a: 60.0
+
+motor:
+  manufacturer: T-Motor
+  model: U7
+  count: 4
+  kv_rpm_per_v: 420.0
+  slots_poles: 12N14P
+  phase_resistance_ohm: 0.033
+  diameter_m: 0.0607
+  height_m: 0.0395
+  shaft_diameter_m: 0.006
+  cable_length_m: 0.75
+  cable_awg: 16
+  mass_without_cable_kg: 0.255
+  simulated_mass_with_cable_kg: 0.296
+  no_load_current_a: 0.9
+  supported_cells: [3, 8]
+  maximum_current_a: 40.0
+  maximum_continuous_power_w: 350.0
+  user_supplied_maximum_thrust_kgf: 4.64
+
+propeller:
+  model: P15x5
+  material: carbon_fibre
+  diameter_in: 15.0
+  pitch_in: 5.0
+  diameter_m: 0.381
+  radius_m: 0.1905
+
+provisional:
+  centre_body_collision_size_m: [0.325, 0.307, 0.10]
+  arm_collision_size_m: [0.31, 0.035, 0.025]
+  no_load_speed_rpm: 9298.8
+  maximum_rotor_speed_rad_s: 973.768059
+  motor_constant_n_per_rad_s_squared: 4.79874427e-05
+  moment_constant_m: 0.00789903182
+  ideal_hover_speed_rpm: 5287.05
+
+cad_source:
+  archive_name: "【二代】总装.STEP"
+  sha256: d1384302c8fc5b07a7f86423bb29d39ef4b9a99a111ee56e0553e2ddb481ea49
+  format: STEP_AP203
+  length_unit: millimetre
+  assembly_available: true
+  authority_for_dimensions: true
+  native_axes_to_flu: [x_to_x, minus_z_to_y, y_to_z]
+  motor_centre_native_mm: [-10.174, -9.978, 1100.0]
+  simulated_body_origin_native_mm: [-10.174, -44.978, 1100.0]
+  measured_no_fov_bbox_native_mm: [-452.616, -316.786, 657.558,
+                                    432.268, 213.067, 1542.442]
+  visual_mesh:
+    uri: model://mine_uav_800_no_gps/meshes/uav_body_step_visual.stl
+    selected_exterior_triangle_count: 101750
+    sha256: f27db10a9adb9c58fac49d426ad6e0b657c7ca708f6b9221b0e4dbc4c3173bb0
+    collision_use: false

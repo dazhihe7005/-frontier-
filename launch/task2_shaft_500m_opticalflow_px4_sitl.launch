@@ -1,6 +1,7 @@
 <launch>
-  <!-- Isolated SITL only. 500 m shaft, 0.3-8 m downward range, and a
-       side-flow integration surrogate for entrance-relative depth. -->
+  <!-- Isolated SITL only. Default localization is the complete simulated
+       sensor chain: Gazebo MID360 PointCloud2 + simulated PX4 IMU ->
+       FAST-LIO2 -> PX4 external vision. Gazebo pose truth is opt-in only. -->
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
   <arg name="vehicle" default="iris_xy_vision"/>
@@ -10,9 +11,15 @@
   <arg name="flow_scale" default="1.0"/>
   <arg name="flow_drift_rate_mps" default="0.0"/>
   <arg name="flow_sigma_m" default="0.05"/>
+  <arg name="use_vision_truth" default="false"/>
+  <arg name="fastlio_config"
+       default="$(find mine_uav_control)/config/fastlio_gazebo_mid360.yaml"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/shaft_500m_logic_sitl.world"/>
   <arg name="bottom_top_world_z" default="-499.75"/>
   <arg name="vehicle_sdf" default="$(find mine_uav_control)/models/iris_mid360_shaft_8m/iris_mid360_shaft_8m.sdf"/>
+
+  <env name="GAZEBO_MODEL_PATH"
+       value="$(find mine_uav_control)/models:$(optenv GAZEBO_MODEL_PATH)"/>
 
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -24,16 +31,41 @@
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
 
-  <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
-        name="sitl_localization_adapter" output="screen" required="true"/>
+  <group unless="$(arg use_vision_truth)">
+    <node pkg="mine_uav_control" type="pointcloud1_to_pointcloud2"
+          name="mid360_pointcloud_converter" output="screen" required="true">
+      <param name="input_topic" value="/mine_uav/sitl/mid360/points"/>
+      <param name="output_topic" value="/mine_uav/sitl/mid360/points2"/>
+    </node>
+    <rosparam command="load" file="$(arg fastlio_config)"/>
+    <param name="feature_extract_enable" type="bool" value="false"/>
+    <param name="point_filter_num" type="int" value="2"/>
+    <param name="max_iteration" type="int" value="3"/>
+    <param name="filter_size_surf" type="double" value="0.15"/>
+    <param name="filter_size_map" type="double" value="0.20"/>
+    <param name="cube_side_length" type="double" value="1000"/>
+    <param name="runtime_pos_log_enable" type="bool" value="false"/>
+    <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
+          output="screen" required="true"/>
+    <node pkg="mine_uav_control" type="fastlio_px4_vision_bridge"
+          name="fastlio_px4_vision_bridge" output="screen" required="true">
+      <rosparam command="load"
+                file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
+    </node>
+    <node pkg="mine_uav_control" type="fastlio_shaft_depth.py"
+          name="fastlio_shaft_depth" output="screen" required="true"/>
+  </group>
 
-  <!-- SITL-only horizontal-position surrogate. PX4 airframe fuses EV XY only;
-       its Z component is deliberately ignored by EKF2_EV_CTRL=1. -->
-  <node pkg="mine_uav_control" type="sitl_shaft_vision_truth.py"
-        name="sitl_shaft_xy_vision_truth" output="screen" required="true">
-    <param name="vehicle_model" value="$(arg vehicle)"/>
-    <param name="allowed_master_port" value="$(arg sitl_master_port)"/>
-  </node>
+  <!-- Explicit legacy A/B mode only. It is never the default. -->
+  <group if="$(arg use_vision_truth)">
+    <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
+          name="sitl_localization_adapter" output="screen" required="true"/>
+    <node pkg="mine_uav_control" type="sitl_shaft_vision_truth.py"
+          name="sitl_shaft_xy_vision_truth" output="screen" required="true">
+      <param name="vehicle_model" value="$(arg vehicle)"/>
+      <param name="allowed_master_port" value="$(arg sitl_master_port)"/>
+    </node>
+  </group>
 
   <node pkg="mine_uav_control" type="sitl_shaft_sensor_adapter.py"
         name="sitl_shaft_sensor_adapter" output="screen" required="true">
@@ -44,14 +76,16 @@
     <param name="publish_depth_estimate" value="false"/>
   </node>
 
-  <node pkg="mine_uav_control" type="sitl_shaft_optical_flow_depth.py"
-        name="sitl_shaft_optical_flow_depth" output="screen" required="true">
-    <param name="vehicle_model" value="$(arg vehicle)"/>
-    <param name="source_id" value="sitl_side_optical_flow_integrated"/>
-    <param name="scale" value="$(arg flow_scale)"/>
-    <param name="drift_rate_mps" value="$(arg flow_drift_rate_mps)"/>
-    <param name="base_sigma_m" value="$(arg flow_sigma_m)"/>
-  </node>
+  <group if="$(arg use_vision_truth)">
+    <node pkg="mine_uav_control" type="sitl_shaft_optical_flow_depth.py"
+          name="sitl_shaft_optical_flow_depth" output="screen" required="true">
+      <param name="vehicle_model" value="$(arg vehicle)"/>
+      <param name="source_id" value="sitl_side_optical_flow_integrated"/>
+      <param name="scale" value="$(arg flow_scale)"/>
+      <param name="drift_rate_mps" value="$(arg flow_drift_rate_mps)"/>
+      <param name="base_sigma_m" value="$(arg flow_sigma_m)"/>
+    </node>
+  </group>
 
   <node pkg="mine_uav_control" type="sitl_shaft_release_pad.py"
         name="sitl_shaft_release_pad" output="screen" required="true">
@@ -75,7 +109,10 @@
   <node pkg="mine_uav_control" type="shaft_mission_node"
         name="shaft_mission_node" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
-    <param name="required_depth_source" value="sitl_side_optical_flow_integrated"/>
+    <param unless="$(arg use_vision_truth)" name="required_depth_source"
+           value="fastlio2_vertical_displacement"/>
+    <param if="$(arg use_vision_truth)" name="required_depth_source"
+           value="sitl_side_optical_flow_integrated"/>
     <param name="required_range_frame" value="shaft_downward_range"/>
     <param name="max_depth" value="505.0"/>
     <param name="max_duration" value="2400.0"/>
@@ -83,7 +120,10 @@
 
   <node pkg="mine_uav_control" type="sitl_shaft_px4_router.py"
         name="sitl_shaft_px4_router" output="screen" required="true">
-    <param name="required_depth_source" value="sitl_side_optical_flow_integrated"/>
+    <param unless="$(arg use_vision_truth)" name="required_depth_source"
+           value="fastlio2_vertical_displacement"/>
+    <param if="$(arg use_vision_truth)" name="required_depth_source"
+           value="sitl_side_optical_flow_integrated"/>
     <param name="require_px4_vertical_position" value="false"/>
     <param name="require_px4_depth_agreement" value="false"/>
   </node>

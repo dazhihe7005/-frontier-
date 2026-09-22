@@ -149,6 +149,19 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("require_mission_enable_edge",
                     require_mission_enable_edge_,
                     require_mission_enable_edge_);
+  private_nh_.param("mission_heading_offset", mission_heading_offset_,
+                    mission_heading_offset_);
+  private_nh_.param("use_absolute_mission_heading",
+                    use_absolute_mission_heading_,
+                    use_absolute_mission_heading_);
+  private_nh_.param("absolute_mission_heading_yaw",
+                    absolute_mission_heading_yaw_,
+                    absolute_mission_heading_yaw_);
+  private_nh_.param("dead_end_reversal_delay", dead_end_reversal_delay_,
+                    dead_end_reversal_delay_);
+  private_nh_.param("max_dead_end_heading_reversals",
+                    max_dead_end_heading_reversals_,
+                    max_dead_end_heading_reversals_);
 
   private_nh_.param("voxel_resolution", voxel_resolution_, voxel_resolution_);
   private_nh_.param("max_map_radius", max_map_radius_, max_map_radius_);
@@ -203,6 +216,9 @@ bool SuperExplorationDecider::loadParameters() {
                     side_wall_max_range_);
   private_nh_.param("front_obstacle_range", front_obstacle_range_,
                     front_obstacle_range_);
+  private_nh_.param("front_obstacle_min_progress",
+                    front_obstacle_min_progress_,
+                    front_obstacle_min_progress_);
   private_nh_.param("front_obstacle_sector_deg", front_obstacle_sector_deg_,
                     front_obstacle_sector_deg_);
   private_nh_.param("front_obstacle_min_points", front_obstacle_min_points_,
@@ -323,12 +339,15 @@ bool SuperExplorationDecider::loadParameters() {
                     max_frontier_candidates_);
 
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
+      !std::isfinite(mission_heading_offset_) ||
       !std::isfinite(max_outbound_backtrack_) || max_outbound_backtrack_ < 0.0 ||
       !std::isfinite(vertical_vehicle_radius_) ||
       (vertical_vehicle_radius_ != -1.0 && vertical_vehicle_radius_ <= 0.0) ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
       !std::isfinite(max_exploration_radius_from_home_) ||
       max_exploration_radius_from_home_ <= 0.0 ||
+      !std::isfinite(mission_heading_offset_) ||
+      !std::isfinite(absolute_mission_heading_yaw_) ||
       !std::isfinite(return_home_height_offset_) ||
       return_home_height_offset_ < 0.0 ||
       !std::isfinite(return_breadcrumb_spacing_) ||
@@ -343,6 +362,8 @@ bool SuperExplorationDecider::loadParameters() {
       !std::isfinite(side_wall_max_range_) ||
       side_wall_max_range_ <= side_wall_min_range_ ||
       !std::isfinite(front_obstacle_range_) || front_obstacle_range_ <= 0.0 ||
+      !std::isfinite(front_obstacle_min_progress_) ||
+      front_obstacle_min_progress_ < 0.0 ||
       !std::isfinite(front_obstacle_sector_deg_) ||
       front_obstacle_sector_deg_ <= 0.0 ||
       front_obstacle_sector_deg_ >= 180.0 ||
@@ -414,8 +435,11 @@ bool SuperExplorationDecider::loadParameters() {
       map_closure_no_frontier_time_ <= 0.0 ||
       !std::isfinite(map_closure_stable_time_) ||
       map_closure_stable_time_ <= 0.0 ||
+      !std::isfinite(dead_end_reversal_delay_) ||
+      dead_end_reversal_delay_ < 0.0 ||
       map_closure_max_actionable_frontiers_ < 0 ||
       map_closure_growth_voxels_ < 1 || map_closure_confirm_cycles_ < 1 ||
+      max_dead_end_heading_reversals_ < 0 ||
       max_reachable_voxels_ < 1000 || max_frontier_candidates_ < 1 ||
       sync_queue_size_ < 2 || max_points_per_cloud_ < 1) {
     ROS_FATAL("Invalid exploration decider parameters");
@@ -465,7 +489,11 @@ void SuperExplorationDecider::synchronizedCallback(
       (!require_mission_enable_edge_ || mission_start_pending_)) {
     home_pose_ = current_pose_;
     home_pose_.header.frame_id = world_frame_;
-    mission_heading_yaw_ = poseYaw(home_pose_.pose);
+    const double raw_mission_heading = use_absolute_mission_heading_
+        ? absolute_mission_heading_yaw_
+        : poseYaw(home_pose_.pose) + mission_heading_offset_;
+    mission_heading_yaw_ = std::atan2(std::sin(raw_mission_heading),
+                                     std::cos(raw_mission_heading));
     have_home_ = true;
     outbound_breadcrumbs_.clear();
     outbound_breadcrumbs_.push_back(home_pose_);
@@ -478,7 +506,8 @@ void SuperExplorationDecider::synchronizedCallback(
   updateMap(*cloud, current_pose_);
   updateDirectionalEvidence(*cloud, current_pose_);
   if (enabled_ && exploration_started_ && !returning_home_ &&
-      !mission_finished_ && !outbound_breadcrumbs_.empty() &&
+      !dead_end_backtracking_ && !mission_finished_ &&
+      !outbound_breadcrumbs_.empty() &&
       std::sqrt(squaredDistance(current_pose_.pose.position,
           outbound_breadcrumbs_.back().pose.position)) >=
           return_breadcrumb_spacing_) {
@@ -789,7 +818,19 @@ void SuperExplorationDecider::updateDirectionalEvidence(
       front_point_count > 0 ? front_max_lateral - front_min_lateral : 0.0;
   const double front_vertical_span =
       front_point_count > 0 ? front_max_z - front_min_z : 0.0;
+  double vehicle_progress = 0.0;
+  if (have_home_) {
+    const double vehicle_dx =
+        pose.pose.position.x - home_pose_.pose.position.x;
+    const double vehicle_dy =
+        pose.pose.position.y - home_pose_.pose.position.y;
+    vehicle_progress = std::cos(mission_heading_yaw_) * vehicle_dx +
+                       std::sin(mission_heading_yaw_) * vehicle_dy;
+  }
+  const bool front_progress_allowed =
+      !have_home_ || vehicle_progress >= front_obstacle_min_progress_;
   const bool front_seen =
+      front_progress_allowed &&
       front_point_count >= front_obstacle_min_points_ &&
       front_lateral_span >= front_obstacle_min_lateral_span_ &&
       front_vertical_span >= front_obstacle_min_vertical_span_;
@@ -1651,7 +1692,11 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
         candidateMissionLateral(candidate) - lateral;
     const double step = std::copysign(
         std::min(std::abs(lateral_delta), 4.0), lateral_delta);
-    if (std::abs(step) < min_goal_distance_) continue;
+    // A lateral bypass is a transition into a neighbouring safe corridor,
+    // not a normal outbound frontier.  Requiring the generic 2 m goal
+    // distance rejected valid 0.5--1.5 m shifts around surveyed pipes and
+    // machinery even when the full segment was known-free below.
+    if (std::abs(step) < voxel_resolution_ - 1e-6) continue;
     geometry_msgs::PoseStamped goal;
     goal.header.frame_id = world_frame_;
     goal.pose.position.x =
@@ -1696,6 +1741,55 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
   }
   if (!found) return false;
   publishGoal(best_goal, "lateral_detour");
+  return true;
+}
+
+bool SuperExplorationDecider::reverseMissionHeadingAtDeadEnd(
+    const MapClosureStatus& closure) {
+  if (!have_home_ || have_active_goal_ ||
+      max_dead_end_heading_reversals_ <= 0 ||
+      dead_end_heading_reversal_count_ >= max_dead_end_heading_reversals_ ||
+      !closure.front_boundary_seen || closure.reachable_forward_passage ||
+      closure.actionable_frontiers != 0 ||
+      closure.no_frontier_duration < dead_end_reversal_delay_ ||
+      closure.vehicle_progress < front_obstacle_min_progress_) {
+    return false;
+  }
+
+  const double previous_heading = mission_heading_yaw_;
+  mission_heading_yaw_ = normalizeAngle(mission_heading_yaw_ + M_PI);
+  ++dead_end_heading_reversal_count_;
+  exploration_phase_ = ExplorationPhase::kForwardPriority;
+  front_obstacle_streak_ = 0;
+  side_wall_missing_streak_ = 0;
+  map_closure_complete_streak_ = 0;
+  last_actionable_frontier_time_ = ros::Time::now();
+  dead_end_backtracking_ = true;
+  return_waypoints_.clear();
+  return_waypoint_index_ = 0;
+  for (auto it = outbound_breadcrumbs_.rbegin();
+       it != outbound_breadcrumbs_.rend(); ++it) {
+    if (std::sqrt(squaredDistance(it->pose.position,
+                                  current_pose_.pose.position)) >
+            goal_reached_distance_ &&
+        squaredDistance(it->pose.position, home_pose_.pose.position) >
+            goal_reached_distance_ * goal_reached_distance_) {
+      geometry_msgs::PoseStamped waypoint = *it;
+      waypoint.pose.orientation = yawQuaternion(mission_heading_yaw_);
+      return_waypoints_.push_back(waypoint);
+    }
+  }
+  geometry_msgs::PoseStamped home_target = home_pose_;
+  home_target.pose.orientation = yawQuaternion(mission_heading_yaw_);
+  return_waypoints_.push_back(home_target);
+  publishGoal(return_waypoints_.front(), "dead_end_breadcrumb");
+  ROS_WARN(
+      "Dead end has no vehicle-clear detour; reversing mission heading "
+      "%.1f -> %.1f deg (%d/%d) and backtracking only through known free "
+      "space",
+      previous_heading * 180.0 / M_PI,
+      mission_heading_yaw_ * 180.0 / M_PI,
+      dead_end_heading_reversal_count_, max_dead_end_heading_reversals_);
   return true;
 }
 
@@ -1777,6 +1871,7 @@ void SuperExplorationDecider::beginReturnHome(const std::string& reason) {
     return;
   }
   returning_home_ = true;
+  dead_end_backtracking_ = false;
   cancelActiveGoal("return_home");
   return_waypoints_.clear();
   return_waypoint_index_ = 0;
@@ -1848,6 +1943,39 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       publishStatus("COMPLETE", "home reached");
     } else {
       publishStatus("RETURNING", "following home goal through SUPER");
+    }
+    return;
+  }
+  if (dead_end_backtracking_) {
+    if (active_goal_id_ == 0) {
+      publishGoal(return_waypoints_[return_waypoint_index_],
+                  "resume_dead_end_backtrack_after_data_gap");
+    }
+    if (squaredDistance(current_pose_.pose.position,
+                        current_goal_.pose.position) <=
+        goal_reached_distance_ * goal_reached_distance_) {
+      if (return_waypoint_index_ + 1 < return_waypoints_.size()) {
+        ++return_waypoint_index_;
+        publishGoal(return_waypoints_[return_waypoint_index_],
+                    "dead_end_breadcrumb", true);
+        publishStatus("DEAD_END_BACKTRACK",
+                      "following observed outbound route to mission origin");
+        return;
+      }
+      cancelActiveGoal("dead_end_origin_reached");
+      dead_end_backtracking_ = false;
+      return_waypoints_.clear();
+      return_waypoint_index_ = 0;
+      outbound_breadcrumbs_.clear();
+      outbound_breadcrumbs_.push_back(current_pose_);
+      front_obstacle_streak_ = 0;
+      side_wall_missing_streak_ = 0;
+      exploration_phase_ = ExplorationPhase::kForwardPriority;
+      publishStatus("DEAD_END_BACKTRACK_COMPLETE",
+                    "mission origin reached; exploring the opposite side");
+    } else {
+      publishStatus("DEAD_END_BACKTRACK",
+                    "following observed outbound route to mission origin");
     }
     return;
   }
@@ -2028,6 +2156,12 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
   if (!have_active_goal_ && use_map_closure_completion_ &&
       closure.front_boundary_seen && !closure.reachable_forward_passage &&
       closure.actionable_frontiers == 0) {
+    if (reverseMissionHeadingAtDeadEnd(closure)) {
+      publishStatus(
+          "DEAD_END_BACKTRACK",
+          "heading reversed; following recorded safe route to mission origin");
+      return;
+    }
     publishStatus("WAIT_MAP_CLOSURE",
                   "front boundary closed; waiting for frontier and map convergence");
     return;
@@ -2133,6 +2267,7 @@ void SuperExplorationDecider::clearMissionState() {
   active_goal_is_end_approach_ = false;
   exploration_started_ = false;
   returning_home_ = false;
+  dead_end_backtracking_ = false;
   mission_finished_ = false;
   return_requested_ = false;
   have_battery_ = false;
@@ -2140,6 +2275,7 @@ void SuperExplorationDecider::clearMissionState() {
   reached_goal_count_ = 0;
   three_wall_complete_streak_ = 0;
   map_closure_complete_streak_ = 0;
+  dead_end_heading_reversal_count_ = 0;
   map_growth_reference_count_ = 0;
   mission_heading_yaw_ = 0.0;
   exploration_phase_ = ExplorationPhase::kForwardPriority;

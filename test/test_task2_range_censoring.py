@@ -28,6 +28,14 @@ class Task2RangeCensoringTest(unittest.TestCase):
         self.assertIsNone(MODULE.finite_range_alignment_error(
             float("inf"), 30.0, 46.8))
 
+    def test_circular_shaft_margin_uses_radial_distance(self):
+        self.assertAlmostEqual(
+            MODULE.side_margin(0.3, 0.4, 5.0, 0.5905, 2.5), 1.4095)
+
+    def test_legacy_square_margin_is_unchanged(self):
+        self.assertAlmostEqual(
+            MODULE.side_margin(0.3, 0.4, 5.0, 0.4), 4.2)
+
 
 if __name__ == "__main__":
     unittest.main()

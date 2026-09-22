@@ -1,0 +1,108 @@
+{
+  "source_blend": "/home/nuc/Documents/xwechat_files/wxid_rlp4qxgja6mi22_9f7a/msg/file/2026-09/白象山巷道_展示精修版_管线修订.blend",
+  "blender_version": "5.2.0 LTS",
+  "source_units": "metres",
+  "source_origin": [
+    -10.0,
+    17.5,
+    0.7688999772071838
+  ],
+  "source_to_gazebo_yaw_degrees": -90.0,
+  "gazebo_spawn_xyz": [
+    0.0,
+    0.0,
+    0.1404
+  ],
+  "gazebo_spawn_yaw_degrees": 0.0,
+  "terrain_decimate_ratio": 0.08,
+  "infrastructure_decimate_ratio": 0.25,
+  "converted_curve_and_text_objects": 169,
+  "textures": [
+    {
+      "name": "rock_boulder_dry_diff_4k.jpg",
+      "file": "rock_boulder_dry_diff_4k.jpg"
+    },
+    {
+      "name": "rock_boulder_dry_disp_4k.png",
+      "file": "rock_boulder_dry_disp_4k.png"
+    },
+    {
+      "name": "rock_boulder_dry_rough_4k.jpg",
+      "file": "rock_boulder_dry_rough_4k.jpg"
+    }
+  ],
+  "exports": [
+    {
+      "category": "rock",
+      "source_objects": 119,
+      "file": "baixianshan_rock.obj",
+      "bytes": 21017954,
+      "vertices": 174896,
+      "triangles": 255281,
+      "bbox_min": [
+        -143.25254821777344,
+        -27.883438110351562,
+        -5.188612937927246
+      ],
+      "bbox_max": [
+        150.6629180908203,
+        61.473655700683594,
+        14.201560974121094
+      ]
+    },
+    {
+      "category": "ground",
+      "source_objects": 103,
+      "file": "baixianshan_ground.obj",
+      "bytes": 27578770,
+      "vertices": 405831,
+      "triangles": 212286,
+      "bbox_min": [
+        -129.93795776367188,
+        -11.600008010864258,
+        -4.190586090087891
+      ],
+      "bbox_max": [
+        142.32180786132812,
+        50.35667037963867,
+        8.427392959594727
+      ]
+    },
+    {
+      "category": "roof",
+      "source_objects": 83,
+      "file": "baixianshan_roof.obj",
+      "bytes": 16103009,
+      "vertices": 125574,
+      "triangles": 213378,
+      "bbox_min": [
+        -129.45574951171875,
+        -9.38981819152832,
+        -0.3251889944076538
+      ],
+      "bbox_max": [
+        143.19070434570312,
+        50.673458099365234,
+        12.571986198425293
+      ]
+    },
+    {
+      "category": "infrastructure",
+      "source_objects": 2292,
+      "file": "baixianshan_infrastructure.obj",
+      "bytes": 58467885,
+      "vertices": 317645,
+      "triangles": 593835,
+      "bbox_min": [
+        -129.05648803710938,
+        -11.118176460266113,
+        -2.751715898513794
+      ],
+      "bbox_max": [
+        139.9916229248047,
+        44.670188903808594,
+        11.028834342956543
+      ]
+    }
+  ]
+}

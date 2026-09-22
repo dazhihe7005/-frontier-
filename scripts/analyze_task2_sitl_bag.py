@@ -24,8 +24,16 @@ def finite_range_alignment_error(reading, max_range, true_distance):
     return abs(reading - true_distance)
 
 
+def side_margin(x, y, shaft_half_width, vehicle_radius, shaft_radius=None):
+    """Vehicle-envelope clearance for a square legacy or circular shaft."""
+    if shaft_radius is not None:
+        return shaft_radius - math.hypot(x, y) - vehicle_radius
+    return min(shaft_half_width - abs(x) - vehicle_radius,
+               shaft_half_width - abs(y) - vehicle_radius)
+
+
 def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4,
-            vehicle_model="iris"):
+            vehicle_model="iris", shaft_radius=None):
     statuses = []
     modes = []
     first_active_xy = None
@@ -155,10 +163,9 @@ def analyze(path, bottom_top=-20.85, shaft_half_width=5.0, vehicle_radius=0.4,
                                         "bottom_range": latest_bottom_range,
                                         "vertical_velocity_enu": latest_vertical_velocity,
                                         "world_z": pose.z}
-                min_side_margin = min(
-                    min_side_margin,
-                    shaft_half_width - abs(pose.x) - vehicle_radius,
-                    shaft_half_width - abs(pose.y) - vehicle_radius)
+                min_side_margin = min(min_side_margin, side_margin(
+                    pose.x, pose.y, shaft_half_width, vehicle_radius,
+                    shaft_radius))
                 deepest_world_z = min(deepest_world_z, pose.z)
                 if latest_depth is not None:
                     deepest_relative = max(deepest_relative, latest_depth)
@@ -209,6 +216,8 @@ if __name__ == "__main__":
     parser.add_argument("bag")
     parser.add_argument("--bottom-top", type=float, default=-20.85)
     parser.add_argument("--shaft-half-width", type=float, default=5.0)
+    parser.add_argument("--shaft-radius", type=float,
+                        help="circular-shaft inner radius; overrides square clearance")
     parser.add_argument("--vehicle-radius", type=float, default=0.4)
     parser.add_argument("--vehicle-model", default="iris")
     parser.add_argument("--require-complete", action="store_true")
@@ -225,7 +234,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     result = analyze(args.bag, args.bottom_top,
                      args.shaft_half_width, args.vehicle_radius,
-                     args.vehicle_model)
+                     args.vehicle_model, args.shaft_radius)
     print(json.dumps(result,
                      indent=2, allow_nan=False))
     failures = []

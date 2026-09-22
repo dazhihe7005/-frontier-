@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="goaf_rock_24x8x4">
+    <static>true</static>
+    <link name="rock_shell">
+      <collision name="collision">
+        <geometry>
+          <mesh><uri>model://goaf_rock_24x8x4/meshes/goaf_rock_inner.obj</uri></mesh>
+        </geometry>
+        <surface>
+          <friction><ode><mu>1.15</mu><mu2>1.15</mu2></ode></friction>
+          <contact><ode><kp>1000000</kp><kd>100</kd></ode></contact>
+        </surface>
+      </collision>
+      <visual name="visual">
+        <!-- Visual and collision deliberately reference the identical mesh so
+             MID360 rays, rendered rock and physical contact agree. -->
+        <geometry>
+          <mesh><uri>model://goaf_rock_24x8x4/meshes/goaf_rock_inner.obj</uri></mesh>
+        </geometry>
+        <material>
+          <ambient>0.27 0.28 0.29 1</ambient>
+          <diffuse>0.44 0.45 0.46 1</diffuse>
+          <specular>0.018 0.018 0.018 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

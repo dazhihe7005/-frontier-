@@ -42,11 +42,20 @@ distance_weight: 0.35
 # 角度均以 Fast-LIO2 camera_init 坐标系中的机体 yaw 为基准。
 heading_priority_weight: 4.0
 fallback_heading_weight: 0.75
+# Surveyed worlds may define a fixed map-axis heading. Keep this disabled for
+# real flights and generic worlds, where the heading is captured from the
+# vehicle attitude plus mission_heading_offset.
+use_absolute_mission_heading: false
+absolute_mission_heading_yaw: 0.0
 forward_sector_deg: 70.0
 side_wall_sector_deg: 50.0
 side_wall_min_range: 1.0
 side_wall_max_range: 12.0
 front_obstacle_range: 6.0
+# Side-wall relief can fill the narrow forward cone near the entrance. It may
+# remain a local SUPER obstacle, but cannot be classified as the terminal wall
+# until the aircraft has reached the map-closure minimum progress.
+front_obstacle_min_progress: 8.0
 # Narrow center cone used only for confirming the closed end wall. Frontier
 # selection continues to use forward_sector_deg above.
 front_obstacle_sector_deg: 24.0
@@ -94,6 +103,11 @@ map_closure_max_actionable_frontiers: 0
 map_closure_growth_voxels: 500
 map_closure_confirm_cycles: 4
 map_closure_require_front_boundary: true
+# Optional scenario recovery: after a confirmed dead end with no body-clear
+# detour, reverse the task heading and backtrack through already observed free
+# space. Disabled by default so existing single-ended missions are unchanged.
+max_dead_end_heading_reversals: 0
+dead_end_reversal_delay: 4.0
 # Reachability flood-fill and candidate clustering are safety/CPU limits, not
 # assumptions about mine dimensions.
 max_reachable_voxels: 150000

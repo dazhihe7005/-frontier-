@@ -57,6 +57,11 @@ add_executable(fastlio_px4_vision_bridge
 )
 target_link_libraries(fastlio_px4_vision_bridge ${catkin_LIBRARIES})
 
+add_executable(pointcloud1_to_pointcloud2
+  src/pointcloud1_to_pointcloud2.cpp
+)
+target_link_libraries(pointcloud1_to_pointcloud2 ${catkin_LIBRARIES})
+
 add_executable(super_px4_command_bridge
   src/super_px4_command_bridge.cpp
 )
@@ -143,6 +148,7 @@ endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
                 fastlio_px4_vision_bridge
+                pointcloud1_to_pointcloud2
                 super_px4_command_bridge
                 super_exploration_decider_lib super_exploration_decider
                 task1_perception_gate mission_scheduler shaft_mission_node
@@ -161,6 +167,8 @@ catkin_install_python(PROGRAMS
   scripts/analyze_task1_sitl_bag.py
   scripts/ground_station.py
   scripts/gazebo_mid360_fastlio_adapter.py
+  scripts/fastlio_shaft_depth.py
+  scripts/generate_rock_shaft_mesh.py
   scripts/sitl_localization_adapter.py
   scripts/sitl_shaft_rviz_frames.py
   scripts/sitl_task_operator.py

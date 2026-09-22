@@ -6,6 +6,8 @@ camera_init. This node bridges those frames from simulated PX4 odometry; it
 does not publish flight commands or provide localization to PX4.
 """
 
+import math
+
 import rospy
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
@@ -24,8 +26,10 @@ def main():
     mount.header.stamp = rospy.Time.now()
     mount.header.frame_id = "base_link"
     mount.child_frame_id = "mid360_link"
-    mount.transform.translation.z = 0.14  # iris_mid360.sdf fixed-joint offset
-    mount.transform.rotation.w = 1.0
+    mount.transform.translation.x = 0.1315
+    mount.transform.translation.z = 0.223
+    mount.transform.rotation.y = math.sin(math.radians(12.5))
+    mount.transform.rotation.w = math.cos(math.radians(12.5))
     static_tf.sendTransform(mount)
 
     def on_odom(odom):

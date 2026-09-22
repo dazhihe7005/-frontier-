@@ -13,7 +13,8 @@
         name="task1_real_time_guard" output="screen" required="true"/>
 
   <group if="$(arg start_livox)">
-    <!-- The connected unit reports Livox device type 35 (Mid360s), not type 9 (MID360). -->
+    <!-- Aircraft sensor model: Livox MID360S. Keep this installed driver's
+         MID360s-named launch artifact because it matches device type 35. -->
     <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360s.launch"/>
   </group>
 

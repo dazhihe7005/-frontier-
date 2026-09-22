@@ -1,0 +1,15 @@
+# Blender 5.2.0 LTS MTL File: '白象山巷道_展示精修版_管线修订.blend'
+# www.blender.org
+
+newmtl V2_Rock_Photoscanned_Matte
+Ns 1.600002
+Ka 1.000000 1.000000 1.000000
+Kd 0.180000 0.190000 0.170000
+map_Kd ../textures/rock_boulder_dry_diff_4k.jpg
+map_Pr ../textures/rock_boulder_dry_rough_4k.jpg
+map_Bump -bm 0.08 ../textures/rock_boulder_dry_disp_4k.png
+Ks 0.140000 0.140000 0.140000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2

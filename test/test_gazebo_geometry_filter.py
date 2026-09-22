@@ -3,6 +3,7 @@
 """Geometry checks for the Gazebo-only MID360 point-cloud adapter."""
 
 import importlib.util
+import math
 import pathlib
 import unittest
 import xml.etree.ElementTree as ET
@@ -38,20 +39,22 @@ class GazeboGeometryFilterTest(unittest.TestCase):
         self.assertAlmostEqual(distance, 19.8, places=2)
         self.assertGreater(distance - 0.35, 19.0)
 
-    def test_long_range_sensor_fixture_is_above_iris_disk(self):
-        model = ET.parse(
-            str(ROOT / "models/iris_mid360_long_range/iris_mid360_long_range.sdf")
-        ).getroot()
-        pose = model.findtext("model/link[@name='mid360_link']/pose")
-        self.assertIsNotNone(pose)
-        self.assertGreaterEqual(float(pose.split()[2]), 0.5)
+    def test_all_wrappers_use_physical_mid360s_mount(self):
+        paths = [
+            ROOT / "models/iris_mid360/iris_mid360.sdf",
+            ROOT / "models/iris_mid360_long_range/iris_mid360_long_range.sdf",
+            ROOT / "models/iris_mid360_shaft_8m/iris_mid360_shaft_8m.sdf",
+        ]
+        for path in paths:
+            model = ET.parse(str(path)).getroot()
+            pose = [float(value) for value in model.findtext(
+                "model/link[@name='mid360_link']/pose").split()]
+            self.assertEqual(pose[:3], [0.1315, 0.0, 0.223])
+            self.assertAlmostEqual(pose[4], math.radians(25), places=9)
 
-        launch = ET.parse(
-            str(ROOT / "launch/task1_40m_platform_sitl.launch")
-        ).getroot()
-        offset = launch.find(".//arg[@name='sensor_offset_z']")
-        self.assertIsNotNone(offset)
-        self.assertAlmostEqual(float(offset.attrib["value"]), float(pose.split()[2]))
+        launch_text = (ROOT / "launch/task1_px4_sitl.launch").read_text()
+        self.assertIn("[0.1315, 0.0, 0.223]", launch_text)
+        self.assertIn("[0.0, 0.436332313, 0.0]", launch_text)
 
 
 if __name__ == "__main__":

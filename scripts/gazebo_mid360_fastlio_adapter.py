@@ -8,6 +8,7 @@ then publishes the registered cloud in ``camera_init`` on the same topic used
 by the real Fast-LIO2/SUPER integration.  It is simulation-only.
 """
 
+import copy
 import math
 import threading
 import xml.etree.ElementTree as ET
@@ -15,6 +16,7 @@ from collections import deque
 
 import rospy
 from gazebo_msgs.msg import LinkStates
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud, PointCloud2
@@ -28,6 +30,11 @@ class GazeboMid360FastlioAdapter:
         )
         self.odom_topic = rospy.get_param("~odom_topic", "/Odometry")
         self.output_topic = rospy.get_param("~output_topic", "/cloud_registered")
+        self.px4_pose_topic = rospy.get_param("~px4_pose_topic", "")
+        self.output_odom_topic = rospy.get_param("~output_odom_topic", "")
+        self.max_height_age = max(
+            0.05, float(rospy.get_param("~max_height_age", 0.5))
+        )
         self.global_topic = rospy.get_param(
             "~global_topic", "/mine_uav/sitl/global_cloud"
         )
@@ -38,10 +45,20 @@ class GazeboMid360FastlioAdapter:
         )
         self._world_boxes = self._load_static_boxes(self.world_geometry_file)
         self._link_history = deque(maxlen=100)
-        self.sensor_offset = rospy.get_param("~sensor_offset", [0.0, 0.0, 0.14])
+        self.sensor_offset = rospy.get_param(
+            "~sensor_offset", [0.1315, 0.0, 0.223]
+        )
         if not isinstance(self.sensor_offset, list) or len(self.sensor_offset) != 3:
             raise rospy.ROSInitException("~sensor_offset must contain [x, y, z]")
         self.sensor_offset = tuple(float(value) for value in self.sensor_offset)
+        self.sensor_rpy = rospy.get_param(
+            "~sensor_rpy", [0.0, 0.436332313, 0.0]
+        )
+        if not isinstance(self.sensor_rpy, list) or len(self.sensor_rpy) != 3:
+            raise rospy.ROSInitException("~sensor_rpy must contain [roll, pitch, yaw]")
+        self.sensor_rotation = self._rpy_matrix(
+            *(float(value) for value in self.sensor_rpy)
+        )
         self.max_input_age = max(
             0.05, float(rospy.get_param("~max_input_age", 0.5))
         )
@@ -72,11 +89,17 @@ class GazeboMid360FastlioAdapter:
 
         self._lock = threading.Lock()
         self._latest_odom = None
+        self._latest_px4_pose = None
+        self._height_alignment = None
         self._global_voxels = {}
         self._cloud_count = 0
 
         self.registered_pub = rospy.Publisher(
             self.output_topic, PointCloud2, queue_size=2
+        )
+        self.planner_odom_pub = (
+            rospy.Publisher(self.output_odom_topic, Odometry, queue_size=20)
+            if self.output_odom_topic else None
         )
         self.free_ray_pub = (
             rospy.Publisher(self.free_ray_topic, PointCloud2, queue_size=2)
@@ -86,6 +109,13 @@ class GazeboMid360FastlioAdapter:
             self.global_topic, PointCloud2, queue_size=1, latch=True
         )
         rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
+        if self.px4_pose_topic:
+            rospy.Subscriber(
+                self.px4_pose_topic,
+                PoseStamped,
+                self._px4_pose_callback,
+                queue_size=20,
+            )
         if self._world_boxes:
             rospy.Subscriber(
                 "/gazebo/link_states", LinkStates, self._links_callback,
@@ -110,6 +140,10 @@ class GazeboMid360FastlioAdapter:
     def _odom_callback(self, message):
         with self._lock:
             self._latest_odom = message
+
+    def _px4_pose_callback(self, message):
+        with self._lock:
+            self._latest_px4_pose = message
 
     def _links_callback(self, message):
         try:
@@ -230,9 +264,29 @@ class GazeboMid360FastlioAdapter:
             + rotation[2][2] * point[2],
         )
 
+    @staticmethod
+    def _matmul(left, right):
+        return tuple(
+            tuple(sum(left[row][k] * right[k][column] for k in range(3))
+                  for column in range(3))
+            for row in range(3)
+        )
+
+    @staticmethod
+    def _rpy_matrix(roll, pitch, yaw):
+        cr, sr = math.cos(roll), math.sin(roll)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        return (
+            (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+            (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+            (-sp, cp * sr, cp * cr),
+        )
+
     def _cloud_callback(self, cloud):
         with self._lock:
             odom = self._latest_odom
+            px4_pose = self._latest_px4_pose
             link_history = list(self._link_history)
         if odom is None:
             rospy.logwarn_throttle(2.0, "MID360 cloud waiting for /Odometry")
@@ -246,7 +300,40 @@ class GazeboMid360FastlioAdapter:
             )
             return
 
-        position = odom.pose.pose.position
+        planner_odom = copy.deepcopy(odom)
+        if self.px4_pose_topic:
+            if px4_pose is None:
+                rospy.logwarn_throttle(2.0, "MID360 cloud waiting for PX4 height")
+                return
+            px4_height = px4_pose.pose.position.z
+            px4_age = (now - px4_pose.header.stamp).to_sec()
+            if (not math.isfinite(px4_height)
+                    or px4_age < -self.future_odom_tolerance
+                    or px4_age > self.max_height_age):
+                rospy.logwarn_throttle(
+                    2.0, "MID360 cloud rejected: PX4 height is %.3f s old", px4_age
+                )
+                return
+            with self._lock:
+                if self._height_alignment is None:
+                    self._height_alignment = (
+                        odom.pose.pose.position.z - px4_height
+                    )
+                    rospy.loginfo(
+                        "Planner height aligned: FAST-LIO z %.3f, PX4 baro z %.3f, "
+                        "offset %.3f",
+                        odom.pose.pose.position.z,
+                        px4_height,
+                        self._height_alignment,
+                    )
+                height_alignment = self._height_alignment
+            # Task one requires MID360/FAST-LIO2 horizontal localization, while
+            # PX4's 1018 profile deliberately retains barometric height.  Use
+            # that same height for both the planning cloud and planner odometry
+            # so vertical lidar drift cannot move the map through the vehicle.
+            planner_odom.pose.pose.position.z = px4_height + height_alignment
+
+        position = planner_odom.pose.pose.position
         if self._world_boxes:
             if not link_history:
                 rospy.logwarn_throttle(2.0, "MID360 waiting for Gazebo sensor pose")
@@ -268,8 +355,15 @@ class GazeboMid360FastlioAdapter:
                 position.z + sensor_world.z - base_world.z,
             )
         else:
-            rotation = self._rotation_matrix(odom.pose.pose.orientation)
-            offset_world = self._rotate(rotation, self.sensor_offset) if rotation else None
+            body_rotation = self._rotation_matrix(odom.pose.pose.orientation)
+            offset_world = (
+                self._rotate(body_rotation, self.sensor_offset)
+                if body_rotation else None
+            )
+            rotation = (
+                self._matmul(body_rotation, self.sensor_rotation)
+                if body_rotation else None
+            )
             world_origin = None
             origin = (
                 position.x + offset_world[0],
@@ -354,11 +448,13 @@ class GazeboMid360FastlioAdapter:
         # Give them the same timestamp so the downstream ApproximateTime
         # synchronizer cannot lose pairs when a dense scan takes noticeable
         # CPU time to transform.
-        header.stamp = odom.header.stamp
+        header.stamp = planner_odom.header.stamp
         header.frame_id = self.world_frame
         if rospy.is_shutdown():
             return
         try:
+            if self.planner_odom_pub is not None:
+                self.planner_odom_pub.publish(planner_odom)
             self.registered_pub.publish(
                 point_cloud2.create_cloud_xyz32(header, registered)
             )

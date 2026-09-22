@@ -144,6 +144,7 @@ class SuperExplorationDecider {
   bool publishLateralDetourGoal(
       const VoxelSet& reachable,
       const std::vector<FrontierCandidate>& candidates);
+  bool reverseMissionHeadingAtDeadEnd(const MapClosureStatus& closure);
   bool tryForwardHandover(const VoxelSet& reachable);
   bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
   bool isForwardCandidate(const FrontierCandidate& candidate) const;
@@ -215,6 +216,7 @@ class SuperExplorationDecider {
   bool active_goal_is_end_approach_{false};
   bool exploration_started_{false};
   bool returning_home_{false};
+  bool dead_end_backtracking_{false};
   bool mission_finished_{false};
   bool enabled_{true};
   // In the laboratory test mode, autonomy must be started by a fresh
@@ -228,9 +230,15 @@ class SuperExplorationDecider {
   int reached_goal_count_{0};
   int three_wall_complete_streak_{0};
   int map_closure_complete_streak_{0};
+  int dead_end_heading_reversal_count_{0};
   std::size_t map_growth_reference_count_{0};
 
   double mission_heading_yaw_{0.0};
+  // Scenario-only rotation from the vehicle yaw captured at task start to
+  // the preferred outbound exploration direction.
+  double mission_heading_offset_{0.0};
+  double absolute_mission_heading_yaw_{0.0};
+  bool use_absolute_mission_heading_{false};
 
   ExplorationPhase exploration_phase_{ExplorationPhase::kForwardPriority};
   bool left_wall_visible_{false};
@@ -283,6 +291,7 @@ class SuperExplorationDecider {
   double side_wall_min_range_{1.0};
   double side_wall_max_range_{12.0};
   double front_obstacle_range_{6.0};
+  double front_obstacle_min_progress_{8.0};
   double front_obstacle_sector_deg_{24.0};
   double front_obstacle_min_lateral_span_{1.0};
   double front_obstacle_min_vertical_span_{0.8};
@@ -323,9 +332,11 @@ class SuperExplorationDecider {
   double map_closure_min_progress_{8.0};
   double map_closure_no_frontier_time_{4.0};
   double map_closure_stable_time_{4.0};
+  double dead_end_reversal_delay_{4.0};
   int map_closure_max_actionable_frontiers_{0};
   int map_closure_growth_voxels_{500};
   int map_closure_confirm_cycles_{4};
+  int max_dead_end_heading_reversals_{0};
   int max_reachable_voxels_{150000};
   int max_frontier_candidates_{500};
   bool raycast_enable_{true};

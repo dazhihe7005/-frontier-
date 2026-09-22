@@ -4,20 +4,35 @@
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
   <arg name="world_geometry_filter" default="false"/>
-  <arg name="sensor_offset_z" default="0.14"/>
   <arg name="global_cloud_voxel_size" default="0.20"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="8.0"/>
+  <arg name="takeoff_height" default="1.5"/>
+  <arg name="vision_stable_duration" default="3.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
+  <arg name="fastlio_config"
+       default="$(find mine_uav_control)/config/fastlio_gazebo_mid360.yaml"/>
+  <!-- Canonical no-GPS SITL airframe. This selects PX4 autostart 1018; the
+       SDF below remains the STEP-derived 6 kg vehicle. -->
+  <arg name="vehicle" default="iris_xy_vision"/>
   <arg name="vehicle_sdf"
        default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
-  <arg name="spawn_x" default="0"/>
-  <arg name="spawn_y" default="0"/>
-  <arg name="spawn_z" default="1.15"/>
+
+  <env name="GAZEBO_MODEL_PATH"
+       value="$(find mine_uav_control)/models:$(optenv GAZEBO_MODEL_PATH)"/>
+  <!-- A surveyed, nearly level patch of the actual irregular collision mesh.
+       Its relief keeps the Gazebo contact solver and IMU physically active,
+       while the resulting initial roll/pitch remain below one degree. -->
+  <arg name="spawn_x" default="1.85"/>
+  <arg name="spawn_y" default="-0.65"/>
+  <arg name="spawn_z" default="0.1404"/>
   <arg name="spawn_yaw" default="0"/>
+  <arg name="mission_heading_offset" default="0.0"/>
+  <arg name="use_absolute_mission_heading" default="false"/>
+  <arg name="absolute_mission_heading_yaw" default="0.0"/>
   <arg name="max_exploration_radius" default="24.0"/>
-  <arg name="decider_vehicle_radius" default="0.40"/>
+  <arg name="decider_vehicle_radius" default="0.51"/>
   <arg name="decider_vertical_vehicle_radius" default="-1.0"/>
   <arg name="frontier_search_radius" default="10.0"/>
   <arg name="decider_max_map_radius" default="40.0"/>
@@ -36,6 +51,15 @@
   <arg name="map_closure_no_frontier_time" default="4.0"/>
   <arg name="map_closure_stable_time" default="4.0"/>
   <arg name="map_closure_growth_voxels" default="500"/>
+  <arg name="use_map_closure_completion" default="true"/>
+  <arg name="require_three_wall_completion" default="false"/>
+  <arg name="no_frontier_timeout" default="8.0"/>
+  <arg name="max_outbound_backtrack" default="2.0"/>
+  <arg name="max_dead_end_heading_reversals" default="0"/>
+  <arg name="dead_end_reversal_delay" default="4.0"/>
+  <arg name="min_observation_height_above_home" default="0.0"/>
+  <arg name="max_observation_height_above_home" default="0.3"/>
+  <arg name="cruise_height_above_home" default="0.0"/>
   <arg name="lidar_max_range" default="30.0"/>
   <arg name="max_global_points" default="120000"/>
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
@@ -47,50 +71,83 @@
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="interactive" value="false"/>
-    <arg name="vehicle" value="iris"/>
+    <arg name="vehicle" value="$(arg vehicle)"/>
     <arg name="sdf" value="$(arg vehicle_sdf)"/>
     <arg name="world" value="$(arg world)"/>
     <arg name="x" value="$(arg spawn_x)"/>
     <arg name="y" value="$(arg spawn_y)"/>
-    <!-- Start above the ground for the exploration-loop SITL test. The real
-         vehicle should run a separate takeoff phase before enabling task one. -->
+    <!-- sitl_task_operator performs the controlled 1.5 m takeoff before it
+         enables task one. -->
     <arg name="z" value="$(arg spawn_z)"/>
     <arg name="Y" value="$(arg spawn_yaw)"/>
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
 
-  <!-- Simulation-only localization contract. This node never arms PX4 or
-       emulates RC input. -->
-  <node pkg="mine_uav_control" type="sitl_localization_adapter.py"
-        name="sitl_localization_adapter" output="screen" required="true"/>
+  <!-- Default no-GPS localization chain: simulated MID360 returns and raw
+       PX4 IMU are the only estimator inputs. Gazebo world pose is not used. -->
+  <node pkg="mine_uav_control" type="pointcloud1_to_pointcloud2"
+        name="mid360_pointcloud_converter" output="screen" required="true">
+    <param name="input_topic" value="/mine_uav/sitl/mid360/points"/>
+    <param name="output_topic" value="/mine_uav/sitl/mid360/points2"/>
+    <param name="min_range" value="0.20"/>
+    <param name="max_range" value="$(arg lidar_max_range)"/>
+    <param name="max_range_epsilon" value="0.05"/>
+  </node>
+  <rosparam command="load" file="$(arg fastlio_config)"/>
+  <param name="feature_extract_enable" type="bool" value="false"/>
+  <param name="point_filter_num" type="int" value="2"/>
+  <param name="max_iteration" type="int" value="3"/>
+  <param name="filter_size_surf" type="double" value="0.15"/>
+  <param name="filter_size_map" type="double" value="0.20"/>
+  <param name="cube_side_length" type="double" value="100"/>
+  <param name="runtime_pos_log_enable" type="bool" value="false"/>
+  <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
+        output="screen" required="true"/>
+  <node pkg="mine_uav_control" type="fastlio_px4_vision_bridge"
+        name="fastlio_px4_vision_bridge" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
+  </node>
+
+  <!-- Build the planner cloud from the real FAST-LIO2 pose and the same raw
+       MID360 scan.  This simulation-only adapter removes aircraft self
+       returns and emits no-return rays as free-space evidence; it never uses
+       Gazebo vehicle pose unless the explicit geometry A/B filter is enabled. -->
+  <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
+        name="task1_planner_cloud_adapter" output="screen" required="true">
+    <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
+    <param name="odom_topic" value="/Odometry"/>
+    <param name="output_topic" value="/mine_uav/sitl/planner_cloud_registered"/>
+    <param name="px4_pose_topic" value="/mavros/local_position/pose"/>
+    <param name="output_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
+    <param name="max_height_age" value="0.5"/>
+    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
+    <param if="$(arg world_geometry_filter)" name="world_geometry_file" value="$(arg world)"/>
+    <param name="world_frame" value="camera_init"/>
+    <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
+    <rosparam param="sensor_rpy">[0.0, 0.436332313, 0.0]</rosparam>
+    <param name="self_filter_enable" value="true"/>
+    <param name="self_filter_xy_radius" value="1.00"/>
+    <param name="self_filter_z_min" value="-0.65"/>
+    <param name="self_filter_z_max" value="0.25"/>
+    <param name="min_range" value="0.30"/>
+    <param name="max_range" value="29.5"/>
+    <param name="voxel_size" value="$(arg global_cloud_voxel_size)"/>
+    <param name="max_global_points" value="$(arg max_global_points)"/>
+  </node>
 
   <!-- Simulation-only pilot procedure. Sensor and planner data do not pass
        through this node. -->
   <node pkg="mine_uav_control" type="sitl_task_operator.py"
         name="sitl_task_operator" output="screen" required="true">
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
-    <param name="takeoff_height" value="1.5"/>
+    <param name="takeoff_height" value="$(arg takeoff_height)"/>
     <param name="takeoff_hover_duration" value="1.0"/>
+    <param name="hover_horizontal_tolerance" value="0.30"/>
+    <param name="hover_vertical_tolerance" value="0.25"/>
+    <param name="vision_status_topic" value="/mine_uav/task1/vision_status"/>
+    <param name="vision_stable_duration" value="$(arg vision_stable_duration)"/>
     <param name="auto_enable_delay" value="$(arg auto_enable_delay)"/>
-  </node>
-
-  <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
-        name="gazebo_mid360_fastlio_adapter" output="screen" required="true">
-    <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
-    <param name="odom_topic" value="/Odometry"/>
-    <param name="output_topic" value="/cloud_registered"/>
-    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
-    <param if="$(arg world_geometry_filter)" name="world_geometry_file" value="$(arg world)"/>
-    <param name="world_frame" value="camera_init"/>
-    <rosparam param="sensor_offset" subst_value="true">[0.0, 0.0, $(arg sensor_offset_z)]</rosparam>
-    <param name="self_filter_enable" value="true"/>
-    <param name="self_filter_xy_radius" value="1.00"/>
-    <param name="self_filter_z_min" value="-0.65"/>
-    <param name="self_filter_z_max" value="0.25"/>
-    <param name="min_range" value="0.30"/>
-    <param name="max_range" value="$(arg lidar_max_range)"/>
-    <param name="voxel_size" value="$(arg global_cloud_voxel_size)"/>
-    <param name="max_global_points" value="$(arg max_global_points)"/>
   </node>
 
   <node pkg="mine_uav_control" type="mission_scheduler"
@@ -102,7 +159,11 @@
   <!-- Planning-map lifecycle follows CH7. /Odometry remains continuously
        available to the scheduler and PX4-facing localization path. -->
   <node pkg="mine_uav_control" type="task1_perception_gate"
-        name="task1_perception_gate" output="screen" required="true"/>
+        name="task1_perception_gate" output="screen" required="true">
+    <param name="input_cloud_topic"
+           value="/mine_uav/sitl/planner_cloud_registered"/>
+    <param name="input_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
+  </node>
 
   <node pkg="mine_uav_control" type="super_exploration_decider"
         name="super_exploration_decider" output="screen" required="true">
@@ -141,16 +202,34 @@
            value="$(arg map_closure_stable_time)"/>
     <param name="map_closure_growth_voxels"
            value="$(arg map_closure_growth_voxels)"/>
-    <!-- Home is captured after the simulated 1.5 m hover. Keep traversal at
+    <param name="use_map_closure_completion"
+           value="$(arg use_map_closure_completion)"/>
+    <param name="require_three_wall_completion"
+           value="$(arg require_three_wall_completion)"/>
+    <param name="max_outbound_backtrack"
+           value="$(arg max_outbound_backtrack)"/>
+    <param name="max_dead_end_heading_reversals"
+           value="$(arg max_dead_end_heading_reversals)"/>
+    <param name="dead_end_reversal_delay"
+           value="$(arg dead_end_reversal_delay)"/>
+    <!-- Home is captured after the scenario-configured hover. Keep traversal at
          that altitude instead of adding another climb above airborne home. -->
-    <param name="min_observation_height_above_home" value="0.0"/>
-    <param name="max_observation_height_above_home" value="0.3"/>
-    <param name="cruise_height_above_home" value="0.0"/>
+    <param name="min_observation_height_above_home"
+           value="$(arg min_observation_height_above_home)"/>
+    <param name="max_observation_height_above_home"
+           value="$(arg max_observation_height_above_home)"/>
+    <param name="cruise_height_above_home"
+           value="$(arg cruise_height_above_home)"/>
     <param name="directional_vertical_tolerance" value="1.5"/>
     <!-- Return to the airborne task-start hover. Landing remains manual. -->
     <param name="return_home_height_offset" value="0.0"/>
-    <param name="no_frontier_timeout" value="8.0"/>
+    <param name="no_frontier_timeout" value="$(arg no_frontier_timeout)"/>
     <param name="require_mission_enable_edge" value="$(arg require_mission_enable_edge)"/>
+    <param name="mission_heading_offset" value="$(arg mission_heading_offset)"/>
+    <param name="use_absolute_mission_heading"
+           value="$(arg use_absolute_mission_heading)"/>
+    <param name="absolute_mission_heading_yaw"
+           value="$(arg absolute_mission_heading_yaw)"/>
   </node>
 
   <node pkg="super_planner" type="fsm_node" name="fsm_node"
@@ -159,10 +238,11 @@
            value="$(arg super_config_path)"/>
   </node>
 
-  <!-- POSCTL requires live RC/manual-control input. AUTO.LOITER provides a
-       headless-SITL hold after task completion; the real launch keeps POSCTL. -->
+  <!-- The 1018 airframe has neither GPS nor live RC/manual input, so POSCTL
+       and AUTO.LOITER are rejected after OFFBOARD exits. Task one has already
+       returned home here; AUTO.LAND is the safe PX4-owned terminal action. -->
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
-    <arg name="fallback_mode" value="AUTO.LOITER"/>
+    <arg name="fallback_mode" value="AUTO.LAND"/>
     <!-- The planner remains limited to 1.0 m/s.  SITL needs a separate
          anomaly threshold because PX4 tracking velocity is inherited by
          online replans and can briefly exceed the nominal planner limit. -->

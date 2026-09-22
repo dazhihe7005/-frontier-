@@ -15,7 +15,7 @@ from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import RCIn, State
 from mavros_msgs.srv import CommandBool, SetMode
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 
 class SitlTaskOperator:
@@ -28,6 +28,12 @@ class SitlTaskOperator:
         self.hover_duration = max(
             0.5, float(rospy.get_param("~takeoff_hover_duration", 1.0))
         )
+        self.hover_horizontal_tolerance = max(
+            0.1, float(rospy.get_param("~hover_horizontal_tolerance", 0.30))
+        )
+        self.hover_vertical_tolerance = max(
+            0.1, float(rospy.get_param("~hover_vertical_tolerance", 0.25))
+        )
         self.prestream_duration = max(
             1.0, float(rospy.get_param("~offboard_prestream_duration", 1.0))
         )
@@ -37,6 +43,12 @@ class SitlTaskOperator:
         self.task_switch_pwm = int(rospy.get_param("~task_switch_pwm", 1000))
         self.bridge_ready_topic = rospy.get_param(
             "~bridge_ready_topic", "/mine_uav/task1/command_ready"
+        )
+        self.vision_status_topic = rospy.get_param(
+            "~vision_status_topic", "/mine_uav/task1/vision_status"
+        )
+        self.vision_stable_duration = max(
+            1.0, float(rospy.get_param("~vision_stable_duration", 3.0))
         )
         self.rate = max(10.0, float(rospy.get_param("~rate", 20.0)))
 
@@ -51,6 +63,7 @@ class SitlTaskOperator:
         self._last_arm_request = rospy.Time(0)
         self._ready = False
         self._bridge_handoff_complete = False
+        self._vision_streaming_since = rospy.Time(0)
 
         self.rc_pub = rospy.Publisher("/mine_uav/sitl/rc/in", RCIn, queue_size=2)
         self.setpoint_pub = rospy.Publisher(
@@ -60,6 +73,8 @@ class SitlTaskOperator:
         rospy.Subscriber(self.odom_topic, Odometry, self._odom_callback, queue_size=20)
         rospy.Subscriber(self.bridge_ready_topic, Bool,
                          self._bridge_ready_callback, queue_size=2)
+        rospy.Subscriber(self.vision_status_topic, String,
+                         self._vision_status_callback, queue_size=5)
         self.arm_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
         self.mode_client = rospy.ServiceProxy("/mavros/set_mode", SetMode)
         rospy.Timer(rospy.Duration(1.0 / self.rate), self._timer)
@@ -78,6 +93,14 @@ class SitlTaskOperator:
             with self._lock:
                 self._bridge_handoff_complete = True
 
+    def _vision_status_callback(self, message):
+        with self._lock:
+            if message.data == "STREAMING":
+                if self._vision_streaming_since.is_zero():
+                    self._vision_streaming_since = rospy.Time.now()
+            else:
+                self._vision_streaming_since = rospy.Time(0)
+
     def _timer(self, _event):
         with self._lock:
             state = self._state
@@ -91,10 +114,11 @@ class SitlTaskOperator:
             # leave OFFBOARD before SUPER finishes its first plan. Never
             # resume this publisher after the bridge has taken ownership.
             self._publish_takeoff_target(now)
-        elapsed = (now - self._start).to_sec()
-        self._publish_rc(
-            auto_enabled=(self._ready and state.armed and elapsed >= self.auto_enable_delay)
-        )
+        # Once the simulated pilot raises CH7, keep it high for this launch.
+        # Dropping it merely because AUTO.LAND disarmed the vehicle creates a
+        # second switch edge and can start task one again immediately after a
+        # successful mission.
+        self._publish_rc(auto_enabled=self._ready)
 
     def _publish_rc(self, auto_enabled):
         message = RCIn()
@@ -113,6 +137,14 @@ class SitlTaskOperator:
             return
         if not rospy.get_param("/use_sim_time", False):
             rospy.logerr_throttle(2.0, "Refusing SITL automation without /use_sim_time")
+            return
+        with self._lock:
+            vision_streaming_since = self._vision_streaming_since
+        if (vision_streaming_since.is_zero() or
+                (now - vision_streaming_since).to_sec() < self.vision_stable_duration):
+            rospy.loginfo_throttle(
+                2.0, "Waiting for stable FAST-LIO2 external vision before SITL takeoff"
+            )
             return
         if self._origin is None:
             pose = odom.pose.pose
@@ -146,7 +178,8 @@ class SitlTaskOperator:
             position.y - target.pose.position.y,
         )
         vertical_error = abs(position.z - target.pose.position.z)
-        if horizontal_error <= 0.20 and vertical_error <= 0.15:
+        if (horizontal_error <= self.hover_horizontal_tolerance and
+                vertical_error <= self.hover_vertical_tolerance):
             if self._hover_start.is_zero():
                 self._hover_start = now
                 rospy.loginfo("SITL reached pre-task hover")

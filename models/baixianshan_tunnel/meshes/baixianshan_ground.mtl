@@ -1,0 +1,12 @@
+# Blender 5.2.0 LTS MTL File: '白象山巷道_展示精修版_管线修订.blend'
+# www.blender.org
+
+newmtl V2_Ground_Dry_Gravel_Dust
+Ns 1.600002
+Ka 1.000000 1.000000 1.000000
+Kd 0.095000 0.087000 0.073000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2

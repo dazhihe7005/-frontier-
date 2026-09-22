@@ -27,9 +27,9 @@ Visualization Manager:
       Decay Time: 8
       Alpha: 0.8
     - Class: rviz/Path
-      Name: PX4 SITL trajectory
+      Name: FAST-LIO2 trajectory
       Enabled: true
-      Topic: /mine_uav/sitl/px4_path
+      Topic: /path
       Color: 0; 255; 80
       Line Style: Lines
       Line Width: 0.05
@@ -63,13 +63,13 @@ Visualization Manager:
     Current:
       Class: rviz/Orbit
       Name: Current View
-      Target Frame: camera_init
-      Distance: 34
+      Target Frame: base_link
+      Distance: 12
       Focal Point:
         X: 0
         Y: 0
-        Z: -9
-      Pitch: 1.15
+        Z: 0
+      Pitch: 1.05
       Yaw: 0.7
     Saved: ~
 Window Geometry:

@@ -33,10 +33,11 @@ super_planner:
   receding_dis: 4.0
   # Assumes 800 mm motor-to-motor span; 800 cm would be a different scale.
   robot_r: 0.40
-  # Planner camera_init bounds for the 40 m SITL profile (alignment_z=0).
-  # Real flights require bounds converted from the measured PX4 alignment.
-  flight_min_z: -2.0
-  flight_max_z: 1.8
+  # Broad planner bounds shared by level and inclined simulated mines. Each
+  # launch keeps its own tighter PX4 bridge fence; real flights still require
+  # bounds converted from the measured PX4 alignment.
+  flight_min_z: -5.0
+  flight_max_z: 8.0
   yaw_dot_max: 1.0
   yaw_mode: 1
   mpc_horizon: 15
@@ -88,7 +89,9 @@ traj_opt:
     penna_omg: 1.0e+5
     penna_thr: 1.0e+5
   flatness:
-    mass: 1.64
+    # STEP-derived custom airframe total mass, including both batteries and
+    # MID360S.  Keep the planner dynamics consistent with PX4/Gazebo.
+    mass: 6.0
     dh: 0.35
     dv: 0.35
     cp: 0.001
@@ -113,13 +116,11 @@ rog_map:
   map_size: [50, 50, 6]
   fix_map_origin: [0, 0, 0]
   frontier_extraction_en: false
-  # WARNING: This is a map bound in camera_init, not the PX4 flight fence.
-  # With the current inflation settings, input 4.0 allows getGridType(Vec3f)
-  # up to roughly z=2.5; the bridge separately caps aligned PX4-local z=1.8.
-  # A 3.2 trial kept this room flyable but raised optimizer warnings (run12).
-  # Keep the run10/11 baseline until planner and bridge share a dynamic bound.
-  virtual_ceil_height: 4.0
-  virtual_ground_height: -3.5
+  # These are broad camera_init limits, not the per-scenario PX4 fence. They
+  # cover the surveyed tunnel incline while the sliding local map remains 6 m
+  # high around the vehicle.
+  virtual_ceil_height: 9.0
+  virtual_ground_height: -5.0
   load_pcd_en: false
   map_sliding:
     enable: true

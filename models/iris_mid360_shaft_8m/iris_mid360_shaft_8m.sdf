@@ -2,33 +2,36 @@
 <sdf version="1.6">
   <model name="iris_mid360_shaft_8m">
     <include>
-      <uri>model://iris</uri>
+      <uri>model://mine_uav_800_no_gps</uri>
       <name>iris</name>
     </include>
 
     <link name="mid360_link">
-      <pose>0 0 0.14 0 0 0</pose>
+      <!-- FLU: 131.5 mm forward, 173 mm above the 50 mm body-top
+           reference, pitched 25 deg toward -Z. -->
+      <pose>0.1315 0 0.223 0 0.436332313 0</pose>
       <inertial>
-        <mass>0.03</mass>
+        <!-- Livox MID360S mass used by the canonical vehicle: 265 g. -->
+        <mass>0.265</mass>
         <inertia>
-          <ixx>1.0e-5</ixx>
-          <iyy>1.0e-5</iyy>
-          <izz>1.0e-5</izz>
+          <ixx>1.50e-4</ixx>
+          <iyy>1.50e-4</iyy>
+          <izz>1.40e-4</izz>
         </inertia>
       </inertial>
       <collision name="collision">
         <geometry>
           <cylinder>
-            <radius>0.035</radius>
-            <length>0.04</length>
+            <radius>0.0325</radius>
+            <length>0.06</length>
           </cylinder>
         </geometry>
       </collision>
       <visual name="visual">
         <geometry>
           <cylinder>
-            <radius>0.035</radius>
-            <length>0.04</length>
+            <radius>0.0325</radius>
+            <length>0.06</length>
           </cylinder>
         </geometry>
         <material>
@@ -79,11 +82,11 @@
           <gaussianNoise>0.0</gaussianNoise>
         </plugin>
       </sensor>
-      <!-- Downward single-beam range for shaft SITL. Gazebo ray axis is +X;
-           +90 deg pitch points it toward -Z. Offset cancels this link's
-           +0.14 m mounting height so measurements start at the base origin. -->
+      <!-- Downward single-beam range for shaft SITL. This local transform
+           cancels the MID360S mount transform, so its ray starts at the body
+           origin and points along body -Z. -->
       <sensor name="shaft_downward_ray" type="ray">
-        <pose>0 0 -0.14 0 1.57079632679 0</pose>
+        <pose>-0.024935602 0 -0.257680938 0 1.134464014 0</pose>
         <always_on>true</always_on>
         <update_rate>20</update_rate>
         <ray>

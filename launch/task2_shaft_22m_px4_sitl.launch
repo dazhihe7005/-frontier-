@@ -21,6 +21,8 @@
   <arg name="world" default="$(find mine_uav_control)/worlds/shaft_22m_logic_sitl.world"/>
   <arg name="bottom_top_world_z" default="-20.85"/>
   <arg name="entrance_world_z" default="0.25"/>
+  <env name="GAZEBO_MODEL_PATH"
+       value="$(find mine_uav_control)/models:$(optenv GAZEBO_MODEL_PATH)"/>
   <include file="$(find px4)/launch/mavros_posix_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="interactive" value="false"/>
