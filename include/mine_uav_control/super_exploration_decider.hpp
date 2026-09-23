@@ -128,6 +128,7 @@ class SuperExplorationDecider {
   void publishCoverageStatus(const ThreeWallCoverage& coverage,
                              const MapClosureStatus& closure);
   void pruneMap();
+  void carveTraversedVehicleEnvelope(const geometry_msgs::Point& position);
   void markFree(const VoxelKey& key);
   void markOccupied(const VoxelKey& key);
   VoxelKey positionToKey(double x, double y, double z) const;
@@ -296,6 +297,7 @@ class SuperExplorationDecider {
   double front_obstacle_min_lateral_span_{1.0};
   double front_obstacle_min_vertical_span_{0.8};
   double forward_corridor_half_width_{2.0};
+  double forward_goal_lateral_search_width_{2.0};
   double max_task_lateral_offset_{4.0};
   double forward_progress_weight_{2.0};
   double forward_lateral_penalty_{2.0};
@@ -340,6 +342,7 @@ class SuperExplorationDecider {
   int max_reachable_voxels_{150000};
   int max_frontier_candidates_{500};
   bool raycast_enable_{true};
+  bool carve_traversed_vehicle_envelope_{false};
   std::string free_ray_topic_;
   bool strict_cloud_frame_{true};
   bool require_three_wall_completion_{false};

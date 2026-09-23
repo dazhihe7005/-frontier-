@@ -162,6 +162,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("max_dead_end_heading_reversals",
                     max_dead_end_heading_reversals_,
                     max_dead_end_heading_reversals_);
+  private_nh_.param("carve_traversed_vehicle_envelope",
+                    carve_traversed_vehicle_envelope_,
+                    carve_traversed_vehicle_envelope_);
 
   private_nh_.param("voxel_resolution", voxel_resolution_, voxel_resolution_);
   private_nh_.param("max_map_radius", max_map_radius_, max_map_radius_);
@@ -232,6 +235,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("forward_corridor_half_width",
                     forward_corridor_half_width_,
                     forward_corridor_half_width_);
+  private_nh_.param("forward_goal_lateral_search_width",
+                    forward_goal_lateral_search_width_,
+                    forward_goal_lateral_search_width_);
   private_nh_.param("max_task_lateral_offset", max_task_lateral_offset_,
                     max_task_lateral_offset_);
   private_nh_.param("forward_progress_weight", forward_progress_weight_,
@@ -374,6 +380,9 @@ bool SuperExplorationDecider::loadParameters() {
       front_obstacle_min_vertical_span_ <= 0.0 ||
       !std::isfinite(forward_corridor_half_width_) ||
       forward_corridor_half_width_ <= vehicle_radius_ ||
+      !std::isfinite(forward_goal_lateral_search_width_) ||
+      forward_goal_lateral_search_width_ < 0.0 ||
+      forward_goal_lateral_search_width_ > forward_corridor_half_width_ ||
       !std::isfinite(max_task_lateral_offset_) ||
       max_task_lateral_offset_ < forward_corridor_half_width_ ||
       !std::isfinite(forward_progress_weight_) ||
@@ -504,6 +513,9 @@ void SuperExplorationDecider::synchronizedCallback(
              mission_heading_yaw_ * 180.0 / M_PI);
   }
   updateMap(*cloud, current_pose_);
+  if (carve_traversed_vehicle_envelope_) {
+    carveTraversedVehicleEnvelope(current_pose_.pose.position);
+  }
   updateDirectionalEvidence(*cloud, current_pose_);
   if (enabled_ && exploration_started_ && !returning_home_ &&
       !dead_end_backtracking_ && !mission_finished_ &&
@@ -827,8 +839,20 @@ void SuperExplorationDecider::updateDirectionalEvidence(
     vehicle_progress = std::cos(mission_heading_yaw_) * vehicle_dx +
                        std::sin(mission_heading_yaw_) * vehicle_dy;
   }
+  // The first outbound leg keeps the full progress gate so structure around
+  // the launch platform cannot masquerade as a dead end.  After one
+  // confirmed dead end and a breadcrumb return to the origin, however, the
+  // opposite branch may genuinely be shorter than that gate (the surveyed
+  // Bai Xiang Shan spawn has exactly this shape).  In that state accept only
+  // *live* directional evidence after one normal goal length of departure.
+  // Historic map-wall evidence remains subject to the full gate below in
+  // evaluateMapClosure().
+  const double live_front_min_progress =
+      dead_end_heading_reversal_count_ > 0
+          ? std::min(front_obstacle_min_progress_, min_goal_distance_)
+          : front_obstacle_min_progress_;
   const bool front_progress_allowed =
-      !have_home_ || vehicle_progress >= front_obstacle_min_progress_;
+      !have_home_ || vehicle_progress >= live_front_min_progress;
   const bool front_seen =
       front_progress_allowed &&
       front_point_count >= front_obstacle_min_points_ &&
@@ -1035,9 +1059,21 @@ SuperExplorationDecider::evaluateMapClosure(
   const double dy = current_pose_.pose.position.y -
                     home_pose_.pose.position.y;
   result.vehicle_progress = c * dx + s * dy;
+  // Global wall coverage may already contain the wall behind the aircraft
+  // after a heading reversal. Do not let that old evidence block departure
+  // from the mission origin in the new direction. The live front detector
+  // applies the same minimum-progress gate.
+  const bool live_front_boundary =
+      front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+  const double live_front_min_progress =
+      dead_end_heading_reversal_count_ > 0
+          ? std::min(front_obstacle_min_progress_, min_goal_distance_)
+          : front_obstacle_min_progress_;
   result.front_boundary_seen =
-      front_obstacle_streak_ >= front_obstacle_confirm_frames_ ||
-      end_wall_seen;
+      (live_front_boundary &&
+       result.vehicle_progress >= live_front_min_progress) ||
+      (end_wall_seen &&
+       result.vehicle_progress >= front_obstacle_min_progress_);
 
   // A transverse wall is not a terminal boundary if observed free space is
   // connected around it. Use the same vehicle-clear reachable component as
@@ -1107,12 +1143,38 @@ SuperExplorationDecider::evaluateMapClosure(
       result.actionable_frontiers <=
           static_cast<std::size_t>(map_closure_max_actionable_frontiers_) &&
       result.no_frontier_duration >= map_closure_no_frontier_time_;
+  // Once one confirmed dead end has already caused a reversal, reaching a
+  // second closed boundary with no connected passage or actionable frontier
+  // completes the explored component even if neither individual branch is as
+  // long as the single-direction nominal progress threshold.
+  const bool progress_sufficient =
+      result.vehicle_progress >= map_closure_min_progress_ ||
+      dead_end_heading_reversal_count_ > 0;
+  // A first dead end still needs a real front boundary before it can reverse.
+  // After that confirmed reversal and a return through recorded free space,
+  // the opposite side can terminate at the edge of the vehicle-reachable
+  // connected component even when there is no transverse wall (for example,
+  // a surveyed branch which becomes disconnected by permanent structure).
+  // Require departure from the origin, no reachable passage/frontier, and a
+  // converged map; this is not a license to treat an arbitrary temporary map
+  // gap as a wall.
+  const bool reversed_component_exhausted =
+      dead_end_heading_reversal_count_ > 0 &&
+      result.vehicle_progress >= min_goal_distance_ &&
+      !result.reachable_forward_passage && frontier_closed;
   const bool front_boundary_ok =
-      !map_closure_require_front_boundary_ || result.front_boundary_seen;
-  result.complete = result.vehicle_progress >= map_closure_min_progress_ &&
+      !map_closure_require_front_boundary_ || result.front_boundary_seen ||
+      reversed_component_exhausted;
+  // A live wall after reversal is stronger evidence and need not wait for the
+  // noisy binary occupied-voxel count to settle.
+  const bool reversed_live_boundary_confirmed =
+      dead_end_heading_reversal_count_ > 0 && live_front_boundary;
+  const bool map_converged =
+      result.stable_map_duration >= map_closure_stable_time_;
+  result.complete = progress_sufficient &&
                     front_boundary_ok && !result.reachable_forward_passage &&
                     frontier_closed &&
-                    result.stable_map_duration >= map_closure_stable_time_;
+                    (map_converged || reversed_live_boundary_confirmed);
   return result;
 }
 
@@ -1156,6 +1218,51 @@ void SuperExplorationDecider::pruneMap() {
       it = voxels_.erase(it);
     } else {
       ++it;
+    }
+  }
+}
+
+void SuperExplorationDecider::carveTraversedVehicleEnvelope(
+    const geometry_msgs::Point& position) {
+  // This is deliberately opt-in. In a collision-enabled simulation the
+  // volume currently occupied by the aircraft is known to be traversable,
+  // so stale accumulated endpoints caused by pose/voxel jitter must not turn
+  // that swept route into a permanent occupied barrier. Real deployments
+  // keep the option disabled because localization error could otherwise
+  // erase a genuine wall from the task-level map.
+  const VoxelKey center = positionToKey(position.x, position.y, position.z);
+  if (vertical_vehicle_radius_ > 0.0) {
+    const double search_xy =
+        vehicle_radius_ + voxel_resolution_ * 0.7071067811865476;
+    const double search_z =
+        vertical_vehicle_radius_ + voxel_resolution_ * 0.5;
+    const int xy_cells =
+        static_cast<int>(std::ceil(search_xy / voxel_resolution_));
+    const int z_cells =
+        static_cast<int>(std::ceil(search_z / voxel_resolution_));
+    for (int dx = -xy_cells; dx <= xy_cells; ++dx) {
+      for (int dy = -xy_cells; dy <= xy_cells; ++dy) {
+        for (int dz = -z_cells; dz <= z_cells; ++dz) {
+          if (insideAnisotropicClearance(
+                  dx, dy, dz, voxel_resolution_, vehicle_radius_,
+                  vertical_vehicle_radius_)) {
+            voxels_[{center.x + dx, center.y + dy, center.z + dz}] = kFree;
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  const int radius = std::max(
+      1, static_cast<int>(std::ceil(vehicle_radius_ / voxel_resolution_)));
+  for (int dx = -radius; dx <= radius; ++dx) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      for (int dz = -radius; dz <= radius; ++dz) {
+        if (dx * dx + dy * dy + dz * dz <= radius * radius) {
+          voxels_[{center.x + dx, center.y + dy, center.z + dz}] = kFree;
+        }
+      }
     }
   }
 }
@@ -1587,7 +1694,11 @@ bool SuperExplorationDecider::publishEndApproachGoal(
 
 bool SuperExplorationDecider::publishForwardLookaheadGoal(
     const VoxelSet& reachable) {
-  if (!have_home_ || exploration_phase_ != ExplorationPhase::kForwardPriority ||
+  // Frontier fallback controls how unstructured frontier candidates are
+  // ranked; it must not suppress a directly observed, vehicle-clear forward
+  // segment. Side-wall visibility can disappear in a surveyed junction while
+  // the centerline remains safely reachable.
+  if (!have_home_ ||
       front_obstacle_streak_ >= front_obstacle_confirm_frames_) {
     return false;
   }
@@ -1603,13 +1714,21 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
       max_exploration_radius_from_home_ - current_progress;
   const double maximum_lookahead =
       std::min(forward_lookahead_distance_, remaining_radius);
-  if (maximum_lookahead < min_goal_distance_) {
+  // After the first confirmed dead end, breadcrumb return can end at the
+  // launch voxel with less than the normal two-metre connected free segment
+  // visible in the opposite direction. Permit one-voxel observation steps
+  // to leave that already traversed origin envelope and obtain a fresh scan.
+  // The initial outbound leg retains the normal minimum goal distance.
+  const double minimum_lookahead = dead_end_heading_reversal_count_ > 0
+      ? std::min(min_goal_distance_, voxel_resolution_)
+      : min_goal_distance_;
+  if (maximum_lookahead < minimum_lookahead) {
     return false;
   }
 
   std::vector<double> lateral_offsets{0.0};
   for (double offset = voxel_resolution_;
-       offset <= forward_corridor_half_width_ + 1e-6;
+       offset <= forward_goal_lateral_search_width_ + 1e-6;
        offset += voxel_resolution_) {
     lateral_offsets.push_back(offset);
     lateral_offsets.push_back(-offset);
@@ -1631,16 +1750,18 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
     }
   }
 
-  // Search all centerline distances before considering any side offset. This
-  // avoids turning sideways merely because the farthest centerline voxel has
-  // one noisy/occupied endpoint; a slightly shorter straight target is the
-  // smoother and more faithful task-level choice.
+  // Search all centerline distances at the cruise height before considering
+  // a vertical offset, and exhaust those choices before trying a side offset.
+  // Otherwise one noisy voxel at the farthest level target can command an
+  // unnecessary climb even though a slightly shorter, level segment is free.
+  // Keeping the task-level goal level also gives SUPER a much better chance
+  // of retaining a feasible corridor around surveyed pipes and machinery.
   for (const double lateral : lateral_offsets) {
-    for (double lookahead = maximum_lookahead;
-         lookahead >= min_goal_distance_ - 1e-6;
-         lookahead -= forward_lookahead_step_) {
-      const double target_progress = current_progress + lookahead;
-      for (const double height_offset : height_offsets) {
+    for (const double height_offset : height_offsets) {
+      for (double lookahead = maximum_lookahead;
+           lookahead >= minimum_lookahead - 1e-6;
+           lookahead -= forward_lookahead_step_) {
+        const double target_progress = current_progress + lookahead;
         geometry_msgs::Point target;
         target.x = home_pose_.pose.position.x + c * target_progress -
                    s * lateral;
@@ -1918,9 +2039,16 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     if (active_goal_id_ == 0) {
       publishGoal(current_goal_, "resume_return_home_after_data_gap");
     }
-    if (squaredDistance(current_pose_.pose.position,
-                       current_goal_.pose.position) <=
-        goal_reached_distance_ * goal_reached_distance_ &&
+    const bool final_return_waypoint =
+        return_waypoint_index_ + 1 == return_waypoints_.size();
+    const double return_arrival_distance = final_return_waypoint
+        ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
+        : goal_reached_distance_;
+    const bool return_waypoint_reached =
+        squaredDistance(current_pose_.pose.position,
+                        current_goal_.pose.position) <=
+        return_arrival_distance * return_arrival_distance;
+    if (return_waypoint_reached &&
         return_waypoint_index_ + 1 < return_waypoints_.size()) {
       ++return_waypoint_index_;
       publishGoal(return_waypoints_[return_waypoint_index_],
@@ -1928,10 +2056,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       publishStatus("RETURNING", "following observed outbound route");
       return;
     }
-    if (squaredDistance(current_pose_.pose.position,
-                       current_goal_.pose.position) <=
-        goal_reached_distance_ * goal_reached_distance_ &&
-        return_waypoint_index_ + 1 == return_waypoints_.size()) {
+    if (return_waypoint_reached && final_return_waypoint) {
       returning_home_ = false;
       mission_finished_ = true;
       cancelActiveGoal("home_reached");
@@ -1951,9 +2076,14 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       publishGoal(return_waypoints_[return_waypoint_index_],
                   "resume_dead_end_backtrack_after_data_gap");
     }
+    const bool final_backtrack_waypoint =
+        return_waypoint_index_ + 1 == return_waypoints_.size();
+    const double backtrack_arrival_distance = final_backtrack_waypoint
+        ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
+        : goal_reached_distance_;
     if (squaredDistance(current_pose_.pose.position,
                         current_goal_.pose.position) <=
-        goal_reached_distance_ * goal_reached_distance_) {
+        backtrack_arrival_distance * backtrack_arrival_distance) {
       if (return_waypoint_index_ + 1 < return_waypoints_.size()) {
         ++return_waypoint_index_;
         publishGoal(return_waypoints_[return_waypoint_index_],
@@ -2083,9 +2213,11 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const double goal_age = (ros::Time::now() - goal_sent_time_).toSec();
     const bool front_obstacle_confirmed =
         front_obstacle_streak_ >= front_obstacle_confirm_frames_;
+    const bool active_goal_is_forward = isForwardCandidate(
+        FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
     const bool forward_goal_handover =
-        exploration_phase_ == ExplorationPhase::kForwardPriority &&
-        !front_obstacle_confirmed && !active_goal_is_end_approach_ &&
+        !front_obstacle_confirmed && active_goal_is_forward &&
+        !active_goal_is_end_approach_ &&
         distance <= forward_goal_handover_distance_ &&
         distance <= active_goal_initial_distance_ - 0.5;
     const bool preempt_blocked_forward_goal =
@@ -2101,8 +2233,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     // target is still unknown, keep following the current forward target
     // until within half a decision voxel, allowing fresh lidar viewpoints.
     const bool forward_target =
-        exploration_phase_ == ExplorationPhase::kForwardPriority &&
-        !front_obstacle_confirmed && !active_goal_is_end_approach_;
+        !front_obstacle_confirmed && active_goal_is_forward &&
+        !active_goal_is_end_approach_;
     const double arrival_distance = forward_target
         ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
         : goal_reached_distance_;
@@ -2155,7 +2287,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
 
   if (!have_active_goal_ && use_map_closure_completion_ &&
       closure.front_boundary_seen && !closure.reachable_forward_passage &&
-      closure.actionable_frontiers == 0) {
+      closure.actionable_frontiers == 0 &&
+      closure.vehicle_progress >= front_obstacle_min_progress_) {
     if (reverseMissionHeadingAtDeadEnd(closure)) {
       publishStatus(
           "DEAD_END_BACKTRACK",

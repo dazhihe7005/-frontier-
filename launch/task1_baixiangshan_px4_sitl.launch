@@ -46,6 +46,10 @@
          body/MID360 vertical half-envelope is about 0.35 m.  A spherical
          0.51 m test on 0.5 m voxels rounds up to an artificial 1 m radius. -->
     <arg name="decider_vertical_vehicle_radius" value="0.35"/>
+    <!-- Gazebo collision proves the actually traversed aircraft envelope is
+         free; clear stale binary-map hits caused by LIO/voxel jitter along
+         that swept route. This remains disabled in real/task-generic use. -->
+    <arg name="carve_traversed_vehicle_envelope" value="true"/>
     <arg name="max_exploration_radius" value="180.0"/>
     <arg name="decider_max_map_radius" value="220.0"/>
     <arg name="frontier_search_radius" value="22.0"/>
@@ -55,6 +59,9 @@
          Treating the whole 6 m tunnel as the forward corridor made pipes and
          parked equipment at the wall look like a complete blockage. -->
     <arg name="forward_corridor_half_width" value="1.0"/>
+    <!-- Keep normal progress goals on the surveyed drift centerline. A
+         confirmed blockage still enables the explicit lateral detour path. -->
+    <arg name="forward_goal_lateral_search_width" value="0.0"/>
     <!-- Reject remote frontier clusters that are not part of the current
          vehicle-clear drift; SUPER still performs local obstacle avoidance. -->
     <arg name="max_task_lateral_offset" value="8.0"/>

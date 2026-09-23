@@ -60,13 +60,23 @@ class BaiXiangShanMapTest(unittest.TestCase):
         self.assertEqual(
             args["absolute_mission_heading_yaw"], "3.141592653589793")
         self.assertEqual(args["forward_corridor_half_width"], "1.0")
+        self.assertEqual(args["forward_goal_lateral_search_width"], "0.0")
         self.assertEqual(args["max_task_lateral_offset"], "8.0")
         self.assertEqual(args["decider_vertical_vehicle_radius"], "0.35")
+        self.assertEqual(args["carve_traversed_vehicle_envelope"], "true")
         self.assertEqual(args["map_closure_min_progress"], "80.0")
         self.assertEqual(args["use_map_closure_completion"], "true")
         self.assertEqual(args["max_dead_end_heading_reversals"], "1")
         self.assertEqual(args["dead_end_reversal_delay"], "4.0")
         self.assertEqual(args["bridge_max_height"], "8.0")
+
+        generic = ET.parse(ROOT / "launch" / "task1_px4_sitl.launch").getroot()
+        generic_defaults = {
+            node.attrib["name"]: node.attrib.get("default")
+            for node in generic.findall("./arg")
+        }
+        self.assertEqual(
+            generic_defaults["carve_traversed_vehicle_envelope"], "false")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,11 @@ raycast_max_range: 30.0
 raycast_enable: true
 max_points_per_cloud: 5000
 vehicle_radius: 0.40
+# Simulation-only recovery for accumulated-map pose/voxel jitter. A
+# collision-enabled simulated aircraft proves its current swept envelope is
+# free. Keep false for real localization, where pose error must never erase a
+# physical obstacle.
+carve_traversed_vehicle_envelope: false
 
 # Home在CH7允许任务时的空中悬停点捕获。默认保持该高度，只允许小幅向上
 # 调整；不得把“相对home高度”误当成“相对地面高度”再叠加一次起飞高度。
@@ -67,6 +72,10 @@ front_obstacle_min_vertical_span: 0.8
 # While either side wall is visible, keep task-level goals in the entry-axis
 # corridor. SUPER may still deviate locally around an obstacle.
 forward_corridor_half_width: 2.0
+# Width searched by ordinary forward look-ahead goals. Set to zero in a
+# surveyed centerline mission; confirmed obstacles use the separate lateral
+# detour path instead of silently turning a forward goal into a side step.
+forward_goal_lateral_search_width: 2.0
 # All task-level frontier goals, including fallback goals, must stay inside
 # this corridor measured from the mission-start heading axis.
 max_task_lateral_offset: 4.0
@@ -105,7 +114,9 @@ map_closure_confirm_cycles: 4
 map_closure_require_front_boundary: true
 # Optional scenario recovery: after a confirmed dead end with no body-clear
 # detour, reverse the task heading and backtrack through already observed free
-# space. Disabled by default so existing single-ended missions are unchanged.
+# space. If the other direction also closes with no actionable frontier, the
+# bidirectional connected component is complete. Disabled by default so
+# existing single-ended missions are unchanged.
 max_dead_end_heading_reversals: 0
 dead_end_reversal_delay: 4.0
 # Reachability flood-fill and candidate clustering are safety/CPU limits, not
