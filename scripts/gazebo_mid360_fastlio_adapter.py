@@ -17,6 +17,7 @@ from collections import deque
 import rospy
 from gazebo_msgs.msg import LinkStates
 from geometry_msgs.msg import PoseStamped
+from mavros_msgs.msg import State
 from nav_msgs.msg import Odometry
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud, PointCloud2
@@ -31,6 +32,9 @@ class GazeboMid360FastlioAdapter:
         self.odom_topic = rospy.get_param("~odom_topic", "/Odometry")
         self.output_topic = rospy.get_param("~output_topic", "/cloud_registered")
         self.px4_pose_topic = rospy.get_param("~px4_pose_topic", "")
+        self.mavros_state_topic = rospy.get_param(
+            "~mavros_state_topic", "/mavros/state"
+        )
         self.output_odom_topic = rospy.get_param("~output_odom_topic", "")
         self.max_height_age = max(
             0.05, float(rospy.get_param("~max_height_age", 0.5))
@@ -73,7 +77,7 @@ class GazeboMid360FastlioAdapter:
             rospy.get_param("~self_filter_enable", True)
         )
         self.self_filter_xy_radius = max(
-            0.0, float(rospy.get_param("~self_filter_xy_radius", 1.00))
+            0.0, float(rospy.get_param("~self_filter_xy_radius", 0.65))
         )
         self.self_filter_z_min = float(
             rospy.get_param("~self_filter_z_min", -0.65)
@@ -90,6 +94,7 @@ class GazeboMid360FastlioAdapter:
         self._lock = threading.Lock()
         self._latest_odom = None
         self._latest_px4_pose = None
+        self._armed = False
         self._height_alignment = None
         self._global_voxels = {}
         self._cloud_count = 0
@@ -115,6 +120,12 @@ class GazeboMid360FastlioAdapter:
                 PoseStamped,
                 self._px4_pose_callback,
                 queue_size=20,
+            )
+            rospy.Subscriber(
+                self.mavros_state_topic,
+                State,
+                self._state_callback,
+                queue_size=10,
             )
         if self._world_boxes:
             rospy.Subscriber(
@@ -144,6 +155,10 @@ class GazeboMid360FastlioAdapter:
     def _px4_pose_callback(self, message):
         with self._lock:
             self._latest_px4_pose = message
+
+    def _state_callback(self, message):
+        with self._lock:
+            self._armed = message.armed
 
     def _links_callback(self, message):
         try:
@@ -283,10 +298,41 @@ class GazeboMid360FastlioAdapter:
             (-sp, cp * sr, cp * cr),
         )
 
+    @staticmethod
+    def _inside_body_self_filter(
+        sensor_point,
+        sensor_rotation,
+        sensor_offset,
+        xy_radius,
+        z_min,
+        z_max,
+    ):
+        """Return whether a sensor-frame point lies inside the UAV body mask.
+
+        MID360S is pitched relative to the airframe, so applying an upright
+        cylinder directly in the lidar frame rotates that cylinder with the
+        sensor and can retain rotor/fuselage returns.  Transform the return to
+        the body frame first; the mask dimensions then retain their physical
+        meaning regardless of mounting angle.
+        """
+        rotated = GazeboMid360FastlioAdapter._rotate(
+            sensor_rotation, sensor_point
+        )
+        body_point = tuple(
+            sensor_offset[index] + rotated[index] for index in range(3)
+        )
+        return (
+            body_point[0] * body_point[0]
+            + body_point[1] * body_point[1]
+            <= xy_radius * xy_radius
+            and z_min <= body_point[2] <= z_max
+        )
+
     def _cloud_callback(self, cloud):
         with self._lock:
             odom = self._latest_odom
             px4_pose = self._latest_px4_pose
+            armed = self._armed
             link_history = list(self._link_history)
         if odom is None:
             rospy.logwarn_throttle(2.0, "MID360 cloud waiting for /Odometry")
@@ -315,17 +361,25 @@ class GazeboMid360FastlioAdapter:
                 )
                 return
             with self._lock:
-                if self._height_alignment is None:
+                # PX4 can reset its barometric local-Z origin while EKF2 is
+                # still converging on the ground. Track that reset while
+                # disarmed, then freeze the alignment at arming so real
+                # vertical motion is not mistaken for another origin change.
+                if self._height_alignment is None or not armed:
+                    previous_alignment = self._height_alignment
                     self._height_alignment = (
                         odom.pose.pose.position.z - px4_height
                     )
-                    rospy.loginfo(
-                        "Planner height aligned: FAST-LIO z %.3f, PX4 baro z %.3f, "
-                        "offset %.3f",
-                        odom.pose.pose.position.z,
-                        px4_height,
-                        self._height_alignment,
-                    )
+                    if (previous_alignment is None or
+                            abs(previous_alignment - self._height_alignment) > 0.10):
+                        rospy.loginfo(
+                            "Planner height aligned: FAST-LIO z %.3f, PX4 baro z %.3f, "
+                            "offset %.3f%s",
+                            odom.pose.pose.position.z,
+                            px4_height,
+                            self._height_alignment,
+                            " (ground update)" if previous_alignment is not None else "",
+                        )
                 height_alignment = self._height_alignment
             # Task one requires MID360/FAST-LIO2 horizontal localization, while
             # PX4's 1018 profile deliberately retains barometric height.  Use
@@ -413,13 +467,18 @@ class GazeboMid360FastlioAdapter:
             # gear because it has no Livox-style self-return suppression.  A
             # self return becomes a false obstacle around the takeoff point
             # and makes SUPER's CIRI corridor infeasible.  This filter is
-            # deliberately expressed in the sensor frame and is only for the
-            # simulation adapter; real Fast-LIO2 data must not use it.
+            # deliberately expressed in the UAV body frame and is only for
+            # the simulation adapter; real Fast-LIO2 data must not use it.
             if (
                 self.self_filter_enable
-                and point[0] * point[0] + point[1] * point[1]
-                <= self.self_filter_xy_radius * self.self_filter_xy_radius
-                and self.self_filter_z_min <= point[2] <= self.self_filter_z_max
+                and self._inside_body_self_filter(
+                    point,
+                    self.sensor_rotation,
+                    self.sensor_offset,
+                    self.self_filter_xy_radius,
+                    self.self_filter_z_min,
+                    self.self_filter_z_max,
+                )
             ):
                 filtered_self += 1
                 continue

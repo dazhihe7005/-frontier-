@@ -6,9 +6,9 @@
   <arg name="rviz" default="true"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="10.0"/>
-  <!-- The surveyed passage is only about 3.79 m high at spawn.  Keep the
-       800 mm vehicle and its roof-mounted MID360S well clear of the mesh. -->
-  <arg name="takeoff_height" default="0.8"/>
+  <!-- The complete survey mesh is uniformly enlarged by 2x. Keep the
+       vehicle reference point above the exact 1 m safety sphere. -->
+  <arg name="takeoff_height" default="1.5"/>
 
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -18,50 +18,51 @@
     <arg name="takeoff_height" value="$(arg takeoff_height)"/>
     <!-- The irregular-mesh contact settles before arming, and PX4's
          barometric height reference is allowed to converge independently of
-         FAST-LIO (external vision remains XY-only). -->
+         FAST-LIO (external vision remains XY-only). The generic operator
+         waits for a stable ground Z, then commands a relative 1.5 m climb. -->
     <arg name="vision_stable_duration" value="10.0"/>
     <arg name="world" value="$(find mine_uav_control)/worlds/baixianshan_tunnel_sitl.world"/>
-    <!-- Blender source [-10.5, 10.5, 0.6851] transformed by the map export:
-         0.53 deg floor slope, >=1.29 m side clearance at hover and 2.57 m
-         clearance above the 0.8 m hover.  Start at the settled contact height
-         instead of dropping 9 cm onto the rock, so FAST-LIO IMU bias/gravity
-         initialization is not polluted by launch-impact impulses. -->
-    <arg name="spawn_x" value="-7.0"/>
-    <arg name="spawn_y" value="0.5"/>
-    <arg name="spawn_z" value="-0.0334"/>
-    <!-- Keep the physically validated takeoff attitude on the sloped rock,
-         then point the autonomous mission toward the longer southern drift.
-         Rotating the complete vehicle on the irregular contact surface made
-         one landing point unload before takeoff. -->
+    <!-- Blender's collision-ray audit selected source (-10.5, 10.5, 0.6851)
+         as the flattest clear main-passage patch (0.534 deg). After the
+         export transform and 2x scaling this is (-14, 1, -0.1676); add the
+         unchanged 1018 contact offset for the spawn model origin. -->
+    <arg name="spawn_x" value="-14.0"/>
+    <arg name="spawn_y" value="1.0"/>
+    <arg name="spawn_z" value="-0.1172"/>
+    <!-- Start already aligned with one direction of the main drift. A
+         180-degree in-place yaw after takeoff adds no mission value and can
+         make lidar odometry fragile in a long, self-similar passage. -->
     <arg name="spawn_yaw" value="0.0"/>
+    <arg name="takeoff_yaw_offset" value="0.0"/>
     <arg name="mission_heading_offset" value="0.0"/>
-    <!-- The exported survey's inward drift is exactly map -X. Use this map
-         heading instead of inheriting transient yaw error during takeoff. -->
+    <!-- At this selected start, the chosen main-drift direction is
+         camera_init +X. -->
     <arg name="use_absolute_mission_heading" value="true"/>
-    <arg name="absolute_mission_heading_yaw" value="3.141592653589793"/>
+    <arg name="absolute_mission_heading_yaw" value="0.0"/>
     <arg name="global_cloud_voxel_size" value="0.25"/>
     <arg name="max_global_points" value="500000"/>
     <arg name="decider_max_points_per_cloud" value="8000"/>
-    <!-- STEP envelope: roughly 0.51 m horizontal rotor radius, while the
-         body/MID360 vertical half-envelope is about 0.35 m.  A spherical
-         0.51 m test on 0.5 m voxels rounds up to an artificial 1 m radius. -->
-    <arg name="decider_vertical_vehicle_radius" value="0.35"/>
+    <!-- User-specified safety sphere: the aircraft reference point must stay
+         at least 1.0 m from mapped obstacles in every direction. -->
+    <arg name="decider_vehicle_radius" value="1.0"/>
+    <arg name="decider_vertical_vehicle_radius" value="1.0"/>
     <!-- Gazebo collision proves the actually traversed aircraft envelope is
          free; clear stale binary-map hits caused by LIO/voxel jitter along
          that swept route. This remains disabled in real/task-generic use. -->
     <arg name="carve_traversed_vehicle_envelope" value="true"/>
-    <arg name="max_exploration_radius" value="180.0"/>
-    <arg name="decider_max_map_radius" value="220.0"/>
+    <arg name="max_exploration_radius" value="360.0"/>
+    <arg name="decider_max_map_radius" value="440.0"/>
     <arg name="frontier_search_radius" value="22.0"/>
     <arg name="side_wall_max_range" value="20.0"/>
     <arg name="wall_coverage_side_max_distance" value="20.0"/>
     <!-- A 1.0 m half-width covers the 1.181 m rotor envelope plus margin.
          Treating the whole 6 m tunnel as the forward corridor made pipes and
          parked equipment at the wall look like a complete blockage. -->
-    <arg name="forward_corridor_half_width" value="1.0"/>
-    <!-- Keep normal progress goals on the surveyed drift centerline. A
-         confirmed blockage still enables the explicit lateral detour path. -->
-    <arg name="forward_goal_lateral_search_width" value="0.0"/>
+    <arg name="forward_corridor_half_width" value="1.25"/>
+    <!-- Keep progress on the main drift while allowing one 0.5 m decision
+         voxel of centerline correction. This is local obstacle clearance,
+         not permission to enter a side opening. -->
+    <arg name="forward_goal_lateral_search_width" value="0.5"/>
     <!-- Remote map frontiers choose the branch; short verified segments keep
          the vehicle from drawing a large arc at launch and intersections. -->
     <arg name="max_frontier_goal_distance" value="4.0"/>
@@ -82,9 +83,9 @@
     <arg name="min_observation_height_above_home" value="0.0"/>
     <arg name="max_observation_height_above_home" value="7.0"/>
     <arg name="cruise_height_above_home" value="0.0"/>
-    <arg name="bridge_max_horizontal_radius" value="220.0"/>
-    <arg name="bridge_min_height" value="-3.0"/>
-    <arg name="bridge_max_height" value="8.0"/>
+    <arg name="bridge_max_horizontal_radius" value="440.0"/>
+    <arg name="bridge_min_height" value="-6.0"/>
+    <arg name="bridge_max_height" value="16.0"/>
     <arg name="bridge_height_clamp_tolerance" value="0.50"/>
   </include>
 </launch>

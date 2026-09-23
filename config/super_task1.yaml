@@ -22,7 +22,7 @@ super_planner:
   frontend_in_known_free: false
   goal_yaw_en: true
   goal_vel_en: false
-  corridor_bound_dis: 1.0
+  corridor_bound_dis: 1.5
   corridor_line_max_length: 1.2
   safe_corridor_line_max_length: 5.0
   iris_iter_num: 2
@@ -31,8 +31,10 @@ super_planner:
   planning_horizon: 7.0
   sensing_horizon: -1
   receding_dis: 4.0
-  # Assumes 800 mm motor-to-motor span; 800 cm would be a different scale.
-  robot_r: 0.40
+  # Unified centre-to-obstacle safety radius.  Keep it here, in the continuous
+  # CIRI corridor, rather than splitting it between a physical radius and a
+  # second occupancy-map inflation margin.
+  robot_r: 1.0
   # Broad planner bounds shared by level and inclined simulated mines. Each
   # launch keeps its own tighter PX4 bridge fence; real flights still require
   # bounds converted from the measured PX4 alignment.
@@ -108,9 +110,9 @@ astar:
 rog_map:
   resolution: 0.1
   inflation_resolution: 0.2
-  # 0.2 m x 3 cells = 0.6 m obstacle clearance; with robot_r=0.4 m
-  # the reference point keeps approximately 1.0 m total clearance.
-  inflation_step: 3
+  # robot_r already supplies the complete 1.0 m safety radius to A* neighbour
+  # checks and continuous corridors.  Do not double-count another 0.6 m here.
+  inflation_step: 0
   unk_inflation_en: false
   unk_inflation_step: 1
   map_size: [50, 50, 6]

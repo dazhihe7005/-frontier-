@@ -5,9 +5,9 @@
   <arg name="rviz" default="true"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
-  <arg name="decider_vehicle_radius" default="0.40"/>
-  <arg name="decider_vertical_vehicle_radius" default="-1.0"/>
-  <arg name="forward_corridor_half_width" default="0.5"/>
+  <arg name="decider_vehicle_radius" default="1.0"/>
+  <arg name="decider_vertical_vehicle_radius" default="1.0"/>
+  <arg name="forward_corridor_half_width" default="1.5"/>
   <arg name="max_task_lateral_offset" default="1.0"/>
 
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">

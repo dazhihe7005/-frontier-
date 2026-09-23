@@ -21,7 +21,10 @@ max_map_radius: 40.0
 raycast_max_range: 30.0
 raycast_enable: true
 max_points_per_cloud: 5000
-vehicle_radius: 0.40
+# Unified centre-to-obstacle safety radius supplied for the real aircraft.
+# Scenario launch files may retain a separate physical vertical envelope only
+# when explicitly requested; the canonical task-one default is spherical.
+vehicle_radius: 1.0
 # Simulation-only recovery for accumulated-map pose/voxel jitter. A
 # collision-enabled simulated aircraft proves its current swept envelope is
 # free. Keep false for real localization, where pose error must never erase a

@@ -1628,6 +1628,10 @@ void SuperExplorationDecider::publishGoal(
   current_goal_ = goal;
   current_goal_.header.frame_id = world_frame_;
   current_goal_.header.stamp = ros::Time::now();
+  active_goal_is_lateral_detour_ = reason == "lateral_detour";
+  active_goal_is_forward_lookahead_ = reason == "forward_lookahead";
+  active_goal_is_blocked_frontier_route_ =
+      reason == "blocked_frontier_route";
   super_planner::GoalCommand command;
   command.header = current_goal_.header;
   command.command = super_planner::GoalCommand::SET_GOAL;
@@ -1660,6 +1664,10 @@ void SuperExplorationDecider::cancelActiveGoal(const std::string& reason,
   goal_publisher_.publish(command);
   active_goal_id_ = 0;
   have_active_goal_ = false;
+  active_goal_is_end_approach_ = false;
+  active_goal_is_lateral_detour_ = false;
+  active_goal_is_forward_lookahead_ = false;
+  active_goal_is_blocked_frontier_route_ = false;
 }
 
 bool SuperExplorationDecider::publishEndApproachGoal(
@@ -1708,8 +1716,7 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
   // ranked; it must not suppress a directly observed, vehicle-clear forward
   // segment. Side-wall visibility can disappear in a surveyed junction while
   // the centerline remains safely reachable.
-  if (!have_home_ ||
-      front_obstacle_streak_ >= front_obstacle_confirm_frames_) {
+  if (!have_home_) {
     return false;
   }
 
@@ -1785,6 +1792,36 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
         // merely because it is not occupied can place the goal behind a wall.
         if (reachable.count(target_key) == 0 ||
             !isClearForVehicle(target_key)) {
+          continue;
+        }
+        // A confirmed wall can be inside the detector's six-metre range while
+        // several metres of safe passage still remain in front of it.  The
+        // old global front-wall gate refused every such goal, so after the
+        // first dead-end backtrack the aircraft waited at the origin forever.
+        // Permit a short approach only when every half-voxel sample on the
+        // straight segment is both observed-reachable and body-clear.  This
+        // advances the viewpoint without ever commanding through that wall.
+        const auto& start = current_pose_.pose.position;
+        const double segment_distance = std::sqrt(
+            squaredDistance(start, target));
+        const int segment_samples = std::max(
+            1, static_cast<int>(std::ceil(
+                   segment_distance / (0.5 * voxel_resolution_))));
+        bool segment_clear = true;
+        for (int sample = 1; sample <= segment_samples; ++sample) {
+          const double ratio =
+              static_cast<double>(sample) / segment_samples;
+          const VoxelKey sample_key = positionToKey(
+              start.x + ratio * (target.x - start.x),
+              start.y + ratio * (target.y - start.y),
+              start.z + ratio * (target.z - start.z));
+          if (reachable.count(sample_key) == 0 ||
+              !isClearForVehicle(sample_key)) {
+            segment_clear = false;
+            break;
+          }
+        }
+        if (!segment_clear) {
           continue;
         }
         geometry_msgs::PoseStamped goal;
@@ -1955,36 +1992,41 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
     }
     reason = "heading_priority";
   } else {
-    // A confirmed front obstacle is handled by a separately verified lateral
-    // transition. Never turn a rear platform frontier into an outbound goal.
+    // Prefer the separately verified lateral transition while it is
+    // available.  Once that short transition has actually completed, an
+    // obstacle or T junction can still leave a safe actionable frontier in
+    // the connected component.  Continue toward that frontier through the
+    // short-route limiter below instead of waiting forever merely because
+    // the original entry-axis cone remains blocked.
     const bool front_obstacle_confirmed =
         front_obstacle_streak_ >= front_obstacle_confirm_frames_;
-    if (front_obstacle_confirmed) {
-      return false;
-    } else {
-      const double current_dx =
-          current_pose_.pose.position.x - home_pose_.pose.position.x;
-      const double current_dy =
-          current_pose_.pose.position.y - home_pose_.pose.position.y;
-      const double current_progress =
-          std::cos(mission_heading_yaw_) * current_dx +
-          std::sin(mission_heading_yaw_) * current_dy;
-      double best_score = -std::numeric_limits<double>::infinity();
-      for (const auto& candidate : candidates) {
-        if (!outboundProgressAllowed(
-                current_progress, candidateMissionProgress(candidate),
-                max_outbound_backtrack_)) continue;
-        const double score =
-            candidate.score + fallback_heading_weight_ *
-                                  candidateHeadingAlignment(candidate);
-        if (selected == nullptr || score > best_score) {
-          selected = &candidate;
-          best_score = score;
-        }
+    const double current_dx =
+        current_pose_.pose.position.x - home_pose_.pose.position.x;
+    const double current_dy =
+        current_pose_.pose.position.y - home_pose_.pose.position.y;
+    const double current_progress =
+        std::cos(mission_heading_yaw_) * current_dx +
+        std::sin(mission_heading_yaw_) * current_dy;
+    const double allowed_backtrack = front_obstacle_confirmed
+        ? std::min(max_outbound_backtrack_, max_frontier_goal_distance_)
+        : max_outbound_backtrack_;
+    double best_score = -std::numeric_limits<double>::infinity();
+    for (const auto& candidate : candidates) {
+      if (!outboundProgressAllowed(
+              current_progress, candidateMissionProgress(candidate),
+              allowed_backtrack)) continue;
+      const double score =
+          candidate.score + fallback_heading_weight_ *
+                                candidateHeadingAlignment(candidate);
+      if (selected == nullptr || score > best_score) {
+        selected = &candidate;
+        best_score = score;
       }
-      if (selected == nullptr) return false;
-      reason = "frontier_fallback";
     }
+    if (selected == nullptr) return false;
+    reason = front_obstacle_confirmed
+        ? "blocked_frontier_route"
+        : "frontier_fallback";
   }
 
   geometry_msgs::PoseStamped selected_goal = selected->goal;
@@ -2069,6 +2111,13 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
     // Keep the commanded yaw aligned with the latched entry mission heading. SUPER may
     // apply its own yaw policy, but this preserves the task-level intent.
     selected_goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
+  } else {
+    // At a branch the remote cluster's bearing may point through the inside
+    // of a corner. Face the next verified local route segment instead. This
+    // avoids simultaneous translation and a large unrelated yaw sweep.
+    selected_goal.pose.orientation = yawQuaternion(std::atan2(
+        selected_goal.pose.position.y - start.y,
+        selected_goal.pose.position.x - start.x));
   }
   if (horizontal_distance > max_frontier_goal_distance_) {
     ROS_INFO("Localized %.2f m frontier to connected %.2f m segment",
@@ -2317,6 +2366,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const bool preempt_blocked_forward_goal =
         exploration_phase_ == ExplorationPhase::kFrontierFallback &&
         front_obstacle_confirmed && !active_goal_is_end_approach_ &&
+        !active_goal_is_forward_lookahead_ &&
+        !active_goal_is_blocked_frontier_route_ &&
         isForwardCandidate(
             FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
     if (forward_goal_handover && tryForwardHandover(reachable)) {
@@ -2329,7 +2380,15 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const bool forward_target =
         !front_obstacle_confirmed && active_goal_is_forward &&
         !active_goal_is_end_approach_;
-    const double arrival_distance = forward_target
+    // A lateral detour can be only one 0.5 m decision voxel away.  Applying
+    // the normal 1 m frontier tolerance caused it to be cancelled at the
+    // next 2 Hz decision tick before the aircraft had moved, followed by an
+    // endless cancel/replan loop at obstacles and T junctions.  Require both
+    // short observation steps and lateral transitions to reach half a voxel.
+    const bool precise_short_goal =
+        forward_target || active_goal_is_forward_lookahead_ ||
+        active_goal_is_lateral_detour_;
+    const double arrival_distance = precise_short_goal
         ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
         : goal_reached_distance_;
     if (distance <= arrival_distance) {
@@ -2492,6 +2551,9 @@ void SuperExplorationDecider::clearMissionState() {
   have_home_ = false;
   have_active_goal_ = false;
   active_goal_is_end_approach_ = false;
+  active_goal_is_lateral_detour_ = false;
+  active_goal_is_forward_lookahead_ = false;
+  active_goal_is_blocked_frontier_route_ = false;
   exploration_started_ = false;
   returning_home_ = false;
   dead_end_backtracking_ = false;

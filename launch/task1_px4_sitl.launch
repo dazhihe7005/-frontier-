@@ -8,6 +8,8 @@
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="8.0"/>
   <arg name="takeoff_height" default="1.5"/>
+  <arg name="takeoff_yaw_offset" default="0.0"/>
+  <arg name="takeoff_hover_yaw_tolerance_deg" default="10.0"/>
   <arg name="vision_stable_duration" default="3.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
@@ -32,8 +34,8 @@
   <arg name="use_absolute_mission_heading" default="false"/>
   <arg name="absolute_mission_heading_yaw" default="0.0"/>
   <arg name="max_exploration_radius" default="24.0"/>
-  <arg name="decider_vehicle_radius" default="0.51"/>
-  <arg name="decider_vertical_vehicle_radius" default="-1.0"/>
+  <arg name="decider_vehicle_radius" default="1.0"/>
+  <arg name="decider_vertical_vehicle_radius" default="1.0"/>
   <arg name="carve_traversed_vehicle_envelope" default="false"/>
   <arg name="frontier_search_radius" default="10.0"/>
   <arg name="decider_max_map_radius" default="40.0"/>
@@ -131,7 +133,10 @@
     <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
     <rosparam param="sensor_rpy">[0.0, 0.436332313, 0.0]</rosparam>
     <param name="self_filter_enable" value="true"/>
-    <param name="self_filter_xy_radius" value="1.00"/>
+    <!-- This masks only the 0.5905 m physical rotor envelope. It is not the
+         planner's 1 m safety radius: real obstacles between 0.65 and 1.0 m
+         must remain visible so avoidance can reject that clearance. -->
+    <param name="self_filter_xy_radius" value="0.65"/>
     <param name="self_filter_z_min" value="-0.65"/>
     <param name="self_filter_z_max" value="0.25"/>
     <param name="min_range" value="0.30"/>
@@ -146,9 +151,14 @@
         name="sitl_task_operator" output="screen" required="true">
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <param name="takeoff_height" value="$(arg takeoff_height)"/>
+    <param name="ground_z_stable_duration" value="3.0"/>
+    <param name="ground_z_stability_tolerance" value="0.15"/>
+    <param name="takeoff_yaw_offset" value="$(arg takeoff_yaw_offset)"/>
     <param name="takeoff_hover_duration" value="1.0"/>
     <param name="hover_horizontal_tolerance" value="0.30"/>
     <param name="hover_vertical_tolerance" value="0.25"/>
+    <param name="hover_yaw_tolerance_deg"
+           value="$(arg takeoff_hover_yaw_tolerance_deg)"/>
     <param name="vision_status_topic" value="/mine_uav/task1/vision_status"/>
     <param name="vision_stable_duration" value="$(arg vision_stable_duration)"/>
     <param name="auto_enable_delay" value="$(arg auto_enable_delay)"/>

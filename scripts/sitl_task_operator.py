@@ -9,9 +9,10 @@ It does not publish Fast-LIO2 odometry or lidar data.
 
 import math
 import threading
+from collections import deque
 
 import rospy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Quaternion
 from mavros_msgs.msg import RCIn, State
 from mavros_msgs.srv import CommandBool, SetMode
 from nav_msgs.msg import Odometry
@@ -25,6 +26,15 @@ class SitlTaskOperator:
         )
         self.allow_auto_arm = bool(rospy.get_param("~allow_auto_arm", True))
         self.takeoff_height = max(0.5, float(rospy.get_param("~takeoff_height", 1.5)))
+        self.ground_z_stable_duration = max(
+            1.0, float(rospy.get_param("~ground_z_stable_duration", 3.0))
+        )
+        self.ground_z_stability_tolerance = max(
+            0.02, float(rospy.get_param("~ground_z_stability_tolerance", 0.15))
+        )
+        self.takeoff_yaw_offset = float(
+            rospy.get_param("~takeoff_yaw_offset", 0.0)
+        )
         self.hover_duration = max(
             0.5, float(rospy.get_param("~takeoff_hover_duration", 1.0))
         )
@@ -34,6 +44,9 @@ class SitlTaskOperator:
         self.hover_vertical_tolerance = max(
             0.1, float(rospy.get_param("~hover_vertical_tolerance", 0.25))
         )
+        self.hover_yaw_tolerance = math.radians(max(
+            1.0, float(rospy.get_param("~hover_yaw_tolerance_deg", 10.0))
+        ))
         self.prestream_duration = max(
             1.0, float(rospy.get_param("~offboard_prestream_duration", 1.0))
         )
@@ -55,6 +68,7 @@ class SitlTaskOperator:
         self._lock = threading.Lock()
         self._state = State()
         self._odom = None
+        self._ground_z_history = deque(maxlen=400)
         self._start = rospy.Time.now()
         self._origin = None
         self._prestream_start = rospy.Time(0)
@@ -87,6 +101,9 @@ class SitlTaskOperator:
     def _odom_callback(self, message):
         with self._lock:
             self._odom = message
+            self._ground_z_history.append(
+                (rospy.Time.now(), message.pose.pose.position.z)
+            )
 
     def _bridge_ready_callback(self, message):
         if message.data:
@@ -105,9 +122,10 @@ class SitlTaskOperator:
         with self._lock:
             state = self._state
             odom = self._odom
+            ground_z_history = list(self._ground_z_history)
         now = rospy.Time.now()
         if self.allow_auto_arm and not self._ready:
-            self._advance_takeoff(now, state, odom)
+            self._advance_takeoff(now, state, odom, ground_z_history)
         elif self.allow_auto_arm and not self._bridge_handoff_complete:
             # Keep the pre-task hover setpoint alive until the task bridge has
             # produced its first valid OFFBOARD command. Otherwise PX4 may
@@ -132,7 +150,7 @@ class SitlTaskOperator:
         message.channels[trigger_index] = 2000 if auto_enabled else 1000
         self.rc_pub.publish(message)
 
-    def _advance_takeoff(self, now, state, odom):
+    def _advance_takeoff(self, now, state, odom, ground_z_history):
         if odom is None or not state.connected:
             return
         if not rospy.get_param("/use_sim_time", False):
@@ -147,6 +165,22 @@ class SitlTaskOperator:
             )
             return
         if self._origin is None:
+            recent_ground_z = [
+                z for stamp, z in ground_z_history
+                if (now - stamp).to_sec() <= self.ground_z_stable_duration
+            ]
+            history_duration = (
+                (now - ground_z_history[0][0]).to_sec()
+                if ground_z_history else 0.0
+            )
+            if (history_duration < self.ground_z_stable_duration or
+                    not recent_ground_z or
+                    max(recent_ground_z) - min(recent_ground_z) >
+                    self.ground_z_stability_tolerance):
+                rospy.loginfo_throttle(
+                    2.0, "Waiting for stable PX4 ground Z before SITL takeoff"
+                )
+                return
             pose = odom.pose.pose
             self._origin = (
                 pose.position.x,
@@ -178,8 +212,13 @@ class SitlTaskOperator:
             position.y - target.pose.position.y,
         )
         vertical_error = abs(position.z - target.pose.position.z)
+        yaw_error = abs(self._angle_difference(
+            self._yaw_from_quaternion(odom.pose.pose.orientation),
+            self._yaw_from_quaternion(target.pose.orientation),
+        ))
         if (horizontal_error <= self.hover_horizontal_tolerance and
-                vertical_error <= self.hover_vertical_tolerance):
+                vertical_error <= self.hover_vertical_tolerance and
+                yaw_error <= self.hover_yaw_tolerance):
             if self._hover_start.is_zero():
                 self._hover_start = now
                 rospy.loginfo("SITL reached pre-task hover")
@@ -196,9 +235,29 @@ class SitlTaskOperator:
         target.pose.position.x = self._origin[0]
         target.pose.position.y = self._origin[1]
         target.pose.position.z = self._origin[2] + self.takeoff_height
-        target.pose.orientation = self._origin[3]
+        target_yaw = (
+            self._yaw_from_quaternion(self._origin[3]) +
+            self.takeoff_yaw_offset
+        )
+        target.pose.orientation = Quaternion(
+            0.0, 0.0, math.sin(0.5 * target_yaw),
+            math.cos(0.5 * target_yaw)
+        )
         self.setpoint_pub.publish(target)
         return target
+
+    @staticmethod
+    def _yaw_from_quaternion(quaternion):
+        return math.atan2(
+            2.0 * (quaternion.w * quaternion.z +
+                   quaternion.x * quaternion.y),
+            1.0 - 2.0 * (quaternion.y * quaternion.y +
+                         quaternion.z * quaternion.z),
+        )
+
+    @staticmethod
+    def _angle_difference(left, right):
+        return math.atan2(math.sin(left - right), math.cos(left - right))
 
     def _request_mode(self, now):
         if (now - self._last_mode_request).to_sec() < 1.0:

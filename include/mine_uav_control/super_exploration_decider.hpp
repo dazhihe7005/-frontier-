@@ -216,6 +216,18 @@ class SuperExplorationDecider {
   bool have_home_{false};
   bool have_active_goal_{false};
   bool active_goal_is_end_approach_{false};
+  // Lateral bypasses are deliberately shorter than normal frontier legs.
+  // Track them explicitly so the generic one-metre frontier tolerance cannot
+  // declare a newly published half-metre side step complete immediately.
+  bool active_goal_is_lateral_detour_{false};
+  // A verified straight look-ahead remains a precision goal even when a wall
+  // is visible farther ahead.  It must not inherit the generic one-metre
+  // arrival tolerance or the stale-frontier preemption rule.
+  bool active_goal_is_forward_lookahead_{false};
+  // A connected local route around a confirmed front blockage is valid by
+  // construction and must not be mistaken for the stale straight-ahead goal
+  // that the front-wall preemption rule is intended to cancel.
+  bool active_goal_is_blocked_frontier_route_{false};
   bool exploration_started_{false};
   bool returning_home_{false};
   bool dead_end_backtracking_{false};
