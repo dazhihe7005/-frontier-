@@ -14,7 +14,7 @@ class BaiXiangShanMapTest(unittest.TestCase):
     def test_export_is_metric_spawn_relative_and_bounded(self):
         metadata = json.loads((MODEL_DIR / "export_metadata.json").read_text())
         self.assertEqual(metadata["source_units"], "metres")
-        self.assertEqual(metadata["gazebo_uniform_scale"], 2.0)
+        self.assertEqual(metadata["gazebo_uniform_scale"], 1.0)
         self.assertEqual(metadata["source_to_gazebo_yaw_degrees"], -90.0)
         self.assertEqual(metadata["gazebo_spawn_xyz"], [0.0, 0.0, 0.1404])
         triangles = sum(item["triangles"] for item in metadata["exports"])
@@ -52,7 +52,7 @@ class BaiXiangShanMapTest(unittest.TestCase):
             for item in link.findall("collision")
         }
         self.assertEqual(visual_scales, collision_scales)
-        self.assertEqual(set(visual_scales.values()), {"2 2 2"})
+        self.assertEqual(set(visual_scales.values()), {"1 1 1"})
 
     def test_world_and_autonomous_launch_use_survey_map(self):
         world = ET.parse(ROOT / "worlds" / "baixianshan_tunnel_sitl.world").getroot()
@@ -64,9 +64,9 @@ class BaiXiangShanMapTest(unittest.TestCase):
             for node in launch.findall("./include/arg")
         }
         self.assertIn("baixianshan_tunnel_sitl.world", args["world"])
-        self.assertEqual(args["spawn_x"], "-14.0")
-        self.assertEqual(args["spawn_y"], "1.0")
-        self.assertEqual(args["spawn_z"], "-0.1172")
+        self.assertEqual(args["spawn_x"], "-7.0")
+        self.assertEqual(args["spawn_y"], "0.5")
+        self.assertEqual(args["spawn_z"], "-0.0334")
         self.assertEqual(args["spawn_yaw"], "0.0")
         self.assertEqual(args["takeoff_yaw_offset"], "0.0")
         self.assertEqual(args["mission_heading_offset"], "0.0")
@@ -89,7 +89,10 @@ class BaiXiangShanMapTest(unittest.TestCase):
         self.assertEqual(args["use_map_closure_completion"], "true")
         self.assertEqual(args["max_dead_end_heading_reversals"], "1")
         self.assertEqual(args["dead_end_reversal_delay"], "4.0")
-        self.assertEqual(args["bridge_max_height"], "16.0")
+        self.assertEqual(args["max_exploration_radius"], "180.0")
+        self.assertEqual(args["decider_max_map_radius"], "220.0")
+        self.assertEqual(args["bridge_max_horizontal_radius"], "220.0")
+        self.assertEqual(args["bridge_max_height"], "8.0")
 
         generic = ET.parse(ROOT / "launch" / "task1_px4_sitl.launch").getroot()
         generic_defaults = {

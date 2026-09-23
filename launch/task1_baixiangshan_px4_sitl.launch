@@ -6,7 +6,7 @@
   <arg name="rviz" default="true"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="10.0"/>
-  <!-- The complete survey mesh is uniformly enlarged by 2x. Keep the
+  <!-- The survey is restored to its original 1:1 metric scale. Keep the
        vehicle reference point above the exact 1 m safety sphere. -->
   <arg name="takeoff_height" default="1.5"/>
 
@@ -23,12 +23,12 @@
     <arg name="vision_stable_duration" value="10.0"/>
     <arg name="world" value="$(find mine_uav_control)/worlds/baixianshan_tunnel_sitl.world"/>
     <!-- Blender's collision-ray audit selected source (-10.5, 10.5, 0.6851)
-         as the flattest clear main-passage patch (0.534 deg). After the
-         export transform and 2x scaling this is (-14, 1, -0.1676); add the
-         unchanged 1018 contact offset for the spawn model origin. -->
-    <arg name="spawn_x" value="-14.0"/>
-    <arg name="spawn_y" value="1.0"/>
-    <arg name="spawn_z" value="-0.1172"/>
+         as the flattest clear main-passage patch (0.534 deg). At the original
+         1:1 export scale this is (-7, 0.5, -0.0838); add the unchanged 1018
+         contact offset for the spawn model origin. -->
+    <arg name="spawn_x" value="-7.0"/>
+    <arg name="spawn_y" value="0.5"/>
+    <arg name="spawn_z" value="-0.0334"/>
     <!-- Start already aligned with one direction of the main drift. A
          180-degree in-place yaw after takeoff adds no mission value and can
          make lidar odometry fragile in a long, self-similar passage. -->
@@ -50,8 +50,8 @@
          free; clear stale binary-map hits caused by LIO/voxel jitter along
          that swept route. This remains disabled in real/task-generic use. -->
     <arg name="carve_traversed_vehicle_envelope" value="true"/>
-    <arg name="max_exploration_radius" value="360.0"/>
-    <arg name="decider_max_map_radius" value="440.0"/>
+    <arg name="max_exploration_radius" value="180.0"/>
+    <arg name="decider_max_map_radius" value="220.0"/>
     <arg name="frontier_search_radius" value="22.0"/>
     <arg name="side_wall_max_range" value="20.0"/>
     <arg name="wall_coverage_side_max_distance" value="20.0"/>
@@ -83,9 +83,9 @@
     <arg name="min_observation_height_above_home" value="0.0"/>
     <arg name="max_observation_height_above_home" value="7.0"/>
     <arg name="cruise_height_above_home" value="0.0"/>
-    <arg name="bridge_max_horizontal_radius" value="440.0"/>
-    <arg name="bridge_min_height" value="-6.0"/>
-    <arg name="bridge_max_height" value="16.0"/>
+    <arg name="bridge_max_horizontal_radius" value="220.0"/>
+    <arg name="bridge_min_height" value="-3.0"/>
+    <arg name="bridge_max_height" value="8.0"/>
     <arg name="bridge_height_clamp_tolerance" value="0.50"/>
   </include>
 </launch>

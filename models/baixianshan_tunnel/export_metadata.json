@@ -2,7 +2,7 @@
   "source_blend": "/home/nuc/Documents/xwechat_files/wxid_rlp4qxgja6mi22_9f7a/msg/file/2026-09/白象山巷道_展示精修版_管线修订.blend",
   "blender_version": "5.2.0 LTS",
   "source_units": "metres",
-  "gazebo_uniform_scale": 2.0,
+  "gazebo_uniform_scale": 1.0,
   "source_origin": [
     -10.0,
     17.5,

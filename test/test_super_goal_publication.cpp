@@ -412,6 +412,88 @@ class SuperExplorationDeciderTestPeer {
            std::abs(yaw - local_route_yaw) < 1e-9;
   }
 
+  static bool smoothBendUsesConnectedLocalRoute(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.home_pose_.pose.orientation.w = 1.0;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.exploration_phase_ =
+        SuperExplorationDecider::ExplorationPhase::kFrontierFallback;
+    decider.front_obstacle_streak_ = decider.front_obstacle_confirm_frames_;
+    decider.current_pose_.pose.position.x = 0.25;
+    decider.current_pose_.pose.position.y = 0.25;
+    decider.current_pose_.pose.position.z = 0.25;
+    decider.current_pose_.pose.orientation.w = 1.0;
+    decider.min_goal_distance_ = 1.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_outbound_backtrack_ = 4.0;
+
+    // Six-connected stair-step sampling of a smooth quarter-circle corridor.
+    // The remote frontier is around a 90-degree bend, so a direct chord would
+    // cut through the inside wall; the selected goal must stay on this route.
+    const std::vector<VoxelKey> curve{
+        {0, 0, 0}, {1, 0, 0}, {2, 0, 0}, {3, 0, 0},
+        {4, 0, 0}, {4, 1, 0}, {5, 1, 0}, {6, 1, 0},
+        {6, 2, 0}, {7, 2, 0}, {7, 3, 0}, {8, 3, 0},
+        {8, 4, 0}, {9, 4, 0}, {9, 5, 0}, {10, 5, 0},
+        {10, 6, 0}, {10, 7, 0}, {11, 7, 0}, {11, 8, 0},
+        {11, 9, 0}, {12, 9, 0}, {12, 10, 0}, {12, 11, 0},
+        {12, 12, 0}};
+    SuperExplorationDecider::VoxelSet reachable;
+    for (const VoxelKey& key : curve) {
+      reachable.insert(key);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+    }
+
+    SuperExplorationDecider::FrontierCandidate bend;
+    bend.key = curve.back();
+    bend.goal.pose.position = decider.keyToPoint(bend.key);
+    bend.goal.pose.orientation.w = 1.0;
+    bend.score = 10.0;
+    bend.unknown_neighbors = 12;
+    if (!decider.selectAndPublishFrontier({bend}, reachable) ||
+        !decider.have_active_goal_) {
+      return false;
+    }
+
+    const VoxelKey selected = decider.positionToKey(
+        decider.current_goal_.pose.position.x,
+        decider.current_goal_.pose.position.y,
+        decider.current_goal_.pose.position.z);
+    const double distance = std::hypot(
+        decider.current_goal_.pose.position.x -
+            decider.current_pose_.pose.position.x,
+        decider.current_goal_.pose.position.y -
+            decider.current_pose_.pose.position.y);
+    const auto& q = decider.current_goal_.pose.orientation;
+    const double yaw = std::atan2(
+        2.0 * (q.w * q.z + q.x * q.y),
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+    return reachable.count(selected) == 1 && distance >= 1.0 &&
+           distance <= 4.0 + 1e-9 && yaw > 0.0 && yaw < M_PI_4;
+  }
+
+  static bool fixedMissionBandTruncatesADeepBend(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.max_task_lateral_offset_ = 2.0;
+    decider.frontier_search_radius_ = 20.0;
+    decider.current_pose_.pose.position.x = 0.25;
+    decider.current_pose_.pose.position.y = 0.25;
+    decider.current_pose_.pose.position.z = 0.25;
+    for (int y = 0; y <= 12; ++y) {
+      decider.voxels_[{0, y, 0}] = SuperExplorationDecider::FREE;
+    }
+    const auto reachable = decider.reachableFreeVoxels();
+    return reachable.count(VoxelKey{0, 3, 0}) == 1 &&
+           reachable.count(VoxelKey{0, 4, 0}) == 0 &&
+           reachable.count(VoxelKey{0, 12, 0}) == 0;
+  }
+
   static void reset(SuperExplorationDecider& decider) {
     std_srvs::Trigger::Request request;
     std_srvs::Trigger::Response response;
@@ -638,6 +720,26 @@ TEST(SuperGoalPublication, BlockedFrontierContinuesAlongLocalConnectedRoute) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   blockedFrontierContinuesAlongLocalConnectedRoute(decider));
+}
+
+TEST(SuperGoalPublication, SmoothBendUsesConnectedLocalRoute) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~");
+  private_nh.setParam("goal_command_topic",
+                      "/mine_uav/test/smooth_bend_goal_command");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  smoothBendUsesConnectedLocalRoute(decider));
+}
+
+TEST(SuperGoalPublication, FixedMissionBandTruncatesADeepBend) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~");
+  private_nh.setParam("goal_command_topic",
+                      "/mine_uav/test/fixed_band_goal_command");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  fixedMissionBandTruncatesADeepBend(decider));
 }
 
 }  // namespace mine_uav_control
