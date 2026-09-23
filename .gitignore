@@ -1,0 +1,11 @@
+/.catkin_tools/
+/build/
+/devel/
+/install/
+/logs/
+/runtime/
+/src/exploration/
+/src/mapping/
+/src/misc/
+**/__pycache__/
+*.pyc

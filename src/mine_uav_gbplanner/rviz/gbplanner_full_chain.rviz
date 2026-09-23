@@ -1,0 +1,88 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Selection
+    Name: Selection
+  - Class: rviz/Tool Properties
+    Name: Tool Properties
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz/Grid
+      Color: 120; 120; 120
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 80
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: FAST-LIO registered cloud
+      Topic: /cloud_registered
+      Queue Size: 2
+      Size (Pixels): 2
+      Style: Points
+      Color Transformer: AxisColor
+      Position Transformer: XYZ
+      Decay Time: 1
+    - Class: rviz/Path
+      Enabled: true
+      Name: FAST-LIO path
+      Topic: /path
+      Line Style: Lines
+      Line Width: 0.03
+      Color: 255; 170; 0
+    - Class: rviz/Odometry
+      Enabled: true
+      Name: Planner odometry
+      Topic: /mine_uav/gbplanner/planner_odometry
+      Keep: 100
+      Shape: Arrow
+      Position Tolerance: 0.05
+      Angle Tolerance: 0.05
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: GBPlanner graph and gain
+      Marker Topic: /gbplanner_node/visualization_marker_array
+      Queue Size: 10
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: PCI trajectory
+      Marker Topic: /pci_command_trajectory_vis
+      Queue Size: 10
+    - Class: rviz/TF
+      Enabled: true
+      Name: TF
+      Frame Timeout: 15
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+  Enabled: true
+  Global Options:
+    Background Color: 25; 25; 25
+    Fixed Frame: camera_init
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 30
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 1.5
+      Pitch: 0.55
+      Yaw: 0.8
+      Name: Orbit
+Window Geometry:
+  Height: 900
+  Width: 1440
+  X: 80
+  Y: 40

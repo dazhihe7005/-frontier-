@@ -1,0 +1,42 @@
+common:
+    # Gazebo publishes a standard PointCloud2 rather than Livox CustomMsg.
+    lid_topic: "/mine_uav/sitl/mid360/points2"
+    # Raw simulated IMU forwarded through PX4/MAVROS; no pose truth is used.
+    imu_topic: "/mavros/imu/data_raw"
+    time_sync_en: false
+    time_offset_lidar_to_imu: 0.0
+    restart_on_time_discontinuity: true
+    max_lidar_gap: 1.0
+    max_imu_gap: 1.0
+
+preprocess:
+    # FAST-LIO2 MARSIM path consumes sensor_msgs/PointCloud2 directly.
+    lidar_type: 4
+    scan_line: 32
+    blind: 0.45
+
+mapping:
+    acc_cov: 0.1
+    gyr_cov: 0.1
+    b_acc_cov: 0.0001
+    b_gyr_cov: 0.0001
+    fov_degree: 360
+    det_range: 30.0
+    extrinsic_est_en: false
+    # LiDAR point -> IMU transform. Both frames use FLU axes. The IMU origin
+    # is at body z=0.020 m; the MID360S origin is at [0.1315, 0, 0.223] m and
+    # pitched 25 deg down toward body -Z.
+    extrinsic_T: [0.1315, 0.0, 0.203]
+    extrinsic_R: [0.906307787, 0, 0.422618262,
+                  0, 1, 0,
+                  -0.422618262, 0, 0.906307787]
+
+publish:
+    path_en: true
+    scan_publish_en: true
+    dense_publish_en: true
+    scan_bodyframe_pub_en: true
+
+pcd_save:
+    pcd_save_en: false
+    interval: -1

@@ -1,0 +1,14 @@
+diff --git a/planner_common/src/trajectory.cpp b/planner_common/src/trajectory.cpp
+index 3353a6e..b2917fc 100644
+--- a/planner_common/src/trajectory.cpp
++++ b/planner_common/src/trajectory.cpp
+@@ -91,5 +91,8 @@ double Trajectory::computeDistanceBetweenTrajectoryAndDirection(
+   int n = (int)(path_length / discrete_length);
+   for (int i = 0; i < n; ++i) {
+-    Eigen::Vector3d ei = p0 + uvector * n;
++    // Build a line in the preferred direction.  Using n here made every
++    // reference sample the same endpoint, so the DTW direction cost could
++    // not reliably distinguish a continuing path from a U-turn.
++    Eigen::Vector3d ei = p0 + uvector * i;
+     path_ref.push_back(ei);
+   }

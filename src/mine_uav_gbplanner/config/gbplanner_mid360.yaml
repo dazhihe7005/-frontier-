@@ -1,0 +1,187 @@
+  # Configurations for the exploration pipeline.
+  # For more details, please check comments in the params.h file and the wiki.
+  #-------------------------------------------------------------------------------
+  # ROBOT CONFIGURATION
+  #-------------------------------------------------------------------------------
+RobotParams:
+  type:               kAerialRobot
+  size:               [1.181, 1.181, 0.500] # physical rotor envelope
+  # Together with physical size, these produce a fixed 2 m planning box and
+  # therefore the requested 1 m reference-point clearance on every axis.
+  size_extension_min: [0.819, 0.819, 1.500]
+  size_extension:     [0.819, 0.819, 1.500]
+  center_offset:      [0.0, 0.0, 0.0]
+  relax_ratio:        0.0
+  bound_mode:         kExtendedBound
+  safety_extension:   [1.0, 1.0, 1.0]
+#-------------------------------------------------------------------------------
+# SENSOR CONFIGURATION
+#  sensor_list: Define a set of sensors relevant to the exploration task.
+#  rotations: ZYX order;
+#             all follows ROS convention (X-forward, Y-left, Z-Up).
+#-------------------------------------------------------------------------------
+SensorParams:
+  sensor_list:      ["MID360S"]
+  MID360S:
+    type:           kLidar
+    max_range:      29.5
+    center_offset:  [0.1315, 0.0, 0.203]
+    # GBPlanner's lidar model is symmetric around its optical centre.  A
+    # native -7..+52 deg MID360S cone has a +22.5 deg optical-centre offset.
+    # Combined with the 25 deg downward housing mount, its body-frame centre
+    # points only 2.5 deg down, with the real 59 deg vertical aperture.
+    rotations:      [0.0, 0.0436332313, 0.0]
+    fov:            [rad(2*pi), rad(59.0*pi/180)]
+    resolution:     [rad(5.0*pi/180), rad(5.0*pi/180)]
+    frontier_percentage_threshold: 0.04
+#-------------------------------------------------------------------------------
+# SAMPLING SPACE CONFIGURATION
+#   Global: Strictly defined bounds for the whole environment.
+#   Local: Define a local space wrt current robot state for planning.
+#-------------------------------------------------------------------------------
+BoundedSpaceParams:
+  Global:
+    type:           kCuboid
+    min_val:        [-180.0, -90.0, -5.0]
+    max_val:        [180.0, 90.0, 15.0]
+  Local:
+    type:           kCuboid
+    # The mine tunnel has ample horizontal branches but limited headroom.
+    # Unconstrained +/-3 m Z sampling repeatedly drove the gain search toward
+    # the roof and produced tiny corrective paths. Preserve 3-D avoidance
+    # while keeping each local decision near the current flight level.
+    min_val:        [-12.0, -12.0, -0.6]
+    max_val:        [12.0, 12.0, 0.6]
+    min_extension:  [-15.0, -15.0, -1.0]
+    max_extension:  [15.0, 15.0, 1.0]
+  LocalSearch:
+    type:           kCuboid
+    min_val:        [-30.0, -30.0, -1.0]
+    max_val:        [30.0, 30.0, 1.0]
+  # Adaptive OBB:
+  LocalAdaptiveExp:
+    type:           kCuboid
+    min_val:        [-10.0, -10.0, -0.75]
+    max_val:        [10.0, 10.0, 0.75]
+# No rear no-gain zone: genuine unknown-space exploration may backtrack and
+# inspect a reachable branch.
+NoGainZones: {}
+#-------------------------------------------------------------------------------
+# SAMPLING POLICY CONFIGURATION
+#   Sample space limited to 4 states: X, Y, Z, and Heading
+#-------------------------------------------------------------------------------
+RandomSamplerParams:
+  SamplerForExploration:
+    X:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Y:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Z:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Heading:
+      pdf_type:       kUniform
+      sample_mode:    kManual
+      min_val:        rad(-pi)
+      max_val:        rad(pi)
+  SamplerForSearching:
+    X:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Y:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Z:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Heading:
+      pdf_type:       kUniform
+      sample_mode:    kManual
+      min_val:        rad(-pi)
+      max_val:        rad(pi)
+  SamplerForAdaptiveExp:
+    X:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Y:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Z:
+      pdf_type:       kUniform
+      sample_mode:    kLocal
+    Heading:
+      pdf_type:       kUniform
+      sample_mode:    kManual
+      min_val:        rad(-pi)
+      max_val:        rad(pi)
+
+#-------------------------------------------------------------------------------
+# EXPLORATION CONFIGURATION
+# exp_sensor_list: sensors used to compute exploration gain.
+#-------------------------------------------------------------------------------
+PlanningParams:
+  type:             kBasicExploration #kAdaptiveExploration, kBasicExploration
+  rr_mode:          kGraph
+  exp_sensor_list:  ["MID360S"]
+  v_max:            0.7
+  v_homing_max:     0.6
+  yaw_rate_max:     0.35
+  yaw_tangent_correction: true # If true - all headings will be along the path segment
+  edge_length_min:  0.4
+  edge_length_max:  2.0
+  edge_overshoot:   0.0 # m - Account for possible tracking error by collision checking on an extended edge
+  num_vertices_max: 700 # graph building stops if these many vertices are added
+  num_edges_max:    9000 # graph building stops if these many edges are added
+  num_loops_cutoff: 1200
+  num_loops_max:    3000
+  nearest_range:    2.0 # The max range within which a new vertex can be connected to an existing vertex
+  nearest_range_min: 0.5 # >= edge_length_min
+  nearest_range_max: 2.0 # <= edge_length_max
+  use_current_state: true # If true, it will use the current state to plan from instead of the state provided by the PCI in the service call
+  use_ray_model_for_volumetric_gain: true # if false, will check voxel by voxel in the sensor frustum
+  exp_gain_voxel_size: 0.8 # used if use_ray_model_for_volumetric_gain is false
+  # Gains:
+  path_length_penalty: 0.04
+  # Current-motion-direction preference only.  This is deliberately a soft
+  # score (not a +X gate), so a higher-gain branch or required retreat remains
+  # reachable while near-equal candidates no longer cause immediate U-turns.
+  path_direction_penalty: 0.30
+  occupied_voxel_gain: 0.0
+  free_voxel_gain:  0.0 # prefer directions towards more free voxels in case of the dead-end
+  unknown_voxel_gain: 60.0
+
+  traverse_length_max: 5.0
+  traverse_time_max: 500.0
+  path_safety_enhance_enable: true
+  augment_free_voxels_time: 3
+  free_frustum_before_planning: false
+  freespace_cloud_enable: false
+  leafs_only_for_volumetric_gain: true # Whether to calculate gain of the entire path or only the leaf nodes
+  cluster_vertices_for_gain: true
+  clustering_radius: 0.5
+  path_interpolation_distance: 0.5
+
+  time_budget_limit: 900
+  auto_homing_enable: true
+  # A single low-gain/global-frontier miss is not proof that an unknown mine
+  # is fully explored.  Keep retrying local/global exploration instead of
+  # immediately executing one open-loop path all the way back to the origin.
+  # Explicit/budget-triggered homing remains available through
+  # auto_homing_enable and the homing service.
+  go_home_if_fully_explored: false
+  auto_global_planner_enable: true
+  homing_backward: false
+  planning_backward: false
+  global_frame_id: camera_init
+
+  nonuniform_ray_cast: true
+  ray_cast_step_size_multiplier: 1.0
+
+  geofence_checking_enable: false
+
+AdaptiveObbParams:
+  type: kPca
+  local_pointcloud_range: 50.0
+  bounding_box_size_max: 35

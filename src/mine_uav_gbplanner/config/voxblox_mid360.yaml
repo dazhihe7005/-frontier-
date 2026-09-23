@@ -1,0 +1,53 @@
+world_frame: camera_init
+use_tf_transforms: True
+use_freespace_pointcloud: True
+tsdf_voxels_per_side: 16
+tsdf_voxel_size: 0.20
+max_ray_length_m: 30.0
+truncation_distance: 0.6 #1.0
+voxel_carving_enabled: True
+# The simulated MID360 already provides ~9k valid returns at 10 Hz. Treating
+# it as a sparse scanner saturated surface weights almost instantly and made
+# pose-lag ghosts impossible to clear at intersections.
+use_sparsity_compensation_factor: False
+sparsity_compensation_factor: 10.0
+color_mode: "colors"
+verbose: False
+update_mesh_every_n_sec: 1.0
+mesh_min_weight: 1e-4
+slice_level: 1.0
+method: "fast"
+integration_order_mode: "sorted"
+max_consecutive_ray_collisions: 0
+publish_slices: False
+publish_pointclouds: True
+allow_clear: True
+pointcloud_queue_size: 1000
+min_time_between_msgs_sec: 0.0
+#max_block_distance_from_body: FLT_MAX
+publish_tsdf_info: False
+publish_slices: False
+publish_traversable: True ###False
+traversability_radius: 1.0
+enable_icp: False
+icp_refine_roll_pitch: False
+accumulate_icp_corrections: True
+timestamp_tolerance_sec: 0.001 #0.001
+publish_tsdf_map: True ###False
+publish_esdf_map: True ###False
+
+# ESDF #
+esdf_max_distance_m: 2.0
+clear_sphere_for_planning: False
+clear_sphere_radius: 1.0
+
+# OVERLAP BETWEEN VERSIONS #
+use_const_weight: False
+use_weight_dropoff: True
+use_symmetric_weight_drop_off: False
+
+max_weight: 20
+clearing_ray_weight_factor: 0.5
+weight_ray_by_range: False
+min_ray_length_m: 0.5 #1.0
+occupancy_min_distance_voxel_size_factor: 1.0

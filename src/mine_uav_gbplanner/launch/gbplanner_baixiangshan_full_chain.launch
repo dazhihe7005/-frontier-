@@ -1,0 +1,161 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- This launch is intentionally bound to ROS master 11331 and PX4
+       instance 2 by the wrapper script.  It never sources frontier/SUPER. -->
+  <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="allow_auto_arm" default="true"/>
+  <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
+  <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
+  <arg name="spawn_x" default="-7.0"/>
+  <!-- The survey wall is less than 1 m from y=0.5 at flight level.  Moving
+       0.3 m toward the passage centre makes the requested 1 m envelope
+       feasible without changing the map scale or safety radius. -->
+  <arg name="spawn_y" default="0.2"/>
+  <!-- STEP landing-rail bottom is 0.2718 m below the body origin; the
+       isolated launch-platform top is z=0.20 m. -->
+  <arg name="spawn_z" default="0.4718"/>
+  <arg name="spawn_yaw" default="0.0"/>
+  <arg name="px4_work_dir" default="/home/nuc/gbplanner2_isolated_ws/runtime/px4_sitl_2"/>
+
+  <param name="use_sim_time" value="true"/>
+  <env name="GAZEBO_MODEL_PATH"
+       value="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models:/home/nuc/frontier-upload/models:$(optenv GAZEBO_MODEL_PATH)"/>
+  <env name="PX4_SIM_MODEL" value="gazebo-classic_iris_xy_vision"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="paused" value="false"/>
+    <arg name="verbose" value="false"/>
+  </include>
+
+  <node pkg="gazebo_ros" type="spawn_model" name="gbplanner_vehicle_spawn"
+        output="screen"
+        args="-sdf -file $(arg vehicle_sdf) -model iris -x $(arg spawn_x) -y $(arg spawn_y) -z $(arg spawn_z) -Y $(arg spawn_yaw)"/>
+
+  <!-- Private PX4 root contains the 1018 airframe and private parameter/log
+       state.  Instance 2 uses simulator TCP 4562 and MAVROS UDP 14542/14582. -->
+  <node pkg="px4" type="px4" name="gbplanner_px4_sitl" output="screen"
+        required="true"
+        args="/home/nuc/gbplanner2_isolated_ws/runtime/px4_root/etc -s etc/init.d-posix/rcS -i 2 -w $(arg px4_work_dir) -d"/>
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="udp://:14542@localhost:14582"/>
+    <arg name="gcs_url" value=""/>
+    <arg name="tgt_system" value="3"/>
+    <arg name="tgt_component" value="1"/>
+  </include>
+
+  <!-- Gazebo MID360 PointCloud -> PointCloud2 -> genuine FAST-LIO2. -->
+  <node pkg="mine_uav_gbplanner" type="pointcloud1_to_pointcloud2"
+        name="mid360_pointcloud_converter" output="screen" required="true">
+    <param name="input_topic" value="/mine_uav/sitl/mid360/points"/>
+    <param name="output_topic" value="/mine_uav/sitl/mid360/points2"/>
+    <param name="min_range" value="0.20"/>
+    <param name="max_range" value="30.0"/>
+    <param name="max_range_epsilon" value="0.05"/>
+    <param name="self_filter_enable" value="true"/>
+    <param name="sensor_offset_x" value="0.1315"/>
+    <param name="sensor_offset_y" value="0.0"/>
+    <param name="sensor_offset_z" value="0.223"/>
+    <param name="sensor_pitch" value="0.436332313"/>
+    <param name="self_filter_xy_radius" value="0.62"/>
+    <param name="self_filter_z_min" value="-0.65"/>
+    <param name="self_filter_z_max" value="0.35"/>
+  </node>
+  <rosparam command="load" file="$(find mine_uav_gbplanner)/config/fastlio_gazebo_mid360.yaml"/>
+  <param name="feature_extract_enable" type="bool" value="false"/>
+  <param name="point_filter_num" type="int" value="2"/>
+  <param name="max_iteration" type="int" value="3"/>
+  <param name="filter_size_surf" type="double" value="0.15"/>
+  <param name="filter_size_map" type="double" value="0.20"/>
+  <param name="cube_side_length" type="double" value="100"/>
+  <param name="runtime_pos_log_enable" type="bool" value="false"/>
+  <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
+        output="screen" required="true"/>
+
+  <!-- FAST-LIO2 odometry is the only horizontal localization input to PX4. -->
+  <node pkg="mine_uav_gbplanner" type="fastlio_px4_vision_bridge"
+        name="fastlio_px4_vision_bridge" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_gbplanner)/config/fastlio_px4_vision_bridge.yaml"/>
+  </node>
+  <node pkg="mine_uav_gbplanner" type="fastlio_planner_odometry.py"
+        name="fastlio_planner_odometry" output="screen" required="true"/>
+
+  <!-- Keep ray endpoints in the moving sensor frame and derive its TF from
+       FAST-LIO2.  There is no /gazebo/link_states or model-state feedback. -->
+  <node pkg="mine_uav_gbplanner" type="fastlio_voxblox_adapter.py"
+        name="fastlio_voxblox_adapter" output="screen" required="true">
+    <param name="world_frame" value="camera_init"/>
+    <param name="sensor_frame" value="gbplanner_mid360"/>
+    <rosparam param="sensor_offset">[0.1315, 0.0, 0.203]</rosparam>
+    <param name="sensor_pitch" value="0.436332313"/>
+    <param name="self_filter_radius" value="0.65"/>
+    <param name="sync_queue" value="30"/>
+    <param name="sync_slop" value="0.025"/>
+  </node>
+
+  <!-- GBPlanner2 + integrated Voxblox. -->
+  <node pkg="gbplanner" type="gbplanner_node" name="gbplanner_node"
+        output="screen" required="true">
+    <remap from="odometry" to="/mine_uav/gbplanner/planner_odometry"/>
+    <remap from="/pointcloud" to="/mine_uav/gbplanner/voxblox_points"/>
+    <remap from="/freespace_pointcloud" to="/mine_uav/gbplanner/voxblox_freespace"/>
+    <rosparam command="load" file="$(find mine_uav_gbplanner)/config/gbplanner_mid360.yaml"/>
+    <rosparam command="load" file="$(find mine_uav_gbplanner)/config/voxblox_mid360.yaml"/>
+  </node>
+  <node pkg="pci_general" type="pci_general_ros_node"
+        name="pci_general_ros_node" output="screen" required="true">
+    <remap from="command/trajectory" to="/gbplanner/command/trajectory"/>
+    <remap from="planner_server" to="gbplanner"/>
+    <remap from="planner_homing_server" to="gbplanner/homing"/>
+    <remap from="odometry" to="/mine_uav/gbplanner/planner_odometry"/>
+    <rosparam command="load" file="$(find mine_uav_gbplanner)/config/pci_px4.yaml"/>
+  </node>
+
+  <node pkg="mine_uav_gbplanner" type="gbplanner_px4_executor.py"
+        name="gbplanner_px4_executor" output="screen" required="true">
+    <param name="max_speed" value="0.85"/>
+    <param name="max_yaw_rate" value="0.45"/>
+    <param name="min_height" value="-3.0"/>
+    <param name="max_height" value="10.0"/>
+  </node>
+  <node pkg="mine_uav_gbplanner" type="gbplanner_mission_trigger.py"
+        name="gbplanner_mission_trigger" output="screen" required="true">
+    <param name="map_warmup" value="2.0"/>
+  </node>
+
+  <node pkg="mine_uav_gbplanner" type="gbplanner_decision_monitor.py"
+        name="gbplanner_decision_monitor" output="screen"/>
+
+  <!-- If local and global frontier selection both return empty, retreat one
+       already executed collision-checked segment and replan.  This avoids an
+       infinite stationary retry without weakening the 1 m safety envelope. -->
+  <node pkg="mine_uav_gbplanner" type="gbplanner_stall_recovery.py"
+        name="gbplanner_stall_recovery" output="screen" required="true">
+    <param name="empty_limit" value="15"/>
+    <param name="backtrack_speed" value="0.45"/>
+    <param name="max_backtrack_distance" value="6.0"/>
+    <param name="endpoint_tolerance" value="1.5"/>
+  </node>
+
+  <!-- Simulation pilot: waits for stable FAST-LIO2, takes off under PX4,
+       then raises CH7. It never runs against a physical FCU. -->
+  <node pkg="mine_uav_gbplanner" type="sitl_task_operator.py"
+        name="gbplanner_sitl_operator" output="screen" required="true">
+    <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
+    <param name="takeoff_height" value="1.0"/>
+    <param name="takeoff_hover_duration" value="2.0"/>
+    <param name="hover_horizontal_speed_tolerance" value="0.20"/>
+    <param name="hover_vertical_speed_tolerance" value="0.15"/>
+    <param name="vision_stable_duration" value="3.0"/>
+    <param name="bridge_ready_topic" value="/mine_uav/gbplanner/command_ready"/>
+    <param name="vision_status_topic" value="/mine_uav/gbplanner/vision_status"/>
+  </node>
+
+  <group if="$(arg rviz)">
+    <node pkg="rviz" type="rviz" name="gbplanner_rviz" output="log"
+          args="-d $(find mine_uav_gbplanner)/rviz/gbplanner_full_chain.rviz"/>
+  </group>
+</launch>

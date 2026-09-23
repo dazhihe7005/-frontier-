@@ -1,0 +1,57 @@
+repositories:
+  src/exploration/adaptive_obb_ros:
+    type: git
+    url: https://github.com/ntnu-arl/adaptive_obb_ros.git
+    version: 7dc24c973d233f63d73f2a8548e6f5227bc422bb
+  src/exploration/gbplanner_ros:
+    type: git
+    url: https://github.com/ntnu-arl/gbplanner_ros.git
+    version: 7301b5350915cf3a4055072ad559842db37b4ca9
+  src/exploration/pci_general:
+    type: git
+    url: https://github.com/ntnu-arl/pci_general.git
+    version: 152eb2dfa19180391c7291d02414b1684f8f8198
+  src/mapping/voxblox:
+    type: git
+    url: https://github.com/ntnu-arl/voxblox.git
+    version: 0ee88c26c203a3fe88e348dbbb552ab431a35352
+  src/misc/catkin_simple:
+    type: git
+    url: https://github.com/catkin/catkin_simple.git
+    version: 0e62848b12da76c8cc58a1add42b4f894d1ac21e
+  src/misc/eigen_catkin:
+    type: git
+    url: https://github.com/ethz-asl/eigen_catkin.git
+    version: 00b5eb254bad8de9cd68d238aa994e443062cf30
+  src/misc/eigen_checks:
+    type: git
+    url: https://github.com/ethz-asl/eigen_checks.git
+    version: 22a6247a3df11bc285d43d1a030f4e874a413997
+  src/misc/gflags_catkin:
+    type: git
+    url: https://github.com/ethz-asl/gflags_catkin.git
+    version: 5324e74119996a6e2da12d20e5388c17480ebd79
+  src/misc/glog_catkin:
+    type: git
+    url: https://github.com/ethz-asl/glog_catkin.git
+    version: dcb4559be6b9f9248c543df6789d46271c13efcf
+  src/misc/mav_comm:
+    type: git
+    url: https://github.com/ethz-asl/mav_comm.git
+    version: 56122218eb1ec34deaa641598ebacf24e26c349b
+  src/misc/minkindr:
+    type: git
+    url: https://github.com/ethz-asl/minkindr.git
+    version: bc4503c34970a13b7ef06f62505e3333395ce02c
+  src/misc/minkindr_ros:
+    type: git
+    url: https://github.com/ethz-asl/minkindr_ros.git
+    version: 88e0bd476f82027453f04fdf7c40c7c9a358aa1b
+  src/misc/protobuf_catkin:
+    type: git
+    url: https://github.com/ethz-asl/protobuf_catkin.git
+    version: 721a6cc17e7e937e7accfb88a9967b26134db6f9
+  src/misc/yaml_cpp_catkin:
+    type: git
+    url: https://github.com/ethz-asl/yaml_cpp_catkin.git
+    version: 6cad108c4d5a9b9ddc95edd6f7cb23b572926351

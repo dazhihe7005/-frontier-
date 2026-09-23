@@ -1,0 +1,21 @@
+run_mode: kSim
+trigger_mode: kManual
+robot_type: kAerial
+output_type: kTopic
+world_frame_id: camera_init
+init_motion_enable: false
+planner_trigger_lead_time: 0.4
+smooth_heading_enable: true
+init_motion:
+  z_takeoff: 2.5
+  z_drop: 1.7
+  x_forward: 2.0
+
+# Group related parameters to be shared between nodes.
+RobotDynamics:
+  v_max: 0.7
+  v_init_max: 0.5
+  v_homing_max: 0.6
+  v_narrow_env_max: 0.45
+  yaw_rate_max: 0.35
+  dt: 0.05
