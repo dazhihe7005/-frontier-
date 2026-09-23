@@ -87,6 +87,10 @@ forward_goal_handover_distance: 1.2
 # Forward mode samples a known-free task-level target this far ahead. The
 # planner remains responsible for collision-free local deviations.
 forward_lookahead_distance: 8.0
+# A remote frontier expresses a direction, not a single long trajectory.
+# Convert it to a short, directly verified segment before handing it to SUPER.
+max_frontier_goal_distance: 8.0
+max_frontier_goal_vertical_step: 0.5
 forward_lookahead_step: 0.5
 cruise_height_above_home: 0.0
 return_breadcrumb_spacing: 4.0

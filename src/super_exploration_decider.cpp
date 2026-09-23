@@ -251,6 +251,12 @@ bool SuperExplorationDecider::loadParameters() {
                     forward_goal_handover_distance_);
   private_nh_.param("forward_lookahead_distance", forward_lookahead_distance_,
                     forward_lookahead_distance_);
+  private_nh_.param("max_frontier_goal_distance",
+                    max_frontier_goal_distance_,
+                    max_frontier_goal_distance_);
+  private_nh_.param("max_frontier_goal_vertical_step",
+                    max_frontier_goal_vertical_step_,
+                    max_frontier_goal_vertical_step_);
   private_nh_.param("forward_lookahead_step", forward_lookahead_step_,
                     forward_lookahead_step_);
   private_nh_.param("cruise_height_above_home", cruise_height_above_home_,
@@ -395,6 +401,10 @@ bool SuperExplorationDecider::loadParameters() {
       forward_goal_handover_distance_ <= goal_reached_distance_ ||
       !std::isfinite(forward_lookahead_distance_) ||
       forward_lookahead_distance_ <= forward_goal_handover_distance_ ||
+      !std::isfinite(max_frontier_goal_distance_) ||
+      max_frontier_goal_distance_ < min_goal_distance_ ||
+      !std::isfinite(max_frontier_goal_vertical_step_) ||
+      max_frontier_goal_vertical_step_ <= 0.0 ||
       !std::isfinite(forward_lookahead_step_) ||
       forward_lookahead_step_ <= 0.0 ||
       !std::isfinite(cruise_height_above_home_) ||
@@ -1931,7 +1941,8 @@ bool SuperExplorationDecider::tryForwardHandover(const VoxelSet& reachable) {
 }
 
 bool SuperExplorationDecider::selectAndPublishFrontier(
-    const std::vector<FrontierCandidate>& candidates) {
+    const std::vector<FrontierCandidate>& candidates,
+    const VoxelSet& reachable) {
   if (candidates.empty()) {
     return false;
   }
@@ -1976,13 +1987,96 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
     }
   }
 
-  last_frontier_time_ = ros::Time::now();
   geometry_msgs::PoseStamped selected_goal = selected->goal;
+  const geometry_msgs::Point& start = current_pose_.pose.position;
+  const geometry_msgs::Point remote_goal = selected_goal.pose.position;
+  const double dx = remote_goal.x - start.x;
+  const double dy = remote_goal.y - start.y;
+  const double horizontal_distance = std::hypot(dx, dy);
+
+  // The frontier chooses a branch, while the reachable component describes
+  // how that branch can actually be entered. Follow its six-connected route
+  // for one short horizon instead of aiming through the inside of a corner.
+  VoxelKey route_start = positionToKey(start.x, start.y, start.z);
+  if (reachable.count(route_start) == 0) {
+    double nearest_distance = std::numeric_limits<double>::infinity();
+    for (const VoxelKey& key : reachable) {
+      const double distance = squaredDistance(keyToPoint(key), start);
+      if (distance < nearest_distance) {
+        route_start = key;
+        nearest_distance = distance;
+      }
+    }
+  }
+  const VoxelKey route_target = selected->key;
+  static const int kRouteNeighbors[6][3] = {
+      {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+      {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  std::queue<VoxelKey> route_queue;
+  std::unordered_map<VoxelKey, VoxelKey, VoxelKeyHash> route_parent;
+  route_queue.push(route_start);
+  route_parent.emplace(route_start, route_start);
+  while (!route_queue.empty() && route_parent.count(route_target) == 0) {
+    const VoxelKey current = route_queue.front();
+    route_queue.pop();
+    for (const auto& offset : kRouteNeighbors) {
+      const VoxelKey neighbor{current.x + offset[0], current.y + offset[1],
+                              current.z + offset[2]};
+      if (reachable.count(neighbor) == 0 ||
+          route_parent.count(neighbor) > 0) {
+        continue;
+      }
+      route_parent.emplace(neighbor, current);
+      route_queue.push(neighbor);
+    }
+  }
+
+  std::vector<VoxelKey> route;
+  if (route_parent.count(route_target) > 0) {
+    for (VoxelKey key = route_target;; key = route_parent.at(key)) {
+      route.push_back(key);
+      if (key == route_start) break;
+    }
+    std::reverse(route.begin(), route.end());
+  }
+
+  bool found_local_goal = false;
+  double route_distance = 0.0;
+  for (std::size_t index = 1; index < route.size(); ++index) {
+    route_distance += voxel_resolution_;
+    if (route_distance > max_frontier_goal_distance_ + 1e-6) break;
+    const geometry_msgs::Point candidate_goal = keyToPoint(route[index]);
+    const double horizontal_step = std::hypot(
+        candidate_goal.x - start.x, candidate_goal.y - start.y);
+    if (horizontal_step + 1e-6 < min_goal_distance_ ||
+        horizontal_step > max_frontier_goal_distance_ + 1e-6 ||
+        std::abs(candidate_goal.z - start.z) >
+            max_frontier_goal_vertical_step_ + 1e-6) {
+      continue;
+    }
+    selected_goal.pose.position = candidate_goal;
+    found_local_goal = true;
+  }
+  if (!found_local_goal) {
+    ROS_WARN_THROTTLE(
+        2.0,
+        "Frontier direction has no short connected progressive segment; "
+        "waiting for map growth instead of commanding a remote arc");
+    return false;
+  }
+
   if (exploration_phase_ == ExplorationPhase::kForwardPriority) {
     // Keep the commanded yaw aligned with the latched entry mission heading. SUPER may
     // apply its own yaw policy, but this preserves the task-level intent.
     selected_goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
   }
+  if (horizontal_distance > max_frontier_goal_distance_) {
+    ROS_INFO("Localized %.2f m frontier to connected %.2f m segment",
+             horizontal_distance,
+             std::hypot(selected_goal.pose.position.x - start.x,
+                        selected_goal.pose.position.y - start.y));
+  }
+  last_frontier_time_ = ros::Time::now();
   publishGoal(selected_goal, reason);
   return true;
 }
@@ -2267,7 +2361,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     rejected_goal_retry_after_ = ros::Time(0);
     if (publishLateralDetourGoal(reachable, candidates) ||
         publishForwardLookaheadGoal(reachable) ||
-        selectAndPublishFrontier(candidates)) {
+        selectAndPublishFrontier(candidates, reachable)) {
       publishStatus("EXPLORING", "retrying a reachable goal after SUPER rejection");
       return;
     }
@@ -2306,7 +2400,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
-  if (!have_active_goal_ && selectAndPublishFrontier(candidates)) {
+  if (!have_active_goal_ && selectAndPublishFrontier(candidates, reachable)) {
     publishStatus("EXPLORING", "new frontier goal sent to SUPER");
     return;
   }

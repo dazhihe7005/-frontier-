@@ -61,6 +61,8 @@ class BaiXiangShanMapTest(unittest.TestCase):
             args["absolute_mission_heading_yaw"], "3.141592653589793")
         self.assertEqual(args["forward_corridor_half_width"], "1.0")
         self.assertEqual(args["forward_goal_lateral_search_width"], "0.0")
+        self.assertEqual(args["max_frontier_goal_distance"], "4.0")
+        self.assertEqual(args["max_frontier_goal_vertical_step"], "0.35")
         self.assertEqual(args["max_task_lateral_offset"], "8.0")
         self.assertEqual(args["decider_vertical_vehicle_radius"], "0.35")
         self.assertEqual(args["carve_traversed_vehicle_envelope"], "true")

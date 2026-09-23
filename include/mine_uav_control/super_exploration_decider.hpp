@@ -140,7 +140,8 @@ class SuperExplorationDecider {
   std::vector<FrontierCandidate> findFrontiers(VoxelSet& reachable) const;
   bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
   bool selectAndPublishFrontier(
-      const std::vector<FrontierCandidate>& candidates);
+      const std::vector<FrontierCandidate>& candidates,
+      const VoxelSet& reachable);
   bool publishForwardLookaheadGoal(const VoxelSet& reachable);
   bool publishLateralDetourGoal(
       const VoxelSet& reachable,
@@ -304,6 +305,8 @@ class SuperExplorationDecider {
   double forward_height_penalty_{1.0};
   double forward_goal_handover_distance_{1.2};
   double forward_lookahead_distance_{8.0};
+  double max_frontier_goal_distance_{8.0};
+  double max_frontier_goal_vertical_step_{0.5};
   double max_outbound_backtrack_{2.0};
   double forward_lookahead_step_{0.5};
   double cruise_height_above_home_{0.0};

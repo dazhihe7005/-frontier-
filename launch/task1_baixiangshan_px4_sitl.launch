@@ -62,6 +62,10 @@
     <!-- Keep normal progress goals on the surveyed drift centerline. A
          confirmed blockage still enables the explicit lateral detour path. -->
     <arg name="forward_goal_lateral_search_width" value="0.0"/>
+    <!-- Remote map frontiers choose the branch; short verified segments keep
+         the vehicle from drawing a large arc at launch and intersections. -->
+    <arg name="max_frontier_goal_distance" value="4.0"/>
+    <arg name="max_frontier_goal_vertical_step" value="0.35"/>
     <!-- Reject remote frontier clusters that are not part of the current
          vehicle-clear drift; SUPER still performs local obstacle avoidance. -->
     <arg name="max_task_lateral_offset" value="8.0"/>

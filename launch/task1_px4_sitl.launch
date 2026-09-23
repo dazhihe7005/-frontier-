@@ -48,6 +48,8 @@
   <arg name="wall_coverage_end_min_span" default="4.0"/>
   <arg name="forward_corridor_half_width" default="2.0"/>
   <arg name="forward_goal_lateral_search_width" default="2.0"/>
+  <arg name="max_frontier_goal_distance" default="8.0"/>
+  <arg name="max_frontier_goal_vertical_step" default="0.5"/>
   <arg name="max_task_lateral_offset" default="4.0"/>
   <arg name="map_closure_min_progress" default="8.0"/>
   <arg name="map_closure_no_frontier_time" default="4.0"/>
@@ -198,6 +200,10 @@
            value="$(arg forward_corridor_half_width)"/>
     <param name="forward_goal_lateral_search_width"
            value="$(arg forward_goal_lateral_search_width)"/>
+    <param name="max_frontier_goal_distance"
+           value="$(arg max_frontier_goal_distance)"/>
+    <param name="max_frontier_goal_vertical_step"
+           value="$(arg max_frontier_goal_vertical_step)"/>
     <param name="max_task_lateral_offset"
            value="$(arg max_task_lateral_offset)"/>
     <param name="map_closure_min_progress"

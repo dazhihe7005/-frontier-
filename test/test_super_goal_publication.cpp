@@ -216,6 +216,47 @@ class SuperExplorationDeciderTestPeer {
     return half_metre_not_complete && !decider.dead_end_backtracking_;
   }
 
+  static bool remoteFrontierBecomesShortReachableSegment(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.exploration_phase_ =
+        SuperExplorationDecider::ExplorationPhase::kForwardPriority;
+    decider.current_pose_.pose.orientation.w = 1.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.35;
+
+    SuperExplorationDecider::FrontierCandidate remote;
+    remote.goal.pose.position.x = 20.0;
+    remote.goal.pose.position.z = 5.0;
+    remote.goal.pose.orientation.w = 1.0;
+    remote.unknown_neighbors = 10;
+    remote.key = decider.positionToKey(
+        remote.goal.pose.position.x, remote.goal.pose.position.y,
+        remote.goal.pose.position.z);
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int x = 0; x <= remote.key.x; ++x) {
+      const auto key = VoxelKey{x, 0, 0};
+      reachable.insert(key);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+    }
+    for (int z = 1; z <= remote.key.z; ++z) {
+      const auto key = VoxelKey{remote.key.x, 0, z};
+      reachable.insert(key);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+    }
+
+    return decider.selectAndPublishFrontier({remote}, reachable) &&
+           decider.have_active_goal_ &&
+           std::hypot(decider.current_goal_.pose.position.x,
+                      decider.current_goal_.pose.position.y) <= 4.0 + 1e-9 &&
+           decider.current_goal_.pose.position.x >= 2.0 &&
+           std::abs(decider.current_goal_.pose.position.z) <= 0.35 + 1e-9;
+  }
+
   static void reset(SuperExplorationDecider& decider) {
     std_srvs::Trigger::Request request;
     std_srvs::Trigger::Response response;
@@ -382,6 +423,16 @@ TEST(SuperGoalPublication, FinalBacktrackWaypointUsesTightArrivalRadius) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   finalBacktrackWaypointUsesTightArrivalRadius(decider));
+}
+
+TEST(SuperGoalPublication, RemoteFrontierBecomesShortReachableSegment) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~");
+  private_nh.setParam("goal_command_topic",
+                      "/mine_uav/test/local_frontier_goal_command");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  remoteFrontierBecomesShortReachableSegment(decider));
 }
 
 }  // namespace mine_uav_control
