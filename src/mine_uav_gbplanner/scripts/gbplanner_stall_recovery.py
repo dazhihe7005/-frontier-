@@ -269,8 +269,14 @@ class StallRecovery:
                 "GBPlanner stall x%d: backtracking %.2fm over %.2fs on "
                 "previously executed safe path", failures, distance, duration)
             target = trajectory.points[-1].transforms[0].translation
+            # The live 1 m guard may deliberately pause a reverse trajectory
+            # while it performs a vertical escape.  Two nominal trajectory
+            # durations proved too short in that valid case, so retain a
+            # bounded but generous completion window.  If it still expires,
+            # resume planning from the measured pose instead of leaving PCI
+            # paused indefinitely.
             deadline = rospy.Time.now() + rospy.Duration(
-                max(duration*2.0, duration+8.0))
+                max(duration*3.0, duration+20.0))
             arrived_since = rospy.Time(0)
             rate = rospy.Rate(10)
             while not rospy.is_shutdown() and rospy.Time.now() < deadline:
@@ -292,9 +298,13 @@ class StallRecovery:
                         arrived_since = rospy.Time(0)
                 rate.sleep()
             else:
-                rospy.logerr(
-                    "Stall recovery did not reach its endpoint; exploration "
-                    "remains paused")
+                if rospy.is_shutdown():
+                    return
+                rospy.logwarn(
+                    "Stall recovery did not reach its endpoint; replanning "
+                    "from the actual pose")
+                self._restart_without_motion(
+                    "backtrack endpoint timeout")
                 return
             rospy.sleep(self._resume_margin)
             rospy.wait_for_service(

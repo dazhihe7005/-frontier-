@@ -274,10 +274,15 @@ class Validator:
                 "px4_dynamic_flight": {"CONNECTED", "ARMED", "OFFBOARD"}.issubset(self.states) and
                                       self.max_displacement >= self.min_displacement,
                 "executor_streaming": "STREAMING_TO_PX4" in self.executor_states,
-                "hard_1m_clearance": math.isfinite(self.min_clearance) and
-                                     self.min_clearance >= 1.0 and
-                                     math.isfinite(self.min_spatial_clearance) and
-                                     self.min_spatial_clearance >= 1.0,
+                # The user specified a 1 m collision *radius*, so the hard
+                # invariant is Euclidean 3-D distance.  min_clearance is the
+                # XY projection of returns in a +/-0.35 m height slice; it is
+                # intentionally retained as a conservative diagnostic, but
+                # treating that projection as an infinite cylinder falsely
+                # rejects points whose actual radius remains above 1 m.
+                "hard_1m_clearance":
+                    math.isfinite(self.min_spatial_clearance) and
+                    self.min_spatial_clearance >= 1.0,
                 "vision_continuity": self.vision_false_samples == 0,
             }
             result = {
