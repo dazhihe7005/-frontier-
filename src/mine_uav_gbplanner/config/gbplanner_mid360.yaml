@@ -6,10 +6,15 @@
 RobotParams:
   type:               kAerialRobot
   size:               [1.181, 1.181, 0.500] # physical rotor envelope
-  # Together with physical size, these produce a fixed 2 m planning box and
-  # therefore the requested 1 m reference-point clearance on every axis.
-  size_extension_min: [0.819, 0.819, 1.500]
-  size_extension:     [0.819, 0.819, 1.500]
+  # The requested hard reference-point radius is 1 m. A small 0.1 m lateral
+  # voxel reserve is used here; larger all-direction margins do not fit the
+  # measured tunnel. Delayed end-wall observations are handled separately by
+  # the independent live-cloud guard without truncating PCI trajectories.
+  # Vertical size is 1.2 m (0.6 m half-height). A 2 m vertical box touched
+  # the floor at the 1 m takeoff hover, causing GBPlanner's root recovery to
+  # clear real floor voxels and then reward repeated downward micro-paths.
+  size_extension_min: [1.019, 1.019, 0.700]
+  size_extension:     [1.019, 1.019, 0.700]
   center_offset:      [0.0, 0.0, 0.0]
   relax_ratio:        0.0
   bound_mode:         kExtendedBound
@@ -50,19 +55,19 @@ BoundedSpaceParams:
     # Unconstrained +/-3 m Z sampling repeatedly drove the gain search toward
     # the roof and produced tiny corrective paths. Preserve 3-D avoidance
     # while keeping each local decision near the current flight level.
-    min_val:        [-12.0, -12.0, -0.6]
-    max_val:        [12.0, 12.0, 0.6]
-    min_extension:  [-15.0, -15.0, -1.0]
-    max_extension:  [15.0, 15.0, 1.0]
+    min_val:        [-12.0, -12.0, -0.35]
+    max_val:        [12.0, 12.0, 0.35]
+    min_extension:  [-15.0, -15.0, -0.60]
+    max_extension:  [15.0, 15.0, 0.60]
   LocalSearch:
     type:           kCuboid
-    min_val:        [-30.0, -30.0, -1.0]
-    max_val:        [30.0, 30.0, 1.0]
+    min_val:        [-30.0, -30.0, -0.60]
+    max_val:        [30.0, 30.0, 0.60]
   # Adaptive OBB:
   LocalAdaptiveExp:
     type:           kCuboid
-    min_val:        [-10.0, -10.0, -0.75]
-    max_val:        [10.0, 10.0, 0.75]
+    min_val:        [-10.0, -10.0, -0.50]
+    max_val:        [10.0, 10.0, 0.50]
 # No rear no-gain zone: genuine unknown-space exploration may backtrack and
 # inspect a reachable branch.
 NoGainZones: {}
@@ -125,13 +130,18 @@ PlanningParams:
   type:             kBasicExploration #kAdaptiveExploration, kBasicExploration
   rr_mode:          kGraph
   exp_sensor_list:  ["MID360S"]
-  v_max:            0.7
-  v_homing_max:     0.6
+  # Live end-wall tests showed that 0.6 m/s could consume the remaining lidar
+  # and tracking margin before a newly unoccluded wall reached the controller.
+  # 0.5 m/s is the validated target for this 6 kg vehicle.
+  v_max:            0.5
+  v_homing_max:     0.5
   yaw_rate_max:     0.35
   yaw_tangent_correction: true # If true - all headings will be along the path segment
   edge_length_min:  0.4
   edge_length_max:  2.0
-  edge_overshoot:   0.0 # m - Account for possible tracking error by collision checking on an extended edge
+  # Extending every sampled graph edge rejects too many valid edges around the
+  # narrow start pad. Late obstacles are handled by the live MID360 guard.
+  edge_overshoot:   0.0
   num_vertices_max: 700 # graph building stops if these many vertices are added
   num_edges_max:    9000 # graph building stops if these many edges are added
   num_loops_cutoff: 1200

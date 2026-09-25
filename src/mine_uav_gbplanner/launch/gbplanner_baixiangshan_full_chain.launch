@@ -60,7 +60,9 @@
     <param name="sensor_offset_z" value="0.223"/>
     <param name="sensor_pitch" value="0.436332313"/>
     <param name="self_filter_xy_radius" value="0.62"/>
-    <param name="self_filter_z_min" value="-0.65"/>
+    <!-- Landing rails end at body z=-0.272 m. Do not extend this cylinder
+         to -0.65 m: that erased approaching floor returns. -->
+    <param name="self_filter_z_min" value="-0.32"/>
     <param name="self_filter_z_max" value="0.35"/>
   </node>
   <rosparam command="load" file="$(find mine_uav_gbplanner)/config/fastlio_gazebo_mid360.yaml"/>
@@ -92,6 +94,8 @@
     <rosparam param="sensor_offset">[0.1315, 0.0, 0.203]</rosparam>
     <param name="sensor_pitch" value="0.436332313"/>
     <param name="self_filter_radius" value="0.65"/>
+    <param name="self_filter_z_min" value="-0.32"/>
+    <param name="self_filter_z_max" value="0.35"/>
     <param name="sync_queue" value="30"/>
     <param name="sync_slop" value="0.025"/>
   </node>
@@ -116,8 +120,41 @@
 
   <node pkg="mine_uav_gbplanner" type="gbplanner_px4_executor.py"
         name="gbplanner_px4_executor" output="screen" required="true">
-    <param name="max_speed" value="0.85"/>
+    <param name="max_speed" value="0.65"/>
     <param name="max_yaw_rate" value="0.45"/>
+    <param name="max_horizontal_accel" value="0.50"/>
+    <param name="max_vertical_accel" value="0.40"/>
+    <!-- Do not truncate planner trajectories: PCI waits for the nominal end
+         pose before requesting the next plan. Live MID360 braking below owns
+         late-obstacle safety without changing GBPlanner completion semantics. -->
+    <param name="endpoint_standoff" value="0.0"/>
+    <param name="endpoint_standoff_min_path" value="1.00"/>
+    <param name="max_first_point_error" value="0.60"/>
+    <param name="tracking_slowdown_error" value="0.20"/>
+    <param name="tracking_hold_error" value="0.50"/>
+    <param name="safety_radius" value="1.00"/>
+    <!-- At 0.5 m/s, reserve enough directional distance for a wall hidden
+         behind a bend to appear in the 10 Hz cloud, and for the 6 kg airframe
+         to stop before the 1 m limit.  The values include the largest delayed
+         reveal and braking excursion measured in the Baixiangshan world. -->
+    <param name="proximity_slowdown_margin" value="1.40"/>
+    <param name="proximity_hold_margin" value="0.65"/>
+    <param name="absolute_clearance_hold_margin" value="0.25"/>
+    <param name="absolute_clearance_slowdown_margin" value="0.55"/>
+    <param name="vertical_avoidance_margin" value="0.30"/>
+    <param name="vertical_escape_distance" value="0.35"/>
+    <param name="frontier_guard_min_duration" value="4.0"/>
+    <param name="frontier_guard_horizon" value="5.0"/>
+    <param name="frontier_hold_margin" value="0.90"/>
+    <param name="frontier_slowdown_margin" value="1.70"/>
+    <param name="proximity_timeout" value="0.50"/>
+    <param name="proximity_block_timeout" value="2.0"/>
+    <param name="proximity_z_min" value="-0.35"/>
+    <param name="proximity_z_max" value="0.35"/>
+    <param name="self_filter_z_min" value="-0.32"/>
+    <param name="self_filter_z_max" value="0.35"/>
+    <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
+    <param name="sensor_pitch" value="0.436332313"/>
     <param name="min_height" value="-3.0"/>
     <param name="max_height" value="10.0"/>
   </node>
@@ -134,10 +171,16 @@
        infinite stationary retry without weakening the 1 m safety envelope. -->
   <node pkg="mine_uav_gbplanner" type="gbplanner_stall_recovery.py"
         name="gbplanner_stall_recovery" output="screen" required="true">
-    <param name="empty_limit" value="15"/>
-    <param name="backtrack_speed" value="0.45"/>
+    <!-- At 10 Hz lidar, waiting for 15 failed decisions left the vehicle
+         hovering close to an incompletely mapped end wall for 8 to 10 s.
+         Five independent empty decisions are enough to reject a transient
+         sample while initiating the already-validated retreat promptly. -->
+    <param name="empty_limit" value="5"/>
+    <param name="backtrack_speed" value="0.35"/>
     <param name="max_backtrack_distance" value="6.0"/>
-    <param name="endpoint_tolerance" value="1.5"/>
+    <param name="endpoint_tolerance" value="0.75"/>
+    <param name="arrival_tolerance" value="0.35"/>
+    <param name="arrival_stable_duration" value="0.75"/>
   </node>
 
   <!-- Simulation pilot: waits for stable FAST-LIO2, takes off under PX4,

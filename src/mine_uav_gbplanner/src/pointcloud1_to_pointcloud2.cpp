@@ -24,7 +24,7 @@ class PointCloud1ToPointCloud2 {
     private_nh_.param("sensor_offset_z", sensor_offset_z_, 0.223);
     private_nh_.param("sensor_pitch", sensor_pitch_, 0.436332313);
     private_nh_.param("self_filter_xy_radius", self_filter_xy_radius_, 0.62);
-    private_nh_.param("self_filter_z_min", self_filter_z_min_, -0.20);
+    private_nh_.param("self_filter_z_min", self_filter_z_min_, -0.32);
     private_nh_.param("self_filter_z_max", self_filter_z_max_, 0.35);
     publisher_ = nh_.advertise<sensor_msgs::PointCloud2>(output_topic_, 2);
     subscriber_ = nh_.subscribe(input_topic_, 2,

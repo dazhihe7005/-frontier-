@@ -116,12 +116,14 @@ param set-default BAT1_V_CHARGED 4.25
 # 0.5686, so keep this parameter outside the verbatim real-PX4 migration block.
 param set-default MPC_THR_HOVER 0.57
 
-# External vision contributes XY only. GPS is disabled.
+# FAST-LIO2 external vision contributes horizontal position only. GPS stays
+# disabled. The executor re-anchors every new trajectory to PX4 local Z, so
+# FAST-LIO2 vertical drift cannot turn into a physical climb or descent.
 param set-default EKF2_EV_DELAY 200
 param set-default EKF2_EV_CTRL 1
 param set-default EKF2_GPS_CTRL 0
 
-# Baseline A/B uses barometer only as PX4's internal vertical reference.
-# The Task 2 depth estimate remains side optical-flow integration.
+# Keep barometer as PX4's vertical reference. This matches the project
+# requirement and avoids feeding long-term lidar-odometry Z drift into flight.
 param set-default EKF2_HGT_REF 0
 param set-default EKF2_BARO_CTRL 1

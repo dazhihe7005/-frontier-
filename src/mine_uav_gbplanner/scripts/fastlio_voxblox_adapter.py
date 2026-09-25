@@ -50,7 +50,7 @@ class FastlioVoxbloxAdapter:
         self.max_range = float(rospy.get_param("~max_range", 29.5))
         self.free_stride = max(1, int(rospy.get_param("~free_stride", 4)))
         self.self_radius = float(rospy.get_param("~self_filter_radius", 0.65))
-        self.self_z_min = float(rospy.get_param("~self_filter_z_min", -0.65))
+        self.self_z_min = float(rospy.get_param("~self_filter_z_min", -0.32))
         self.self_z_max = float(rospy.get_param("~self_filter_z_max", 0.25))
         self.sync_queue = max(5, int(rospy.get_param("~sync_queue", 30)))
         self.sync_slop = max(0.001, float(rospy.get_param("~sync_slop", 0.025)))
