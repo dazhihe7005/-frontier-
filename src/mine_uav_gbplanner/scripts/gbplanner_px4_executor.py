@@ -93,6 +93,35 @@ def floor_follow_target_z(planned_z, actual_z, floor_clearance,
     return max(planned_z, minimum_z)
 
 
+def ceiling_follow_cap(previous_cap, actual_z, roof_clearance, roof_z,
+                       floor_clearance, floor_target, roof_target):
+    """Hold a lower setpoint after an overhead return, if the floor allows it.
+
+    The live hard-stop guard remains authoritative. This only prevents the
+    old high planner trajectory from pulling PX4 straight back toward a roof
+    after a short downward escape has finished.
+    """
+    if not all(math.isfinite(v) for v in
+               (actual_z, roof_clearance, floor_clearance)):
+        return None
+    floor_min_z = actual_z+floor_target-floor_clearance
+    if previous_cap is not None:
+        if (roof_clearance >= roof_target+0.40 or
+                floor_min_z >= previous_cap-0.05):
+            previous_cap = None
+    if not math.isfinite(roof_z) or roof_z <= 0.35 or roof_clearance >= roof_target:
+        return previous_cap
+    # Never create a lower target with less than 0.15 m of floor reserve over
+    # the 1.70 m floor-follow band. The narrow-floor case keeps the existing
+    # conservative stop/escape behavior instead.
+    if floor_clearance < floor_target+0.15:
+        return previous_cap
+    cap = actual_z+roof_clearance-roof_target
+    if floor_min_z+0.05 > cap:
+        return previous_cap
+    return cap if previous_cap is None else min(previous_cap, cap)
+
+
 def valid_downward_range(measured, minimum, maximum):
     """A max-range return is no-hit, not evidence of free space below."""
     return (math.isfinite(measured) and math.isfinite(minimum) and
@@ -193,6 +222,11 @@ class GbplannerPx4Executor:
         self.floor_follow_clearance = max(
             self.safety_radius + self.vertical_avoidance_margin + 0.15,
             float(rospy.get_param("~floor_follow_clearance", 1.70)))
+        self.ceiling_follow_enable = bool(rospy.get_param(
+            "~ceiling_follow_enable", False))
+        self.ceiling_follow_clearance = max(
+            self.safety_radius + self.vertical_avoidance_margin + 0.15,
+            float(rospy.get_param("~ceiling_follow_clearance", 1.60)))
         self.vertical_escape_distance = max(
             0.10, float(rospy.get_param(
                 "~vertical_escape_distance", 0.35)))
@@ -254,6 +288,7 @@ class GbplannerPx4Executor:
         self._proximity_hold_pose = None
         self._vertical_escape_active = False
         self._escape_direction = 0.0
+        self._ceiling_follow_cap_z = None
         self._blocked_state = False
         self._owner = False
         self._last_ready = None
@@ -904,11 +939,25 @@ class GbplannerPx4Executor:
         desired_now = self._apply_alignment(
             self._sample(trajectory, progress), alignment)
         actual = local_pose.pose.position
+        ceiling_cap_z = None
+        if self.ceiling_follow_enable and not recovery_active and (
+                proximity_fresh and floor_fresh):
+            ceiling_cap_z = ceiling_follow_cap(
+                self._ceiling_follow_cap_z, actual.z,
+                vertical_clearance, nearest_vertical_z,
+                floor_clearance, self.floor_follow_clearance,
+                self.ceiling_follow_clearance)
+            if self._ceiling_follow_cap_z is None and ceiling_cap_z is not None:
+                rospy.logwarn("Ceiling-follow cap activated at local z %.3f m; target %.3f m",
+                              actual.z, ceiling_cap_z)
+            self._ceiling_follow_cap_z = ceiling_cap_z
         desired_tracking_z = desired_now[2]
         if self.require_downward_range and floor_fresh:
             desired_tracking_z = floor_follow_target_z(
                 desired_tracking_z, actual.z, floor_clearance,
                 self.floor_follow_clearance, upward_room)
+        if ceiling_cap_z is not None:
+            desired_tracking_z = min(desired_tracking_z, ceiling_cap_z)
         tracking_error = math.sqrt(
             (desired_now[0]-actual.x) ** 2 +
             (desired_now[1]-actual.y) ** 2 +
@@ -1082,6 +1131,9 @@ class GbplannerPx4Executor:
             if floor_follow_z > z + 1.0e-6:
                 z = floor_follow_z
                 velocity = (velocity[0], velocity[1], max(0.0, velocity[2]))
+        if not proximity_stop and ceiling_cap_z is not None and z > ceiling_cap_z:
+            z = ceiling_cap_z
+            velocity = (velocity[0], velocity[1], min(0.0, velocity[2]))
         if math.hypot(x, y) > self.max_horizontal_radius or not (
                 self.min_height <= z <= self.max_height):
             self._publish_ready(False)

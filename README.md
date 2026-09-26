@@ -158,6 +158,10 @@ vcs import < dependencies.repos
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-direction-reference.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-short-path-gain.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-vertical-travel-penalty.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-global-frontier-audit.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-preserve-frontiers.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-global-frontier-utility.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-local-frontier-audit.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 
@@ -170,3 +174,9 @@ git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.p
 同日后续复核发现 0.85 m/s 试验净空仅 1.0369 m，0.80 m/s 试验均速
 反降，均已回退；最终 0.70 m/s 配置在交叉口测试的最小净空为
 1.0095 m，不能视为拥有足够安全裕量或已完成真机快转验收。
+
+完整地图探索仍未通过验收：2026-09-26 的实时起点、低 frontier 阈值和
+顶板高度锁存组合 A/B 到达东向约 80 m，但只读参考覆盖仅 37.84%，
+且侧支斜地面实际网格净空最小仅 1.07256 m，随后陷入上下脱险循环。
+相关开关保持默认关闭，记录和后续安全门槛见
+[coverage_trial_20260926.md](src/mine_uav_gbplanner/docs/coverage_trial_20260926.md)。

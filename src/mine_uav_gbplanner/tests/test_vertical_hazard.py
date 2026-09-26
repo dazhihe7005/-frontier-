@@ -93,6 +93,26 @@ class VerticalHazardTest(unittest.TestCase):
         self.assertAlmostEqual(target(3.70, 3.80, 1.30, 1.70,
                                       float("inf")), 3.70)
 
+    def test_ceiling_cap_stays_below_roof_until_clear(self):
+        cap = MODULE.ceiling_follow_cap
+        first = cap(None, 0.70, 1.29, 1.20, 2.24, 1.70, 1.60)
+        self.assertAlmostEqual(first, 0.39)
+        self.assertAlmostEqual(
+            cap(first, 0.39, 1.60, 1.60, 1.93, 1.70, 1.60), first)
+        self.assertIsNone(
+            cap(first, 0.39, 2.01, 2.00, 1.93, 1.70, 1.60))
+
+    def test_ceiling_cap_never_competes_with_floor(self):
+        cap = MODULE.ceiling_follow_cap
+        self.assertIsNone(
+            cap(None, 0.70, 1.29, 1.20, 1.60, 1.70, 1.60))
+        self.assertIsNone(
+            cap(0.39, 0.50, 1.45, 1.40, 1.70, 1.70, 1.60))
+        self.assertIsNone(
+            cap(None, 0.70, 1.29, -1.20, 2.24, 1.70, 1.60))
+        self.assertIsNone(
+            cap(None, 0.70, 1.29, float("nan"), 2.24, 1.70, 1.60))
+
     def test_no_hit_downward_range_cannot_be_treated_as_clear_floor(self):
         valid = MODULE.valid_downward_range
         self.assertTrue(valid(1.4, 0.1, 30.0))

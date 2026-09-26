@@ -5,6 +5,9 @@
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
   <arg name="coverage_audit" default="false"/>
+  <arg name="ceiling_follow_experiment" default="false"/>
+  <arg name="frontier_percentage_threshold" default="0.04"/>
+  <arg name="planner_trigger_lead_time" default="0.4"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
@@ -108,6 +111,8 @@
     <remap from="/pointcloud" to="/mine_uav/gbplanner/voxblox_points"/>
     <remap from="/freespace_pointcloud" to="/mine_uav/gbplanner/voxblox_freespace"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/gbplanner_mid360.yaml"/>
+    <param name="SensorParams/MID360S/frontier_percentage_threshold"
+           value="$(arg frontier_percentage_threshold)"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/voxblox_mid360.yaml"/>
   </node>
   <node pkg="pci_general" type="pci_general_ros_node"
@@ -117,6 +122,8 @@
     <remap from="planner_homing_server" to="gbplanner/homing"/>
     <remap from="odometry" to="/mine_uav/gbplanner/planner_odometry"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/pci_px4.yaml"/>
+    <param name="planner_trigger_lead_time"
+           value="$(arg planner_trigger_lead_time)"/>
   </node>
 
   <node pkg="mine_uav_gbplanner" type="gbplanner_px4_executor.py"
@@ -143,6 +150,8 @@
     <param name="absolute_clearance_slowdown_margin" value="0.55"/>
     <param name="recovery_floor_abort_margin" value="0.60"/>
     <param name="floor_follow_clearance" value="1.70"/>
+    <param name="ceiling_follow_enable" value="$(arg ceiling_follow_experiment)"/>
+    <param name="ceiling_follow_clearance" value="1.60"/>
     <!-- Keep the early 1.30 m ceiling/floor brake. A 1.15 m trigger let PX4
          vertical inertia carry the aircraft inside the hard 1 m envelope. -->
     <param name="vertical_avoidance_margin" value="0.30"/>
@@ -181,6 +190,9 @@
        before enabling this optional diagnostic. -->
   <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
         type="diagnostic_map_coverage.py" name="diagnostic_map_coverage"
+        output="screen"/>
+  <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
+        type="diagnostic_truth_trajectory.py" name="diagnostic_truth_trajectory"
         output="screen"/>
 
   <!-- If local and global frontier selection both return empty, retreat one

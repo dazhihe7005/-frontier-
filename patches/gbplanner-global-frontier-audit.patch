@@ -1,0 +1,97 @@
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1929,6 +1929,9 @@ void Rrg::addFrontiers(int best_vertex_id) {
+                                           frontier_vertices, cluster_ids);
+   const double kRangeCheck = 1.0;
+   const double kUpdateRadius = 3.0;
++  int skipped_near_graph = 0;
++  int skipped_near_history = 0;
++  int added_frontier_paths = 0;
+   for (int i = 0; i < cluster_ids.size(); ++i) {
+     Vertex* nearest_vertex = NULL;
+     // To add principal path, verify if around that area already have vertices
+@@ -1949,9 +1952,19 @@ void Rrg::addFrontiers(int best_vertex_id) {
+           (*pa)->type = VertexType::kUnvisited;
+         }
+         addRefPathToGraph(global_graph_, path);
++        ++added_frontier_paths;
++      } else {
++        ++skipped_near_history;
+       }
++    } else {
++      ++skipped_near_graph;
+     }
+   }
++  ROS_WARN_THROTTLE(10.0,
++      "GLOBAL_FRONTIER_INSERT leaves=%zu frontier_leaves=%zu clusters=%zu added=%d near_graph=%d near_history=%d graph=%d",
++      leaf_vertices.size(), frontier_vertices.size(), cluster_ids.size(),
++      added_frontier_paths, skipped_near_graph, skipped_near_history,
++      global_graph_->getNumVertices());
+   visualization_->visualizeRobotStateHistory(robot_state_hist_->state_hist_);
+ }
+
+@@ -4960,18 +4960,24 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+   // Re-update all the frontiers based on the volumetric gain.
+   std::vector<Vertex*> global_frontiers;
+   int num_vertices = global_graph_->getNumVertices();
++  int stale_global_frontiers = 0;
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Re-check all frontiers.");
+   global_frontiers.clear();
+   for (int id = 0; id < num_vertices; ++id) {
+     if (global_graph_->getVertex(id)->type == VertexType::kFrontier) {
+       Vertex* v = global_graph_->getVertex(id);
+       computeVolumetricGainRayModelNoBound(v->state, v->vol_gain);
+-      if (!v->vol_gain.is_frontier)
++      if (!v->vol_gain.is_frontier) {
+         v->type = VertexType::kUnvisited;
+-      else
++        ++stale_global_frontiers;
++      } else {
+         global_frontiers.push_back(global_graph_->getVertex(id));
++      }
+     }
+   }
++  ROS_WARN("GLOBAL_FRONTIER_AUDIT current=(%.2f,%.2f,%.2f) graph=%d retained=%zu stale=%d",
++           current_state_[0], current_state_[1], current_state_[2],
++           num_vertices, global_frontiers.size(), stale_global_frontiers);
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Currently have %d frontiers in the global graph.",
+            (int)global_frontiers.size());
+   if ((!not_check_frontier) && (global_frontiers.size() <= 0)) {
+@@ -5098,9 +5104,9 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+             current_to_frontier_distance / planning_params_.v_homing_max;
+         double time_to_home =
+             frontier_to_home_distance / planning_params_.v_homing_max;
+-        double time_cost = time_to_target + planning_params_.auto_homing_enable
+-                               ? time_to_home
+-                               : 0;
++        double time_cost = time_to_target +
++                           (planning_params_.auto_homing_enable
++                                ? time_to_home : 0.0);
+         double time_spare = 0;
+         if (isRemainingTimeSufficient(time_cost, time_spare)) {
+           feasible_global_frontiers.push_back(f);
+@@ -5140,9 +5146,9 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+           current_to_frontier_distance / planning_params_.v_homing_max;
+       double time_to_home =
+           frontier_to_home_distance / planning_params_.v_homing_max;
+-      double time_cost = time_to_target + planning_params_.auto_homing_enable
+-                             ? time_to_home
+-                             : 0;
++      double time_cost = time_to_target +
++                         (planning_params_.auto_homing_enable
++                              ? time_to_home : 0.0);
+       double time_spare = 0;
+       if (!isRemainingTimeSufficient(time_cost, time_spare)) {
+         time_spare = 1;
+@@ -5178,6 +5184,10 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+   std::vector<int> current_to_frontier_path_id;
+   std::vector<int> frontier_to_home_path_id;
+   if (best_gain >= 0) {
++    ROS_WARN("GLOBAL_FRONTIER_SELECTED id=%d goal=(%.2f,%.2f,%.2f) score=%.3f retained=%zu",
++             best_frontier->id, best_frontier->state[0],
++             best_frontier->state[1], best_frontier->state[2],
++             best_gain, global_frontiers.size());
+     ROS_WARN_COND(global_verbosity >= Verbosity::WARN, "Found the best frontier to go is: %d", best_frontier->id);
+
+     if (auto_global_planner_trig_) {

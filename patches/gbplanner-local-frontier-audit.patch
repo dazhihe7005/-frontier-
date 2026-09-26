@@ -1,0 +1,51 @@
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1616,6 +1616,12 @@
+           local_graph_->getVertex(path[i + 1]);
+     }
+     best_vertex_ = local_graph_->getVertex(path[0]);
++    ROS_WARN("LOCAL_PATH_SELECTED current=(%.2f,%.2f,%.2f) root=(%.2f,%.2f,%.2f) goal=(%.2f,%.2f,%.2f) score=%.1f frontier=%d",
++             current_state_[0], current_state_[1], current_state_[2],
++             root_vertex_->state[0], root_vertex_->state[1],
++             root_vertex_->state[2], best_vertex_->state[0],
++             best_vertex_->state[1], best_vertex_->state[2],
++             best_gain, frontier_exists);
+     if (planning_params_.recent_viewpoint_penalty_radius > 0.0) {
+       recent_selected_viewpoints_.push_back(best_vertex_->state.head(3));
+       if (recent_selected_viewpoints_.size() > 12) {
+@@ -1912,11 +1912,34 @@
+   std::vector<Vertex*> leaf_vertices;
+   local_graph_->getLeafVertices(leaf_vertices);
+   std::vector<Vertex*> frontier_vertices;
++  int positive_unknown_leaves = 0;
++  int max_unknown_voxels = 0;
++  double max_leaf_x = -std::numeric_limits<double>::infinity();
++  double min_leaf_x = std::numeric_limits<double>::infinity();
+   for (auto& v : leaf_vertices) {
++    if (v->vol_gain.num_unknown_voxels > 0) ++positive_unknown_leaves;
++    max_unknown_voxels = std::max(max_unknown_voxels,
++                                  v->vol_gain.num_unknown_voxels);
++    max_leaf_x = std::max(max_leaf_x, v->state[0]);
++    min_leaf_x = std::min(min_leaf_x, v->state[0]);
+     if (v->type == VertexType::kFrontier) {
+       frontier_vertices.push_back(v);
+     }
+   }
++  const auto& frontier_sensor = sensor_params_.sensor.at(
++      planning_params_.exp_sensor_list.front());
++  const double full_fov_ray_metres =
++      (frontier_sensor.fov[0] / frontier_sensor.resolution[0]) *
++      (frontier_sensor.fov[1] / frontier_sensor.resolution[1]) *
++      frontier_sensor.max_range;
++  const double max_unknown_fraction =
++      max_unknown_voxels * map_manager_->getResolution() /
++      full_fov_ray_metres;
++  ROS_WARN_THROTTLE(10.0,
++      "LOCAL_FRONTIER_AUDIT leaves=%zu frontier=%zu positive_unknown=%d max_unknown=%d max_fraction=%.5f x_span=(%.2f,%.2f) current_x=%.2f",
++      leaf_vertices.size(), frontier_vertices.size(),
++      positive_unknown_leaves, max_unknown_voxels,
++      max_unknown_fraction, min_leaf_x, max_leaf_x, current_state_[0]);
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Get %d leaf vertices from newly local graph.",
+            (int)leaf_vertices.size());
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Get %d frontiers from newly local graph.",

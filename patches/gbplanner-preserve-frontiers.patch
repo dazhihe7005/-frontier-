@@ -1,0 +1,66 @@
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1923,13 +1923,18 @@ void Rrg::addFrontiers(int best_vertex_id) {
+            (int)frontier_vertices.size());
+ 
+   // Clustering the frontier and add principle path to the global.
++  // A 1 m principal-path cutoff discards every 0.4-0.9 m frontier around
++  // tight bends. Keep the shortest collision-checked graph edge instead.
+   std::vector<int> cluster_ids = performShortestPathsClustering(
+-      local_graph_, local_graph_rep_, frontier_vertices);
++      local_graph_, local_graph_rep_, frontier_vertices,
++      1.0, planning_params_.edge_length_min, true);
+   visualization_->visualizeClusteredPaths(local_graph_, local_graph_rep_,
+                                           frontier_vertices, cluster_ids);
+   const double kRangeCheck = 1.0;
+-  const double kUpdateRadius = 3.0;
++  // A nearby visited state is not evidence that a side branch has been seen.
++  const double kUpdateRadius = 1.0;
+   int skipped_near_graph = 0;
+   int skipped_near_history = 0;
+   int added_frontier_paths = 0;
++  int promoted_near_graph = 0;
+   for (int i = 0; i < cluster_ids.size(); ++i) {
+@@ -1952,11 +1957,19 @@ void Rrg::addFrontiers(int best_vertex_id) {
+     } else {
+       ++skipped_near_graph;
++      // Reuse the connected global-graph vertex instead of dropping a real
++      // local frontier. The global planner recomputes its gain before use, so
++      // this promotion cannot turn a stale point into a valid target.
++      if (nearest_vertex != NULL) {
++        nearest_vertex->type = VertexType::kFrontier;
++        ++promoted_near_graph;
++      }
+     }
+   }
+   ROS_WARN_THROTTLE(10.0,
+-      "GLOBAL_FRONTIER_INSERT leaves=%zu frontier_leaves=%zu clusters=%zu added=%d near_graph=%d near_history=%d graph=%d",
++      "GLOBAL_FRONTIER_INSERT leaves=%zu frontier_leaves=%zu clusters=%zu added=%d promoted=%d near_graph=%d near_history=%d graph=%d",
+       leaf_vertices.size(), frontier_vertices.size(), cluster_ids.size(),
+-      added_frontier_paths, skipped_near_graph, skipped_near_history,
++      added_frontier_paths, promoted_near_graph, skipped_near_graph,
++      skipped_near_history,
+       global_graph_->getNumVertices());
+   visualization_->visualizeRobotStateHistory(robot_state_hist_->state_hist_);
+ }
+@@ -4656,8 +4669,17 @@ void Rrg::timerCallback(const ros::TimerEvent& event) {
+     robot_state_hist_->addState(state_add);
+     const bool apply_eventE1 = true;
+     if (apply_eventE1) {
+-      global_graph_->updateVertexTypeInRange(current_state_,
+-                                             kUpdateRadius);  // E1
++      // Proximity alone does not prove that unknown space at a bend or side
++      // branch was observed. Preserve marked frontiers until the global
++      // planner recomputes their gain against the current map.
++      std::vector<Vertex*> nearby_vertices;
++      global_graph_->getNearestVertices(
++          &current_state_, kUpdateRadius, &nearby_vertices);
++      for (Vertex* vertex : nearby_vertices) {
++        if (vertex->type != VertexType::kFrontier) {
++          vertex->type = VertexType::kVisited;
++        }
++      }
+     }
+ 
+     last_state_marker_global_ = current_state_;

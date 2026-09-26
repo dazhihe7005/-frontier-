@@ -1,0 +1,113 @@
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1930,9 +1930,9 @@
+       1.0, planning_params_.edge_length_min, true);
+   visualization_->visualizeClusteredPaths(local_graph_, local_graph_rep_,
+                                           frontier_vertices, cluster_ids);
+-  const double kRangeCheck = 1.0;
++  const double kRangeCheck = 0.35;
+   // A nearby visited state is not evidence that a side branch has been seen.
+-  const double kUpdateRadius = 1.0;
++  const double kUpdateRadius = 0.50;
+   int skipped_near_graph = 0;
+   int skipped_near_history = 0;
+   int added_frontier_paths = 0;
+@@ -4650,23 +4650,16 @@
+     // significantly. Let's store them in a database, then add later if
+     // requires. Get position from odometry to add more vertices to the graph
+     // for homing.
+-    constexpr double kUpdateRadius = 3.0;
++    // A 3 m visit radius clears a branch mouth before the aircraft has seen
++    // around its bend. Retire only a viewpoint actually flown through.
++    constexpr double kUpdateRadius = 0.75;
+     StateVec* state_add = new StateVec(current_state_[0], current_state_[1],
+                                        current_state_[2], current_state_[3]);
+     robot_state_hist_->addState(state_add);
+     const bool apply_eventE1 = true;
+     if (apply_eventE1) {
+-      // Proximity alone does not prove that unknown space at a bend or side
+-      // branch was observed. Preserve marked frontiers until the global
+-      // planner recomputes their gain against the current map.
+-      std::vector<Vertex*> nearby_vertices;
+-      global_graph_->getNearestVertices(
+-          &current_state_, kUpdateRadius, &nearby_vertices);
+-      for (Vertex* vertex : nearby_vertices) {
+-        if (vertex->type != VertexType::kFrontier) {
+-          vertex->type = VertexType::kVisited;
+-        }
+-      }
++      global_graph_->updateVertexTypeInRange(current_state_,
++                                             kUpdateRadius);  // E1
+     }
+ 
+     last_state_marker_global_ = current_state_;
+@@ -5156,37 +5149,23 @@
+     for (int i = 0; i < feasible_global_frontiers.size(); ++i) {
+       Vertex* f = feasible_global_frontiers[i];
+       // get gain.
+-      std::vector<int> current_to_frontier_path_id;
+-      std::vector<int> frontier_to_home_path_id;
+       double current_to_frontier_distance;
+-      double frontier_to_home_distance;
+-
+-      global_graph_->getShortestPath(f->id, frontier_graph_rep, true,
+-                                     current_to_frontier_path_id);
+-      global_graph_->getShortestPath(f->id, global_graph_rep_, false,
+-                                     frontier_to_home_path_id);
+       current_to_frontier_distance =
+           global_graph_->getShortestDistance(f->id, frontier_graph_rep);
+-      frontier_to_home_distance =
+-          global_graph_->getShortestDistance(f->id, global_graph_rep_);
+ 
+-      // Duplication from above but easier to understand.
+-      double time_to_target =
+-          current_to_frontier_distance / planning_params_.v_homing_max;
+-      double time_to_home =
+-          frontier_to_home_distance / planning_params_.v_homing_max;
+-      double time_cost = time_to_target +
+-                         (planning_params_.auto_homing_enable
+-                              ? time_to_home : 0.0);
+-      double time_spare = 0;
+-      if (!isRemainingTimeSufficient(time_cost, time_spare)) {
+-        time_spare = 1;
+-      }
+-
+-      const double kGDistancePenalty = 0.01;
+-      double exp_gain = f->vol_gain.gain *
+-                        exp(-kGDistancePenalty * current_to_frontier_distance);
+-      if (!ignore_time) exp_gain *= time_spare;
++      if (!std::isfinite(current_to_frontier_distance) ||
++          current_to_frontier_distance < 0.0 ||
++          f->vol_gain.gain <= 0.0) {
++        continue;
++      }
++
++      // Raw unknown-voxel gain can differ by orders of magnitude in a
++      // partially mapped tunnel; a stale nearby blind cone then outweighs
++      // a long unnecessary backtrack. Rank positive information per metre
++      // of actual graph travel, while still allowing a distant branch when
++      // nearby frontiers are exhausted. There is no fixed +X filter.
++      double exp_gain = std::log1p(f->vol_gain.gain) /
++                        (1.0 + current_to_frontier_distance);
+       frontier_exp_gain[f->id] = exp_gain;
+       if (exp_gain > best_gain) {
+         best_gain = exp_gain;
+@@ -5201,6 +5180,17 @@
+               [&frontier_exp_gain](const Vertex* a, const Vertex* b) {
+                 return frontier_exp_gain[a->id] > frontier_exp_gain[b->id];
+               });
++    for (size_t rank = 0;
++         rank < std::min<size_t>(3, feasible_global_frontiers.size()); ++rank) {
++      Vertex* candidate = feasible_global_frontiers[rank];
++      ROS_WARN("GLOBAL_FRONTIER_RANK rank=%zu id=%d goal=(%.2f,%.2f,%.2f) distance=%.2f raw=%.1f score=%.3f",
++               rank, candidate->id, candidate->state[0],
++               candidate->state[1], candidate->state[2],
++               global_graph_->getShortestDistance(candidate->id,
++                                                  frontier_graph_rep),
++               candidate->vol_gain.gain,
++               frontier_exp_gain[candidate->id]);
++    }
+     // Print out
+     // ROS_WARN_COND(global_verbosity >= Verbosity::WARN, "List of potential frontier in decreasing order of gain:");
+     // for (int i = 0; i < feasible_global_frontiers.size(); ++i) {
