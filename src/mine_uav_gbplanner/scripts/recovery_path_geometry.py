@@ -21,6 +21,22 @@ def horizontal_progress(anchor, current):
     return math.hypot(current[0]-anchor[0], current[1]-anchor[1])
 
 
+def reverse_path_has_progress(points, travelled, min_horizontal=1.0,
+                              min_efficiency=0.30):
+    """Reject a 6 m rewind that merely replays a local orbit or U-turn.
+
+    Reversing observed poses is safe only if it actually exits the blocked
+    neighborhood. Net XY displacement is intentionally direction-agnostic;
+    legitimate curved corridors pass, while a loop returning near its start
+    cannot be called a useful backtrack.
+    """
+    if len(points) < 2 or travelled <= 0.0 or not math.isfinite(travelled):
+        return False
+    displacement = horizontal_progress(points[0], points[-1])
+    return (displacement >= min_horizontal and
+            displacement >= min_efficiency*travelled)
+
+
 def reverse_observed_path(current, history, max_distance=6.0,
                           max_gap=0.30, min_step=0.05):
     """Return [current, ...] along dense observed poses, never commands.

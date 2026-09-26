@@ -55,6 +55,17 @@ class ReverseObservedPathTests(unittest.TestCase):
         self.assertEqual(points, [(1.0, 0.0, 1.0)])
         self.assertEqual(travelled, 0.0)
 
+    def test_backtrack_rejects_observed_orbit_without_net_exit(self):
+        valid = GEOMETRY.reverse_path_has_progress
+        # The hazardous run retraced roughly 6 m but ended only 0.4 m
+        # horizontally from the start; it would replay the same orbit.
+        self.assertFalse(valid([(0.0, 0.0, 1.0), (2.0, 0.0, 1.0),
+                                (0.4, 0.0, 1.0)], 6.0))
+        self.assertFalse(valid([(0.0, 0.0, 1.0), (0.0, 0.0, 2.0)], 1.0))
+        self.assertTrue(valid([(0.0, 0.0, 1.0), (3.0, 0.0, 1.0),
+                               (4.0, 2.0, 1.0)], 6.0))
+        self.assertFalse(valid([], 0.0))
+
 
 if __name__ == "__main__":
     unittest.main()

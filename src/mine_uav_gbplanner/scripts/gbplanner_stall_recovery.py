@@ -29,7 +29,9 @@ from trajectory_msgs.msg import (MultiDOFJointTrajectory,
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from recovery_path_geometry import (blocked_path_needs_backtrack, distance,
-                                    horizontal_progress, reverse_observed_path)
+                                    horizontal_progress,
+                                    reverse_observed_path,
+                                    reverse_path_has_progress)
 
 
 RECOVERY_JOINT = "gbplanner_stall_recovery_backtrack"
@@ -339,6 +341,13 @@ class StallRecovery:
                 positions, odom)
             if len(trajectory.points) < 2 or backtrack_distance < 0.5:
                 self._restart_without_motion("no continuous observed backtrack")
+                return
+            if not reverse_path_has_progress(positions, backtrack_distance):
+                rospy.logwarn("Rejecting observed backtrack loop: %.2fm path "
+                              "ends only %.2fm horizontally from start",
+                              backtrack_distance,
+                              horizontal_progress(positions[0], positions[-1]))
+                self._restart_without_motion("observed backtrack has no net progress")
                 return
             rospy.wait_for_service(
                 "/planner_control_interface/std_srvs/stop", timeout=2.0)
