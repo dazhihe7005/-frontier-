@@ -24,7 +24,7 @@ index 747a6cd..9e0823b 100644
  
    std::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> feasible_corridor_pcl_;
 diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
-index 208c4c1..46b8a06 100644
+index 208c4c1..8d99f62 100644
 --- a/gbplanner/src/rrg.cpp
 +++ b/gbplanner/src/rrg.cpp
 @@ -1,5 +1,6 @@
@@ -567,6 +567,40 @@ index 208c4c1..46b8a06 100644
      ROS_WARN_COND(global_verbosity >= Verbosity::WARN, "Found the best frontier to go is: %d", best_frontier->id);
  
      if (auto_global_planner_trig_) {
+@@ -5181,6 +5435,33 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+     ret_path = interp_path;
+   }
+ 
++  // Global-graph edges were accepted using an older map. Recheck the exact
++  // path returned to PCI against the current TSDF, including unknown voxels.
++  // Without this, a stale return path can be sent through a newly observed
++  // obstruction even when strict local-path checking is enabled.
++  if (strict_final_path_check_) {
++    for (size_t i = 1; i < ret_path.size(); ++i) {
++      const Eigen::Vector3d start(
++          ret_path[i - 1].position.x, ret_path[i - 1].position.y,
++          ret_path[i - 1].position.z);
++      const Eigen::Vector3d end(
++          ret_path[i].position.x, ret_path[i].position.y,
++          ret_path[i].position.z);
++      const MapManager::VoxelStatus status = map_manager_->getPathStatus(
++          start + robot_params_.center_offset,
++          end + robot_params_.center_offset, robot_box_size_, true);
++      if (status != MapManager::VoxelStatus::kFree) {
++        ROS_WARN("GBPLANNER_GLOBAL_PATH_REJECTED segment=%zu status=%d "
++                 "start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++                 i, static_cast<int>(status), start.x(), start.y(),
++                 start.z(), end.x(), end.y(), end.z());
++        global_exploration_ongoing_ = false;
++        auto_global_planner_trig_ = false;
++        return {};
++      }
++    }
++  }
++
+   visualization_->visualizeGlobalGraph(global_graph_);
+   visualization_->visualizeRefPath(ret_path);
+   return ret_path;
 diff --git a/planner_common/CMakeLists.txt b/planner_common/CMakeLists.txt
 index bc331b0..999fb67 100644
 --- a/planner_common/CMakeLists.txt

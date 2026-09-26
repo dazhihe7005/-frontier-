@@ -56,6 +56,7 @@
   <arg name="takeoff_height" default="1.0"/>
   <!-- Opt-in sensor-only yaw scan before task trigger; no map truth is used. -->
   <arg name="preflight_yaw_scan_experiment" default="false"/>
+  <arg name="preflight_full_circle_scan_experiment" default="false"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
   <arg name="spawn_x" default="-7.0"/>
@@ -323,6 +324,7 @@
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <param name="takeoff_height" value="$(arg takeoff_height)"/>
     <param name="preflight_yaw_scan_enable" value="$(arg preflight_yaw_scan_experiment)"/>
+    <param name="preflight_full_circle_scan" value="$(arg preflight_full_circle_scan_experiment)"/>
     <param name="takeoff_hover_duration" value="2.0"/>
     <param name="hover_horizontal_speed_tolerance" value="0.20"/>
     <param name="hover_vertical_speed_tolerance" value="0.15"/>

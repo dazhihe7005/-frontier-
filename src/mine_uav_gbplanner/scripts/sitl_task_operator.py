@@ -38,7 +38,10 @@ class SitlTaskOperator:
         )
         self.preflight_yaw_scan_enable = bool(rospy.get_param(
             "~preflight_yaw_scan_enable", False))
-        self._scan_angle = math.pi
+        self.preflight_full_circle_scan = bool(rospy.get_param(
+            "~preflight_full_circle_scan", False))
+        self._scan_angle = (2.0 * math.pi if self.preflight_full_circle_scan
+                            else math.pi)
         scan_rate_deg_s = min(30.0, max(5.0, float(rospy.get_param(
             "~preflight_yaw_scan_rate_deg_s", 15.0))))
         self._scan_duration = self._scan_angle / math.radians(scan_rate_deg_s)
@@ -270,12 +273,19 @@ class SitlTaskOperator:
                     self._scan_phase = "out"
                     self._scan_started_at = now
                     self._hover_start = rospy.Time(0)
-                    rospy.logwarn("Starting opt-in 180-degree preflight yaw scan")
+                    rospy.logwarn("Starting opt-in %d-degree preflight yaw scan",
+                                  360 if self.preflight_full_circle_scan else 180)
                 elif self._scan_phase == "out":
-                    self._scan_phase = "back"
-                    self._scan_started_at = now
-                    self._hover_start = rospy.Time(0)
-                    rospy.logwarn("Preflight yaw scan returning to start heading")
+                    if self.preflight_full_circle_scan:
+                        self._scan_phase = "done"
+                        self._ready = True
+                        rospy.loginfo("Full-circle preflight scan settled; "
+                                      "emulated task trigger changed")
+                    else:
+                        self._scan_phase = "back"
+                        self._scan_started_at = now
+                        self._hover_start = rospy.Time(0)
+                        rospy.logwarn("Preflight yaw scan returning to start heading")
                 else:
                     self._scan_phase = "done"
                     self._ready = True
