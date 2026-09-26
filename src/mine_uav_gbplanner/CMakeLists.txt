@@ -17,6 +17,7 @@ target_link_libraries(fastlio_px4_vision_bridge ${catkin_LIBRARIES})
 catkin_install_python(PROGRAMS
   scripts/fastlio_voxblox_adapter.py
   scripts/fastlio_planner_odometry.py
+  scripts/fastlio_vision_velocity_adapter.py
   scripts/gbplanner_decision_monitor.py
   scripts/diagnostic_map_coverage.py
   scripts/diagnostic_truth_trajectory.py
@@ -27,6 +28,7 @@ catkin_install_python(PROGRAMS
   scripts/gbplanner_px4_executor.py
   scripts/gbplanner_stall_recovery.py
   scripts/recovery_path_geometry.py
+  scripts/vision_velocity_geometry.py
   scripts/sitl_task_operator.py
   scripts/validate_full_chain.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

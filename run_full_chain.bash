@@ -11,8 +11,19 @@ mkdir -p "$ROS_LOG_DIR" /home/nuc/gbplanner2_isolated_ws/runtime/px4_sitl_2
 # frontier/SUPER workspace; replace only that private link on every launch.
 px4_private_airframes=/home/nuc/gbplanner2_isolated_ws/runtime/px4_root/etc/init.d-posix/airframes
 mkdir -p "$px4_private_airframes"
+vision_velocity_requested=false
+for launch_arg in "$@"; do
+  if [[ "$launch_arg" == vision_velocity_experiment:=true ]]; then
+    vision_velocity_requested=true
+    break
+  fi
+done
+private_airframe=/home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_xy_vision
+if [[ "$vision_velocity_requested" == true ]]; then
+  private_airframe=/home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_ev_velocity_ab
+fi
 ln -sfn \
-  /home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_xy_vision \
+  "$private_airframe" \
   "$px4_private_airframes/1018_gazebo-classic_iris_xy_vision"
 
 # PX4 persists calibration offsets and flight counters in its work directory.

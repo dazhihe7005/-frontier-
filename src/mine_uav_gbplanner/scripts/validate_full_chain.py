@@ -38,12 +38,18 @@ class Validator:
                               os.getpid()))
         self.output_file = Path(rospy.get_param("~output_file", default_report))
         self.ros_run_id = rospy.get_param("/run_id", "")
+        self.vision_velocity_experiment = bool(rospy.get_param(
+            "~vision_velocity_experiment", False))
+        self.topics = dict(self.TOPICS)
+        if self.vision_velocity_experiment:
+            self.topics["px4_vision_input"] = (
+                "/mavros/odometry/out", Odometry)
         self.duration = max(20.0, float(rospy.get_param("~duration", 180.0)))
         self.observe_full_duration = bool(rospy.get_param(
             "~observe_full_duration", False))
         self.min_displacement = max(
             0.5, float(rospy.get_param("~min_displacement", 0.5)))
-        self.counts = {key: 0 for key in self.TOPICS}
+        self.counts = {key: 0 for key in self.topics}
         self._lock = threading.Lock()
         self.states = set()
         self.executor_states = set()
@@ -93,7 +99,7 @@ class Validator:
         self.max_fastlio_truth_relative_xy_error = 0.0
         self.max_fastlio_truth_relative_z_error = 0.0
         self.min_clearance_state = None
-        for key, (topic, message_type) in self.TOPICS.items():
+        for key, (topic, message_type) in self.topics.items():
             rospy.Subscriber(topic, message_type,
                              lambda msg, name=key: self._topic_cb(name, msg),
                              queue_size=50)
@@ -373,6 +379,9 @@ class Validator:
             result = {
                 "passed": all(checks.values()),
                 "pass_scope": "full_chain_and_sampled_sensor_checks_only",
+                "vision_transport": ("mavros_odometry_pose_and_velocity"
+                                     if self.vision_velocity_experiment
+                                     else "mavros_vision_pose"),
                 "ros_run_id": self.ros_run_id,
                 "observation_start_s": round(started.to_sec(), 3),
                 "observation_end_s": round(rospy.Time.now().to_sec(), 3),

@@ -5,6 +5,9 @@
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
   <arg name="coverage_audit" default="false"/>
+  <!-- Uses one MAVLink ODOMETRY source with visual pose+derived velocity.
+       Explicit A/B only; default remains the validated pose transport. -->
+  <arg name="vision_velocity_experiment" default="false"/>
   <arg name="ceiling_follow_experiment" default="false"/>
   <arg name="frontier_percentage_threshold" default="0.04"/>
   <arg name="planner_trigger_lead_time" default="0.4"/>
@@ -22,6 +25,7 @@
   <!-- Safety gate: current 1 m radius trials have only centimetres of
        clearance reserve and have not passed full-map acceptance. -->
   <arg name="allow_auto_arm" default="false"/>
+  <arg name="takeoff_height" default="1.0"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
   <arg name="spawn_x" default="-7.0"/>
@@ -56,7 +60,18 @@
   <node pkg="px4" type="px4" name="gbplanner_px4_sitl" output="screen"
         required="true"
         args="/home/nuc/gbplanner2_isolated_ws/runtime/px4_root/etc -s etc/init.d-posix/rcS -i 2 -w $(arg px4_work_dir) -d"/>
-  <include file="$(find mavros)/launch/px4.launch">
+  <include unless="$(arg vision_velocity_experiment)"
+           file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="udp://:14542@localhost:14582"/>
+    <arg name="gcs_url" value=""/>
+    <arg name="tgt_system" value="3"/>
+    <arg name="tgt_component" value="1"/>
+  </include>
+  <include if="$(arg vision_velocity_experiment)"
+           file="$(find mavros)/launch/node.launch">
+    <arg name="pluginlists_yaml"
+         value="$(find mine_uav_gbplanner)/config/px4_pluginlists_visual_odometry.yaml"/>
+    <arg name="config_yaml" value="$(find mavros)/launch/px4_config.yaml"/>
     <arg name="fcu_url" value="udp://:14542@localhost:14582"/>
     <arg name="gcs_url" value=""/>
     <arg name="tgt_system" value="3"/>
@@ -99,6 +114,10 @@
     <rosparam command="load"
               file="$(find mine_uav_gbplanner)/config/fastlio_px4_vision_bridge.yaml"/>
   </node>
+  <node if="$(arg vision_velocity_experiment)" pkg="mine_uav_gbplanner"
+        type="fastlio_vision_velocity_adapter.py"
+        name="fastlio_vision_velocity_adapter" output="screen"
+        required="true"/>
   <node pkg="mine_uav_gbplanner" type="fastlio_planner_odometry.py"
         name="fastlio_planner_odometry" output="screen" required="true"/>
 
@@ -254,7 +273,7 @@
   <node pkg="mine_uav_gbplanner" type="sitl_task_operator.py"
         name="gbplanner_sitl_operator" output="screen" required="true">
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
-    <param name="takeoff_height" value="1.0"/>
+    <param name="takeoff_height" value="$(arg takeoff_height)"/>
     <param name="takeoff_hover_duration" value="2.0"/>
     <param name="hover_horizontal_speed_tolerance" value="0.20"/>
     <param name="hover_vertical_speed_tolerance" value="0.15"/>

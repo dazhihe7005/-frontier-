@@ -209,6 +209,14 @@ git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.p
 `tools/audit_surveyed_launch_corridor.py` 生成；全图完成和安全验收仍须
 满足上文的独立判据。
 
+外部视觉位姿加差分速度、PX4 视觉航向融合只作为默认关闭的隔离 A/B：
+`vision_velocity_experiment:=true`。2026-09-27 的约 330 s 有人监控试验
+虽未采到低于 1 m 的网格点，却仅覆盖 2855/8460 个三维可达体素，
+最低净空 1.14228 m、运动均速约 0.476 m/s，仍未达到完整、安全且
+迅速探索的目标。此前两种不完整的视觉速度配置分别曾达到 0.77698 m
+和 0.58746 m 的危险净空，故该 A/B 不得当作真机安全配置。
+证据和因果链见[全图验收记录](src/mine_uav_gbplanner/docs/full_map_acceptance.md)。
+
 2026-09-27 的进一步仿真显示：保留原高度融合时，PX4 本地高度上升
 与垂直速度估计“下降”同时出现；试验飞行虽到达 x≈-64 m，碰撞网格
 最小净空只有 1.075 m、三维可见 3482/8460。加强地面锁存约束又造成

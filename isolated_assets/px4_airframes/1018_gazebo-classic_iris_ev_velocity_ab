@@ -1,0 +1,7 @@
+#!/bin/sh
+# Isolated PX4 SITL A/B only. FAST-LIO2 visual XY, velocity and yaw aid EKF2;
+# barometer remains the height reference and EV vertical position stays off.
+# MAVROS odom sends LOCAL_FRD: without EV yaw PX4 rotates a growing position
+# vector by its yaw mismatch, causing >0.5 m lateral error around 15 m out.
+. /home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_xy_vision
+param set EKF2_EV_CTRL 13

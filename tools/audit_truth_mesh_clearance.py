@@ -29,9 +29,14 @@ def parse_args():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--safety-radius", type=float, default=1.0)
     parser.add_argument("--nearest-cutoff", type=float, default=10.0)
+    parser.add_argument("--x-min", type=float, default=-math.inf)
+    parser.add_argument("--x-max", type=float, default=math.inf)
+    parser.add_argument("--time-min", type=float, default=-math.inf)
+    parser.add_argument("--time-max", type=float, default=math.inf)
     args = parser.parse_args(argv)
-    if args.safety_radius <= 0 or args.nearest_cutoff <= args.safety_radius:
-        parser.error("nearest cutoff must exceed positive safety radius")
+    if (args.safety_radius <= 0 or args.nearest_cutoff <= args.safety_radius
+            or args.x_min > args.x_max or args.time_min > args.time_max):
+        parser.error("invalid safety radius, cutoff, or diagnostic region")
     return args
 
 
@@ -60,7 +65,9 @@ def main():
                 continue
             values = tuple(float(row[key]) for key in
                            ("sim_time", "x", "y", "z"))
-            if all(math.isfinite(value) for value in values):
+            if (all(math.isfinite(value) for value in values)
+                    and args.time_min <= values[0] <= args.time_max
+                    and args.x_min <= values[1] <= args.x_max):
                 quaternion = None
                 if all(row.get(key) for key in ("qx", "qy", "qz", "qw")):
                     components = tuple(float(row[key]) for key in

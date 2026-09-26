@@ -1,0 +1,12 @@
+# Isolated A/B: the pose bridge feeds the odometry adapter, not MAVROS's
+# vision_pose plugin. Only one MAVLink external-vision source reaches PX4.
+plugin_blacklist:
+- safety_area
+- image_pub
+- vibration
+- distance_sensor
+- rangefinder
+- wheel_odometry
+- vision_pose_estimate
+
+plugin_whitelist: []

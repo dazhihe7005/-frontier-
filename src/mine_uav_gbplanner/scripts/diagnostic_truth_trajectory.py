@@ -9,7 +9,8 @@ from pathlib import Path
 
 import rospy
 from gazebo_msgs.msg import ModelStates
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import (PoseStamped, PoseWithCovarianceStamped,
+                               TwistStamped)
 from mavros_msgs.msg import PositionTarget, State
 from std_msgs.msg import Float32, String
 
@@ -30,7 +31,12 @@ class TruthTrajectoryRecorder:
                               "exploration_started", "qx", "qy", "qz", "qw",
                               "ros_run_id", "px4_local_z", "px4_vz",
                               "command_z", "command_vz", "floor_clearance",
-                              "upward_room"))
+                              "upward_room", "fastlio_vision_z",
+                              "fastlio_vision_stamp", "px4_local_x",
+                              "px4_local_y", "px4_vx", "px4_vy",
+                              "command_x", "command_y", "command_vx",
+                              "command_vy", "fastlio_vision_x",
+                              "fastlio_vision_y"))
         self.armed = False
         self.offboard = False
         self.exploration_started = False
@@ -38,16 +44,23 @@ class TruthTrajectoryRecorder:
         self.rows = 0
         self.local_z = math.nan
         self.local_vz = math.nan
+        self.local_x = self.local_y = math.nan
+        self.local_vx = self.local_vy = math.nan
+        self.command_x = self.command_y = math.nan
+        self.command_vx = self.command_vy = math.nan
         self.command_z = math.nan
         self.command_vz = math.nan
         self.floor_clearance = math.nan
         self.upward_room = math.nan
+        self.vision_z = math.nan
+        self.vision_x = self.vision_y = math.nan
+        self.vision_stamp = math.nan
         rospy.Subscriber("/mavros/state", State, self._state_cb, queue_size=10)
         rospy.Subscriber("/mavros/local_position/pose", PoseStamped,
-                         lambda msg: setattr(self, "local_z", msg.pose.position.z),
+                         self._local_pose_cb,
                          queue_size=10)
         rospy.Subscriber("/mavros/local_position/velocity_local", TwistStamped,
-                         lambda msg: setattr(self, "local_vz", msg.twist.linear.z),
+                         self._local_velocity_cb,
                          queue_size=10)
         rospy.Subscriber("/mavros/setpoint_raw/local", PositionTarget,
                          self._command_cb, queue_size=10)
@@ -56,6 +69,9 @@ class TruthTrajectoryRecorder:
                          queue_size=10)
         rospy.Subscriber("/mine_uav/gbplanner/upward_room", Float32,
                          lambda msg: setattr(self, "upward_room", msg.data),
+                         queue_size=10)
+        rospy.Subscriber("/mavros/vision_pose/pose_cov",
+                         PoseWithCovarianceStamped, self._vision_cb,
                          queue_size=10)
         rospy.Subscriber("/mine_uav/gbplanner/mission_status", String,
                          self._mission_cb, queue_size=5)
@@ -73,8 +89,28 @@ class TruthTrajectoryRecorder:
             self.exploration_started = True
 
     def _command_cb(self, msg):
+        self.command_x = msg.position.x
+        self.command_y = msg.position.y
+        self.command_vx = msg.velocity.x
+        self.command_vy = msg.velocity.y
         self.command_z = msg.position.z
         self.command_vz = msg.velocity.z
+
+    def _local_pose_cb(self, msg):
+        self.local_x = msg.pose.position.x
+        self.local_y = msg.pose.position.y
+        self.local_z = msg.pose.position.z
+
+    def _local_velocity_cb(self, msg):
+        self.local_vx = msg.twist.linear.x
+        self.local_vy = msg.twist.linear.y
+        self.local_vz = msg.twist.linear.z
+
+    def _vision_cb(self, msg):
+        self.vision_x = msg.pose.pose.position.x
+        self.vision_y = msg.pose.pose.position.y
+        self.vision_z = msg.pose.pose.position.z
+        self.vision_stamp = msg.header.stamp.to_sec()
 
     def _model_cb(self, msg):
         try:
@@ -100,7 +136,19 @@ class TruthTrajectoryRecorder:
                               "{:.5f}".format(self.command_z),
                               "{:.5f}".format(self.command_vz),
                               "{:.5f}".format(self.floor_clearance),
-                              "{:.5f}".format(self.upward_room)))
+                              "{:.5f}".format(self.upward_room),
+                              "{:.5f}".format(self.vision_z),
+                              "{:.5f}".format(self.vision_stamp),
+                              "{:.5f}".format(self.local_x),
+                              "{:.5f}".format(self.local_y),
+                              "{:.5f}".format(self.local_vx),
+                              "{:.5f}".format(self.local_vy),
+                              "{:.5f}".format(self.command_x),
+                              "{:.5f}".format(self.command_y),
+                              "{:.5f}".format(self.command_vx),
+                              "{:.5f}".format(self.command_vy),
+                              "{:.5f}".format(self.vision_x),
+                              "{:.5f}".format(self.vision_y)))
         self.rows += 1
         if self.rows % 100 == 0:
             self.file.flush()
