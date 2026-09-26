@@ -49,9 +49,17 @@ class Validator:
         self.min_clearance = float("inf")
         self.clearance_violations = 0
         self.min_spatial_clearance = float("inf")
+        self.min_spatial_clearance_state = None
         self.spatial_clearance_violations = 0
+        self.spatial_clearance_low_margin_samples = 0
+        self.min_floor_clearance = float("inf")
+        self.min_floor_clearance_state = None
+        self.floor_clearance_violations = 0
+        self.floor_clearance_low_margin_samples = 0
+        self.floor_clearance_samples = 0
         self.max_tracking_error = 0.0
         self.max_actual_speed = 0.0
+        self.latest_actual_speed = 0.0
         self.moving_speed_sum = 0.0
         self.moving_speed_samples = 0
         self.max_command_speed = 0.0
@@ -89,6 +97,8 @@ class Validator:
                          self._clearance_cb, queue_size=50)
         rospy.Subscriber("/mine_uav/gbplanner/spatial_clearance", Float32,
                          self._spatial_clearance_cb, queue_size=50)
+        rospy.Subscriber("/mine_uav/gbplanner/floor_clearance", Float32,
+                         self._floor_clearance_cb, queue_size=50)
         rospy.Subscriber("/mine_uav/gbplanner/tracking_error", Float32,
                          self._tracking_cb, queue_size=50)
         rospy.Subscriber("/mine_uav/gbplanner/vision_healthy", Bool,
@@ -207,6 +217,7 @@ class Validator:
         speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
         with self._lock:
             self.max_actual_speed = max(self.max_actual_speed, speed)
+            self.latest_actual_speed = speed
             if self._flight_active and speed >= 0.2:
                 self.moving_speed_sum += speed
                 self.moving_speed_samples += 1
@@ -235,10 +246,21 @@ class Validator:
         if not math.isfinite(message.data):
             return
         with self._lock:
-            self.min_spatial_clearance = min(
-                self.min_spatial_clearance, message.data)
+            if message.data < self.min_spatial_clearance:
+                self.min_spatial_clearance = message.data
+                self.min_spatial_clearance_state = {
+                    "time_s": round(rospy.Time.now().to_sec(), 3),
+                    "local": self.latest_local_position,
+                    "fastlio": self.latest_fastlio_position,
+                    "truth": self.latest_truth_position,
+                    "actual_speed_mps": round(self.latest_actual_speed, 4),
+                    "blocked": self._last_blocked,
+                    "recovery": self._last_recovery,
+                }
             if message.data < 1.0:
                 self.spatial_clearance_violations += 1
+            if message.data < 1.15:
+                self.spatial_clearance_low_margin_samples += 1
 
     def _vision_cb(self, message):
         with self._lock:
@@ -249,6 +271,31 @@ class Validator:
                 # initialized.  Continuity is a flight-time property, so do
                 # not turn that correct preflight gate into a test failure.
                 self.vision_false_samples += 1
+
+    def _floor_clearance_cb(self, message):
+        if not math.isfinite(message.data):
+            return
+        with self._lock:
+            # The landing pad is closer than 1 m before takeoff; the hard
+            # airborne envelope begins when automatic exploration is active.
+            if "AUTOMATIC_EXPLORATION_STARTED" not in self.mission_states:
+                return
+            self.floor_clearance_samples += 1
+            if message.data < self.min_floor_clearance:
+                self.min_floor_clearance = message.data
+                self.min_floor_clearance_state = {
+                    "time_s": round(rospy.Time.now().to_sec(), 3),
+                    "local": self.latest_local_position,
+                    "fastlio": self.latest_fastlio_position,
+                    "truth": self.latest_truth_position,
+                    "actual_speed_mps": round(self.latest_actual_speed, 4),
+                    "blocked": self._last_blocked,
+                    "recovery": self._last_recovery,
+                }
+            if message.data < 1.0:
+                self.floor_clearance_violations += 1
+            if message.data < 1.15:
+                self.floor_clearance_low_margin_samples += 1
 
     def _blocked_cb(self, message):
         with self._lock:
@@ -310,7 +357,9 @@ class Validator:
                 # rejects points whose actual radius remains above 1 m.
                 "hard_1m_clearance":
                     math.isfinite(self.min_spatial_clearance) and
-                    self.min_spatial_clearance >= 1.0,
+                    self.min_spatial_clearance >= 1.0 and
+                    self.floor_clearance_samples >= 5 and
+                    self.min_floor_clearance >= 1.0,
                 "vision_continuity": self.vision_false_samples == 0,
             }
             result = {
@@ -336,6 +385,17 @@ class Validator:
                     if math.isfinite(self.min_spatial_clearance) else None),
                 "spatial_clearance_samples_below_1m": (
                     self.spatial_clearance_violations),
+                "spatial_clearance_samples_below_1p15m": (
+                    self.spatial_clearance_low_margin_samples),
+                "min_floor_clearance_m": (
+                    round(self.min_floor_clearance, 4)
+                    if math.isfinite(self.min_floor_clearance) else None),
+                "min_floor_clearance_state": self.min_floor_clearance_state,
+                "floor_clearance_samples": self.floor_clearance_samples,
+                "floor_clearance_samples_below_1m": (
+                    self.floor_clearance_violations),
+                "floor_clearance_samples_below_1p15m": (
+                    self.floor_clearance_low_margin_samples),
                 "max_tracking_error_m": round(self.max_tracking_error, 4),
                 "max_actual_speed_mps": round(self.max_actual_speed, 4),
                 "mean_moving_speed_mps": (
@@ -366,6 +426,7 @@ class Validator:
                     "truth": self.truth_reference,
                 },
                 "min_clearance_state": self.min_clearance_state,
+                "min_spatial_clearance_state": self.min_spatial_clearance_state,
             }
         print("GBPLANNER_FULL_CHAIN_RESULT=" + json.dumps(result, sort_keys=True))
         return result["passed"]

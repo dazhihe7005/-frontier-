@@ -63,6 +63,8 @@ class StallRecovery:
         self._empty_count = 0
         self._recovering = False
         self._recovery_seq = 0
+        self._backtrack_published_at = rospy.Time(0)
+        self._backtrack_blocked_since = rospy.Time(0)
 
         self._trajectory_pub = rospy.Publisher(
             "/gbplanner/command/trajectory", MultiDOFJointTrajectory,
@@ -139,11 +141,20 @@ class StallRecovery:
             threading.Thread(target=self._recover, daemon=True).start()
 
     def _blocked_cb(self, message):
-        if not message.data:
-            return
         start_worker = False
         with self._lock:
-            if not self._recovering:
+            if self._recovering:
+                # The path was collision-checked when first flown, not at
+                # recovery time. Once the live guard blocks the new reverse
+                # trajectory, do not wait tens of seconds at a wall.
+                if not self._backtrack_published_at.is_zero():
+                    if message.data:
+                        if self._backtrack_blocked_since.is_zero():
+                            self._backtrack_blocked_since = rospy.Time.now()
+                    else:
+                        self._backtrack_blocked_since = rospy.Time(0)
+                return
+            if message.data:
                 ready = (self._vision_healthy and self._state.connected and
                          self._state.armed and self._state.mode == "OFFBOARD")
                 if ready:
@@ -271,6 +282,9 @@ class StallRecovery:
             rospy.sleep(0.25)
             self._active_pub.publish(Bool(data=True))
             rospy.sleep(0.10)
+            with self._lock:
+                self._backtrack_published_at = rospy.Time.now()
+                self._backtrack_blocked_since = rospy.Time(0)
             self._trajectory_pub.publish(trajectory)
             rospy.logwarn(
                 "GBPlanner stall x%d: backtracking %.2fm over %.2fs on "
@@ -291,6 +305,13 @@ class StallRecovery:
                     current_odom = copy.deepcopy(self._odom)
                     healthy = (self._vision_healthy and self._state.connected and
                                self._state.armed and self._state.mode == "OFFBOARD")
+                    backtrack_blocked_since = self._backtrack_blocked_since
+                if (not backtrack_blocked_since.is_zero() and
+                        (rospy.Time.now()-backtrack_blocked_since).to_sec() >= 1.0):
+                    rospy.logwarn("Live guard blocked the reverse path; "
+                                  "aborting backtrack and replanning")
+                    self._restart_without_motion("reverse path blocked")
+                    return
                 if current_odom is None or not healthy:
                     arrived_since = rospy.Time(0)
                 else:
@@ -329,6 +350,8 @@ class StallRecovery:
             with self._lock:
                 self._empty_count = 0
                 self._recovering = False
+                self._backtrack_published_at = rospy.Time(0)
+                self._backtrack_blocked_since = rospy.Time(0)
 
 
 if __name__ == "__main__":

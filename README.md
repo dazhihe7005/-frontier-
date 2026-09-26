@@ -85,6 +85,9 @@ Gazebo MID360S PointCloud
   施加 0.75 m 范围内的软性重复惩罚；这不放行未知/占用体素，也不限定世界坐标
   主方向。起点附近的 2.2 m 宽规划碰撞盒常因侧向少量未知体素只能生成
   约 0.4–1.0 m 的短路径，故冷启动离开起点的时间仍有随机性。
+- 总升降量软惩罚保留为可选第三方补丁
+  `patches/gbplanner-vertical-travel-penalty.patch`，当前权重为 0（禁用）：
+  2.5 权重的交叉口试验出现小于 1 m 的三维净空，尚不能作为默认策略。
 - 已修复 GBPlanner2 上游方向参考轨迹把所有采样点错误放在同一终点的问题；
   补丁保存在 `patches/gbplanner-direction-reference.patch`。
 - 起飞平台使冷启动接触稳定，扫描与位姿又已严格同步，因此不再在悬停后
@@ -117,6 +120,14 @@ Gazebo MID360S PointCloud
   异常时持续发送最后安全悬停点，不再直接中断 OFFBOARD 设定点流。
   水平薄层投影同时保留为保守诊断，但不把存在垂直高差、实际三维距离仍
   大于 1 m 的点误判成球形半径侵入。
+- MID360S 的安装视场无法覆盖机体正下方的近地盲锥。隔离仿真中已将模型
+  自带的向下射线移到起落架下方，并换算为机体中心到地面/下方障碍的距离；
+  它参与近地制动和验收；即使无人机水平飞行，地面突起逼近机体中心
+  1.35 m 时也触发向上脱离，并覆盖此前可能锁存的顶板下降目标。
+  它不参与 FAST-LIO2/PX4 水平定位。该传感器属于
+  **仿真补充硬件**；若真机没有对应向下测距，不能把这项仿真安全结果直接
+  外推到真机。曾尝试把单个地面回波直接送入 Voxblox，但使起点连续产生
+  单点无效轨迹，故已撤销该入图实验。
 - 实时防撞连续 2 秒无法推进轨迹时，显式通知恢复节点从 FAST-LIO2
   实际位姿重新规划；已执行轨迹足够长时才回退，否则原地重规划，不再出现
   “安全层已停车、PCI 却一直等待到达末点”的死锁。
@@ -133,9 +144,10 @@ Gazebo MID360S PointCloud
 - 局部树和全局 frontier 都持续返回空结果时，恢复节点会在 5 次空决策后
   暂停 PCI，沿最近一段已执行、已碰撞检查的轨迹以 0.35 m/s 回退，再从较早
   的根节点恢复未知探索；恢复必须由 FAST-LIO2 里程计连续确认到达，不能再
-  按预估时长假定成功；若垂直脱险等安全暂停使回退最终超时，则从当前实际
-  位姿重新启动规划，不会把 PCI 遗留在暂停态。回退仍保留 1 m 实测净空硬
-  停止，不使用 Gazebo 真值。
+  按预估时长假定成功；若实时防撞连续阻断新回退路线 1 秒，立即放弃
+  该路线，从当前实际位姿重新规划，不再原地等几十秒；若垂直脱险等安全
+  暂停使回退最终超时，也会从当前位姿重规划。回退同样服从实时方向净空
+  和向下测距制动，不能因路径曾经走过就越过新的障碍；不使用 Gazebo 真值。
 
 ## 依赖复现
 
@@ -145,6 +157,7 @@ Gazebo MID360S PointCloud
 vcs import < dependencies.repos
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-direction-reference.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-short-path-gain.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-vertical-travel-penalty.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 

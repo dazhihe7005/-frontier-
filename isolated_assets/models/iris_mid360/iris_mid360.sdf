@@ -86,11 +86,13 @@
           <gaussianNoise>0.0</gaussianNoise>
         </plugin>
       </sensor>
-      <!-- Downward single-beam range for shaft SITL. This local transform
-           cancels the MID360S mount transform, so its ray starts at the body
-           origin and points along body -Z. -->
+      <!-- Simulation-only downward range guard. The STEP landing rails end
+           at body z=-0.272 m; the old ray started at the body origin and
+           returned its own landing gear at 0.238 m. Start 0.350 m below the
+           body origin, clear of the rails, and add 0.350 m at the consumer
+           to recover body-origin floor clearance. It still points body -Z. -->
       <sensor name="shaft_downward_ray" type="ray">
-        <pose>-0.024935602 0 -0.257680938 0 1.134464014 0</pose>
+        <pose>0.122980734 0 -0.574888632 0 1.134464014 0</pose>
         <always_on>true</always_on>
         <update_rate>20</update_rate>
         <ray>

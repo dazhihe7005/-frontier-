@@ -1,0 +1,42 @@
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1524,3 +1524,18 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+       path_gain *= exp(-lambda2 * fw_ratio);
+ 
++      // In low tunnels, repeatedly winning a little roof/floor gain by
++      // climbing or descending 0.1-0.3 m sends the vehicle into the live
++      // clearance brake. Penalize total vertical travel softly, not endpoint
++      // altitude or a fixed world direction: a necessary sloped branch is
++      // still reachable when its information gain warrants the motion.
++      if (planning_params_.vertical_travel_penalty > 0.0) {
++        double vertical_travel = 0.0;
++        for (int j = 1; j < path_size; ++j) {
++          vertical_travel += std::abs(
++              path[j]->state[2] - path[j - 1]->state[2]);
++        }
++        path_gain *= std::exp(
++            -planning_params_.vertical_travel_penalty * vertical_travel);
++      }
++
+       // A succession of 0.3-0.5 m high-gain branches can keep a flying robot
+diff --git a/planner_common/include/planner_common/params.h b/planner_common/include/planner_common/params.h
+--- a/planner_common/include/planner_common/params.h
++++ b/planner_common/include/planner_common/params.h
+@@ -300,2 +300,3 @@ struct PlanningParams {
+   double path_direction_penalty;
++  double vertical_travel_penalty;
+   double short_path_gain_scale_length;
+diff --git a/planner_common/src/params.cpp b/planner_common/src/params.cpp
+--- a/planner_common/src/params.cpp
++++ b/planner_common/src/params.cpp
+@@ -954,3 +954,9 @@ bool PlanningParams::loadParams(std::string ns) {
+   }
+ 
++  param_name = ns + "/vertical_travel_penalty";
++  if (!ros::param::get(param_name, vertical_travel_penalty)) {
++    vertical_travel_penalty = 0.0;
++  }
++  vertical_travel_penalty = std::max(0.0, vertical_travel_penalty);
++
+   param_name = ns + "/short_path_gain_scale_length";

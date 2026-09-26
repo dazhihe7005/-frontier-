@@ -14,7 +14,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped, TransformStamped, TwistStamped
 from mavros_msgs.msg import PositionTarget, State
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import PointCloud
+from sensor_msgs.msg import PointCloud, Range
 from std_msgs.msg import Bool, Float32, String
 from trajectory_msgs.msg import MultiDOFJointTrajectory
 
@@ -33,6 +33,58 @@ def yaw_of(q):
         raise ValueError("invalid quaternion")
     x, y, z, w = q.x / norm, q.y / norm, q.z / norm, q.w / norm
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def vertical_escape_room(horizontal, body_z, protected_radius):
+    """Remaining vertical travel before a point enters the protected sphere."""
+    if horizontal >= protected_radius or body_z == 0.0:
+        return float("inf")
+    boundary = math.sqrt(protected_radius**2-horizontal**2)
+    return max(0.0, abs(body_z)-boundary)
+
+
+def vertical_escape_pending(active, target_error, vertical_clearance,
+                            release_clearance):
+    # A nearby side wall must not keep a completed roof/floor escape latched.
+    return active and (target_error > 0.08 or
+                       vertical_clearance < release_clearance)
+
+
+def floor_descent_scale(clearance, radius, hold_margin, slowdown_margin):
+    """Brake downward motion before the blind cone under MID360S reaches 1 m."""
+    if clearance <= radius + hold_margin:
+        return 0.0
+    if clearance >= radius + slowdown_margin:
+        return 1.0
+    return ((clearance-radius-hold_margin) /
+            (slowdown_margin-hold_margin))
+
+
+def floor_guard_required(clearance, radius, intended_vz, measured_vz):
+    """A rising floor can approach during level flight, not only descent."""
+    return (clearance <= radius + 0.35 or intended_vz < -0.03 or
+            measured_vz < -0.08)
+
+
+def vertical_escape_direction(floor_emergency, vertical_detected,
+                              nearest_vertical_z, escape_pending,
+                              previous_direction):
+    """Select the currently dangerous surface, not an older latched target."""
+    if floor_emergency:
+        return 1.0
+    if vertical_detected and math.isfinite(nearest_vertical_z):
+        return -1.0 if nearest_vertical_z > 0.0 else 1.0
+    if escape_pending:
+        # The closest vertical return may change sides once the first hazard
+        # recedes. Finish the current escape instead of toggling its target.
+        return previous_direction
+    return 0.0
+
+
+def should_proximity_stop(scale):
+    # The recovery path is only *historically* safe. Fresh MID360/floor data
+    # may reveal a new obstacle or pose error, so no mode bypasses a live stop.
+    return scale <= 0.10
 
 
 class GbplannerPx4Executor:
@@ -104,6 +156,18 @@ class GbplannerPx4Executor:
         self.vertical_escape_distance = max(
             0.10, float(rospy.get_param(
                 "~vertical_escape_distance", 0.35)))
+        self.vertical_escape_reserve = max(
+            0.0, float(rospy.get_param(
+                "~vertical_escape_reserve", 0.05)))
+        self.downward_range_topic = rospy.get_param(
+            "~downward_range_topic", "/mine_uav/sitl/shaft_downward_range")
+        self.require_downward_range = bool(rospy.get_param(
+            "~require_downward_range", False))
+        self.downward_range_timeout = max(
+            0.1, float(rospy.get_param("~downward_range_timeout", 0.30)))
+        self.downward_range_origin_below_body = max(
+            0.0, float(rospy.get_param(
+                "~downward_range_origin_below_body", 0.0)))
         self.sensor_offset = tuple(float(value) for value in rospy.get_param(
             "~sensor_offset", [0.1315, 0.0, 0.223]))
         self.sensor_pitch = float(rospy.get_param("~sensor_pitch", 0.436332313))
@@ -134,6 +198,12 @@ class GbplannerPx4Executor:
         self._proximity = float("inf")
         self._spatial_clearance = float("inf")
         self._nearest_spatial_z = float("nan")
+        self._vertical_clearance = float("inf")
+        self._nearest_vertical_z = float("nan")
+        self._upward_room = float("inf")
+        self._downward_room = float("inf")
+        self._floor_clearance = float("inf")
+        self._floor_rx = rospy.Time(0)
         self._path_margin = float("inf")
         self._proximity_rx = rospy.Time(0)
         self._last_command = None
@@ -142,6 +212,7 @@ class GbplannerPx4Executor:
         self._proximity_blocked_since = rospy.Time(0)
         self._proximity_hold_pose = None
         self._vertical_escape_active = False
+        self._escape_direction = 0.0
         self._blocked_state = False
         self._owner = False
         self._last_ready = None
@@ -166,6 +237,9 @@ class GbplannerPx4Executor:
         rospy.Subscriber("/mavros/state", State, self._state_cb, queue_size=10)
         rospy.Subscriber("/mine_uav/sitl/mid360/points", PointCloud,
                          self._pointcloud_cb, queue_size=1)
+        if self.require_downward_range:
+            rospy.Subscriber(self.downward_range_topic, Range,
+                             self._downward_range_cb, queue_size=5)
         self._setpoint_pub = rospy.Publisher(
             self.output_topic, PositionTarget, queue_size=20)
         self._ready_pub = rospy.Publisher(
@@ -184,6 +258,8 @@ class GbplannerPx4Executor:
         self._path_margin_pub = rospy.Publisher(
             "/mine_uav/gbplanner/directional_safety_margin", Float32,
             queue_size=5)
+        self._floor_clearance_pub = rospy.Publisher(
+            "/mine_uav/gbplanner/floor_clearance", Float32, queue_size=5)
         self._blocked_pub = rospy.Publisher(
             "/mine_uav/gbplanner/execution_blocked", Bool, queue_size=1,
             latch=True)
@@ -240,6 +316,17 @@ class GbplannerPx4Executor:
         with self._lock:
             self._state = message
 
+    def _downward_range_cb(self, message):
+        if not (math.isfinite(message.range) and
+                message.min_range <= message.range <= message.max_range):
+            return
+        clearance = (float(message.range) +
+                     self.downward_range_origin_below_body)
+        with self._lock:
+            self._floor_clearance = clearance
+            self._floor_rx = rospy.Time.now()
+        self._floor_clearance_pub.publish(Float32(data=clearance))
+
     def _pointcloud_cb(self, message):
         """Measure absolute and motion-direction safety margins from MID360."""
         if rospy.is_shutdown():
@@ -252,6 +339,10 @@ class GbplannerPx4Executor:
             last_command = self._last_command
             planned_velocity = self._planned_velocity
             recovery_active = self._recovery_active
+            floor_clearance = self._floor_clearance
+            floor_fresh = (not self._floor_rx.is_zero() and
+                           (rospy.Time.now()-self._floor_rx).to_sec() <=
+                           self.downward_range_timeout)
         vx = vy = vz = 0.0
         if local_velocity is not None:
             vx = local_velocity.twist.linear.x
@@ -288,6 +379,10 @@ class GbplannerPx4Executor:
                 pass
         nearest_spatial = float("inf")
         nearest_spatial_z = float("nan")
+        nearest_vertical = float("inf")
+        nearest_vertical_z = float("nan")
+        upward_room = float("inf")
+        downward_room = float("inf")
         nearest_horizontal = float("inf")
         path_margin = float("inf")
         for point in message.points:
@@ -309,6 +404,21 @@ class GbplannerPx4Executor:
             if spatial < nearest_spatial:
                 nearest_spatial = spatial
                 nearest_spatial_z = bz
+            if abs(bz) > self.proximity_z_max and abs(bz) >= horizontal:
+                if spatial < nearest_vertical:
+                    nearest_vertical = spatial
+                    nearest_vertical_z = bz
+            # An escape away from one surface must not cross the 1 m sphere
+            # around the opposite surface. Keep a small extra reserve for
+            # scan age and PX4 tracking, and bound the commanded Z displacement
+            # by every observed point, not just the nearest return.
+            room = vertical_escape_room(
+                horizontal, bz,
+                self.safety_radius + self.vertical_escape_reserve)
+            if bz > 0.0:
+                upward_room = min(upward_room, room)
+            elif bz < 0.0:
+                downward_room = min(downward_room, room)
             if self.proximity_z_min <= bz <= self.proximity_z_max:
                 nearest_horizontal = min(nearest_horizontal, horizontal)
             if body_speed > 0.10:
@@ -318,10 +428,19 @@ class GbplannerPx4Executor:
                     boundary = math.sqrt(
                         max(0.0, self.safety_radius**2-cross**2))
                     path_margin = min(path_margin, along-boundary)
+        if self.require_downward_range:
+            downward_room = min(
+                downward_room,
+                max(0.0, floor_clearance-self.safety_radius-
+                    self.vertical_escape_reserve) if floor_fresh else 0.0)
         with self._lock:
             self._proximity = nearest_horizontal
             self._spatial_clearance = nearest_spatial
             self._nearest_spatial_z = nearest_spatial_z
+            self._vertical_clearance = nearest_vertical
+            self._nearest_vertical_z = nearest_vertical_z
+            self._upward_room = max(0.0, upward_room)
+            self._downward_room = max(0.0, downward_room)
             self._path_margin = path_margin
             self._proximity_rx = rospy.Time.now()
         if math.isfinite(nearest_horizontal):
@@ -553,15 +672,25 @@ class GbplannerPx4Executor:
             # restore clearance. Permit only a very slow retreat when the
             # live cloud confirms the reverse corridor itself is clear.
             if min(clearance, spatial_clearance) <= self.safety_radius:
-                if path_margin > 0.20 or math.isinf(path_margin):
+                if path_margin > 0.35 or math.isinf(path_margin):
                     return 0.25
                 return 0.0
             recovery_full = self.safety_radius + 0.30
             nearest_clearance = min(clearance, spatial_clearance)
             if nearest_clearance >= recovery_full:
-                return 1.0
-            return (nearest_clearance-self.safety_radius) / \
-                (recovery_full-self.safety_radius)
+                absolute_scale = 1.0
+            else:
+                absolute_scale = ((nearest_clearance-self.safety_radius) /
+                                  (recovery_full-self.safety_radius))
+            # A reverse trajectory was safe when it was first flown, but
+            # LIO drift and new returns can invalidate that assumption.
+            # At 0.35 m/s the 0.35 m live directional stop still leaves
+            # braking distance before the 1 m protected sphere.
+            if path_margin <= 0.35:
+                return 0.0
+            if path_margin >= 1.0:
+                return absolute_scale
+            return min(absolute_scale, (path_margin-0.35)/0.65)
         nearest_clearance = min(clearance, spatial_clearance)
         if nearest_clearance <= self.safety_radius:
             return 0.0
@@ -678,9 +807,19 @@ class GbplannerPx4Executor:
             proximity = self._proximity
             spatial_clearance = self._spatial_clearance
             nearest_spatial_z = self._nearest_spatial_z
+            vertical_clearance = self._vertical_clearance
+            nearest_vertical_z = self._nearest_vertical_z
+            upward_room = self._upward_room
+            downward_room = self._downward_room
+            floor_clearance = self._floor_clearance
+            floor_fresh = (not self._floor_rx.is_zero() and
+                           (now-self._floor_rx).to_sec() <=
+                           self.downward_range_timeout)
+            local_velocity = self._local_velocity
             path_margin = self._path_margin
             recovery_active = self._recovery_active
             vertical_escape_active = self._vertical_escape_active
+            escape_direction = self._escape_direction
             existing_hold_pose = self._proximity_hold_pose
             proximity_fresh = (
                 not self._proximity_rx.is_zero() and
@@ -689,6 +828,10 @@ class GbplannerPx4Executor:
                           (now-self._odom_rx).to_sec() <= self.odom_timeout)
             local_fresh = (not self._local_pose_rx.is_zero() and
                            (now-self._local_pose_rx).to_sec() <= self.local_pose_timeout)
+        if not proximity_fresh:
+            upward_room = downward_room = 0.0
+        if self.require_downward_range and not floor_fresh:
+            downward_room = 0.0
         if trajectory is None:
             self._publish_ready(False)
             self._publish_status("WAIT_TRAJECTORY")
@@ -726,22 +869,55 @@ class GbplannerPx4Executor:
             proximity_fresh,
             recovery_active,
             frontier_approach)
+        floor_limited = False
+        floor_intended_vz = 0.0
+        floor_measured_vz = 0.0
+        if self.require_downward_range:
+            if not floor_fresh:
+                proximity_scale = 0.0
+                floor_limited = True
+            else:
+                intended_vz = self._apply_alignment_velocity(
+                    self._sample_velocity(trajectory, progress),
+                    alignment)[2]
+                measured_vz = (local_velocity.twist.linear.z
+                               if local_velocity is not None else 0.0)
+                floor_intended_vz = intended_vz
+                floor_measured_vz = measured_vz
+                if floor_guard_required(
+                        floor_clearance, self.safety_radius,
+                        intended_vz, measured_vz):
+                    floor_scale = floor_descent_scale(
+                        floor_clearance, self.safety_radius,
+                        self.absolute_clearance_hold_margin,
+                        self.absolute_clearance_slowdown_margin)
+                    proximity_scale = min(proximity_scale, floor_scale)
+                    floor_limited = floor_scale < 0.999
         vertical_detected = self._is_vertical_hazard(
-            spatial_clearance, nearest_spatial_z, proximity_fresh)
+            vertical_clearance, nearest_vertical_z, proximity_fresh)
+        floor_emergency = (self.require_downward_range and floor_fresh and
+                           floor_clearance <= self.safety_radius + 0.35)
         vertical_release_clearance = (
-            self.safety_radius + self.vertical_avoidance_margin + 0.15)
-        vertical_escape_pending = (
-            vertical_escape_active and existing_hold_pose is not None and
-            (abs(actual.z-existing_hold_pose[2]) > 0.08 or
-             spatial_clearance < vertical_release_clearance))
-        vertical_stop = vertical_detected or vertical_escape_pending
+            self.safety_radius + self.vertical_avoidance_margin + 0.10)
+        escape_pending = (
+            existing_hold_pose is not None and vertical_escape_pending(
+                vertical_escape_active,
+                abs(actual.z-existing_hold_pose[2]),
+                vertical_clearance, vertical_release_clearance))
+        # Give a floor escape hysteresis band: a single 1.36 m reading must
+        # not hand control back to a still-descending planner trajectory.
+        floor_escape_pending = (
+            self.require_downward_range and floor_fresh and
+            vertical_escape_active and escape_direction > 0.0 and
+            floor_clearance < self.safety_radius + 0.50)
+        escape_pending = escape_pending or floor_escape_pending
+        vertical_stop = vertical_detected or floor_emergency or escape_pending
         if vertical_stop:
             # Keep both the trajectory clock and velocity command stopped for
             # the entire latched escape.  A single clear/noisy lidar frame is
             # not allowed to advance the old trajectory toward the obstacle.
             proximity_scale = 0.0
-        proximity_stop = (proximity_scale <= 0.10 and
-                          (not recovery_active or vertical_stop))
+        proximity_stop = should_proximity_stop(proximity_scale)
         with self._lock:
             if proximity_stop:
                 if self._proximity_blocked_since.is_zero():
@@ -752,29 +928,50 @@ class GbplannerPx4Executor:
                 # aircraft and remove the PX4 position controller's braking
                 # error.
                 if self._proximity_hold_pose is None:
-                    escape_z = actual.z
-                    if vertical_stop:
-                        # MID360/body Z is positive upward. Move opposite the
-                        # closest vertical return: climb from a floor point,
-                        # descend from a ceiling point.
-                        direction = -1.0 if nearest_spatial_z > 0.0 else 1.0
-                        escape_z += direction * self.vertical_escape_distance
-                        escape_z = min(self.max_height,
-                                       max(self.min_height, escape_z))
-                        rospy.logwarn(
-                            "Vertical obstacle escape: clearance %.3f m, "
-                            "body z %.3f m, target dz %+.3f m",
-                            spatial_clearance, nearest_spatial_z,
-                            escape_z-actual.z)
-                        self._vertical_escape_active = True
-                    self._proximity_hold_pose = (
-                        actual.x, actual.y, escape_z)
+                    self._proximity_hold_pose = (actual.x, actual.y, actual.z)
+                hold_x, hold_y, hold_z = self._proximity_hold_pose
+                direction = vertical_escape_direction(
+                    floor_emergency, vertical_detected, nearest_vertical_z,
+                    escape_pending, self._escape_direction)
+                target_delta = hold_z-actual.z
+                if direction and (not self._vertical_escape_active or
+                                  direction*target_delta <= 0.05):
+                    # A floor may appear after an older roof descent began,
+                    # or while a horizontal safety hold is already latched.
+                    # Replace that stale Z target immediately. Reissue a
+                    # completed escape only while a vertical threat remains.
+                    available = (downward_room if direction < 0.0
+                                 else upward_room)
+                    escape_distance = min(
+                        self.vertical_escape_distance, available)
+                    hold_z = min(self.max_height, max(
+                        self.min_height,
+                        actual.z + direction*escape_distance))
+                    self._vertical_escape_active = (
+                        abs(hold_z-actual.z) > 0.05)
+                    self._escape_direction = direction
+                    rospy.logwarn_throttle(
+                        1.0,
+                        "Vertical obstacle escape retarget: vertical %.3f m, "
+                        "floor %.3f m, available %.3f m, target dz %+.3f m",
+                        vertical_clearance, floor_clearance,
+                        available, hold_z-actual.z)
+                if self._vertical_escape_active:
+                    # Bound a latched target by the newest observed opposite
+                    # surface. Zero available room means hold, never keep
+                    # commanding motion into a newly approaching floor/roof.
+                    if hold_z > actual.z:
+                        hold_z = min(hold_z, actual.z + upward_room)
+                    elif hold_z < actual.z:
+                        hold_z = max(hold_z, actual.z - downward_room)
+                self._proximity_hold_pose = (hold_x, hold_y, hold_z)
                 blocked = ((now-self._proximity_blocked_since).to_sec() >=
                            self.proximity_block_timeout)
             else:
                 self._proximity_blocked_since = rospy.Time(0)
                 self._proximity_hold_pose = None
                 self._vertical_escape_active = False
+                self._escape_direction = 0.0
                 blocked = False
             proximity_hold_pose = self._proximity_hold_pose
         self._publish_blocked(blocked)
@@ -837,7 +1034,14 @@ class GbplannerPx4Executor:
             self._planned_velocity = safety_velocity
         self._speed_scale_pub.publish(Float32(data=speed_scale))
         self._tracking_error_pub.publish(Float32(data=tracking_error))
-        if proximity_scale < 0.999:
+        if floor_limited:
+            rospy.logwarn_throttle(
+                1.0,
+                "Downward range guard: floor %.3f m, intended vz %+.3f, "
+                "measured vz %+.3f, recovery=%s, scale %.2f",
+                floor_clearance, floor_intended_vz, floor_measured_vz,
+                recovery_active, proximity_scale)
+        elif proximity_scale < 0.999:
             rospy.logwarn_throttle(
                 1.0,
                 "MID360 predictive scale %.2f, horizontal %.3f m, "

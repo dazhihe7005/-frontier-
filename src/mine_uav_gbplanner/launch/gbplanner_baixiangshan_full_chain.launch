@@ -140,8 +140,16 @@
     <param name="proximity_hold_margin" value="0.75"/>
     <param name="absolute_clearance_hold_margin" value="0.25"/>
     <param name="absolute_clearance_slowdown_margin" value="0.55"/>
+    <!-- Keep the early 1.30 m ceiling/floor brake. A 1.15 m trigger let PX4
+         vertical inertia carry the aircraft inside the hard 1 m envelope. -->
     <param name="vertical_avoidance_margin" value="0.30"/>
     <param name="vertical_escape_distance" value="0.35"/>
+    <param name="vertical_escape_reserve" value="0.20"/>
+    <!-- The existing downward ray is a simulation-only safety rangefinder.
+         MID360S itself cannot see the 1 m cone directly below this mount. -->
+    <param name="require_downward_range" value="true"/>
+    <param name="downward_range_topic" value="/mine_uav/sitl/shaft_downward_range"/>
+    <param name="downward_range_origin_below_body" value="0.35"/>
     <param name="frontier_guard_min_duration" value="4.0"/>
     <param name="frontier_guard_horizon" value="5.0"/>
     <param name="frontier_hold_margin" value="0.95"/>
