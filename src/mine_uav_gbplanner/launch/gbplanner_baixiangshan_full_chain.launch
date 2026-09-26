@@ -8,6 +8,9 @@
   <!-- Uses one MAVLink ODOMETRY source with visual pose+derived velocity.
        Explicit A/B only; default remains the validated pose transport. -->
   <arg name="vision_velocity_experiment" default="false"/>
+  <!-- SITL-only A/B: FAST-LIO2 XY, Z and yaw; vision is the height reference.
+       Never enabled by default or copied to real-PX4 parameters. -->
+  <arg name="vision_pose_ref_experiment" default="false"/>
   <arg name="ceiling_follow_experiment" default="false"/>
   <!-- Fuse fresh downward range with MID360 roof returns into one height band. -->
   <arg name="balanced_vertical_band_experiment" default="false"/>

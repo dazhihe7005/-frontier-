@@ -12,15 +12,23 @@ mkdir -p "$ROS_LOG_DIR" /home/nuc/gbplanner2_isolated_ws/runtime/px4_sitl_2
 px4_private_airframes=/home/nuc/gbplanner2_isolated_ws/runtime/px4_root/etc/init.d-posix/airframes
 mkdir -p "$px4_private_airframes"
 vision_velocity_requested=false
+vision_pose_ref_requested=false
 for launch_arg in "$@"; do
   if [[ "$launch_arg" == vision_velocity_experiment:=true ]]; then
     vision_velocity_requested=true
-    break
+  elif [[ "$launch_arg" == vision_pose_ref_experiment:=true ]]; then
+    vision_pose_ref_requested=true
   fi
 done
+if [[ "$vision_velocity_requested" == true && "$vision_pose_ref_requested" == true ]]; then
+  printf '%s\n' 'vision_velocity_experiment and vision_pose_ref_experiment are mutually exclusive' >&2
+  exit 2
+fi
 private_airframe=/home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_xy_vision
 if [[ "$vision_velocity_requested" == true ]]; then
   private_airframe=/home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_ev_velocity_ab
+elif [[ "$vision_pose_ref_requested" == true ]]; then
+  private_airframe=/home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_ev_pose_ref_ab
 fi
 ln -sfn \
   "$private_airframe" \

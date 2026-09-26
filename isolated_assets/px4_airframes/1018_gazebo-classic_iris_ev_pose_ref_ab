@@ -1,0 +1,10 @@
+#!/bin/sh
+# Isolated SITL A/B only. Fuse FAST-LIO2 XY, Z, and yaw in one frame; use
+# visual height as the reference and retain baro as a secondary source.
+# This is not a real-aircraft migration or a production default.
+. /home/nuc/gbplanner2_isolated_ws/isolated_assets/px4_airframes/1018_gazebo-classic_iris_xy_vision
+param set EKF2_EV_CTRL 11
+param set EKF2_HGT_REF 3
+# Do not simultaneously fuse the simulated magnetic heading and FAST-LIO2
+# heading; the prior A/B failed PX4's yaw-estimate preflight check.
+param set EKF2_MAG_TYPE 5
