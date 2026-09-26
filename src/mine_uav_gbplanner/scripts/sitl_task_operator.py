@@ -36,6 +36,12 @@ class SitlTaskOperator:
         self.takeoff_yaw_offset = float(
             rospy.get_param("~takeoff_yaw_offset", 0.0)
         )
+        self.preflight_yaw_scan_enable = bool(rospy.get_param(
+            "~preflight_yaw_scan_enable", False))
+        self._scan_angle = math.pi
+        scan_rate_deg_s = min(30.0, max(5.0, float(rospy.get_param(
+            "~preflight_yaw_scan_rate_deg_s", 15.0))))
+        self._scan_duration = self._scan_angle / math.radians(scan_rate_deg_s)
         self.hover_duration = max(
             0.5, float(rospy.get_param("~takeoff_hover_duration", 2.0))
         )
@@ -87,6 +93,9 @@ class SitlTaskOperator:
         self._ready = False
         self._bridge_handoff_complete = False
         self._vision_streaming_since = rospy.Time(0)
+        self._scan_phase = "not_started"
+        self._scan_started_at = rospy.Time(0)
+        self._scan_offset = 0.0
 
         self.rc_pub = rospy.Publisher("/mine_uav/sitl/rc/in", RCIn, queue_size=2)
         self.setpoint_pub = rospy.Publisher(
@@ -126,6 +135,10 @@ class SitlTaskOperator:
                     self._vision_streaming_since = rospy.Time.now()
             else:
                 self._vision_streaming_since = rospy.Time(0)
+                if self._scan_phase in ("out", "back"):
+                    self._scan_phase = "failed"
+                    rospy.logerr("Preflight yaw scan stopped after vision loss; "
+                                 "task trigger will remain disabled")
 
     def _timer(self, _event):
         with self._lock:
@@ -220,6 +233,17 @@ class SitlTaskOperator:
         if not state.armed:
             self._request_arm(now)
             return
+        if self._scan_phase == "failed":
+            return
+        if self._scan_phase in ("out", "back"):
+            fraction = min(1.0, max(
+                0.0, (now-self._scan_started_at).to_sec()/self._scan_duration))
+            self._scan_offset = self._scan_angle * (
+                fraction if self._scan_phase == "out" else 1.0-fraction)
+            target = self._publish_takeoff_target(now)
+            if fraction < 1.0:
+                self._hover_start = rospy.Time(0)
+                return
         position = odom.pose.pose.position
         horizontal_error = math.hypot(
             position.x - target.pose.position.x,
@@ -242,8 +266,20 @@ class SitlTaskOperator:
                 self._hover_start = now
                 rospy.loginfo("SITL reached pre-task hover")
             elif (now - self._hover_start).to_sec() >= self.hover_duration:
-                self._ready = True
-                rospy.loginfo("SITL hover stable; emulated task trigger changed")
+                if self.preflight_yaw_scan_enable and self._scan_phase == "not_started":
+                    self._scan_phase = "out"
+                    self._scan_started_at = now
+                    self._hover_start = rospy.Time(0)
+                    rospy.logwarn("Starting opt-in 180-degree preflight yaw scan")
+                elif self._scan_phase == "out":
+                    self._scan_phase = "back"
+                    self._scan_started_at = now
+                    self._hover_start = rospy.Time(0)
+                    rospy.logwarn("Preflight yaw scan returning to start heading")
+                else:
+                    self._scan_phase = "done"
+                    self._ready = True
+                    rospy.loginfo("SITL hover stable; emulated task trigger changed")
         else:
             self._hover_start = rospy.Time(0)
             rospy.loginfo_throttle(
@@ -265,7 +301,7 @@ class SitlTaskOperator:
         target.pose.position.z = self._origin[2] + self.takeoff_height
         target_yaw = (
             self._yaw_from_quaternion(self._origin[3]) +
-            self.takeoff_yaw_offset
+            self.takeoff_yaw_offset + self._scan_offset
         )
         target.pose.orientation = Quaternion(
             0.0, 0.0, math.sin(0.5 * target_yaw),

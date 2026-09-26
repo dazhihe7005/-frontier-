@@ -1,6 +1,7 @@
 """Offline capsule reconstruction geometry regressions."""
 
 import importlib.util
+import math
 from pathlib import Path
 import unittest
 
@@ -38,6 +39,17 @@ class TsdfCapsuleAuditTests(unittest.TestCase):
                                 (0.0, 0.2, 0.0, 0.2, 0.0, 0.2))
         self.assertGreater(report["counts"]["outside_snapshot"], 0)
         self.assertEqual(report["counts"]["unknown_in_csv"], 0)
+
+    def test_tilted_mid360_fov_changes_with_yaw(self):
+        visible = MODULE.mid360_visible_from_body
+        body = (0.0, 0.0, 1.16)
+        low_behind = (-2.0, 0.0, 0.5)
+        self.assertFalse(visible(low_behind, body, 0.0))
+        self.assertTrue(visible(low_behind, body, math.pi))
+        low_oblique = (1.3, 0.7, 0.3)
+        self.assertFalse(any(visible(low_oblique, body,
+                                     2.0*math.pi*i/72.0)
+                             for i in range(72)))
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ def parse_args():
     parser.add_argument("--snapshot-bounds", nargs=6, type=float,
                         metavar=("X_MIN", "X_MAX", "Y_MIN", "Y_MAX", "Z_MIN", "Z_MAX"))
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--mid360-yaw-sweep", action="store_true",
+                        help="diagnose FOV-only visibility of unknown cells; ignores occlusion")
     args = parser.parse_args()
     if (args.voxel_size <= 0 or args.radius <= 0 or
             args.occupied_distance < 0 or
@@ -41,8 +43,24 @@ def capsule_distance(point, start, end):
     return math.dist(point, tuple(start[i]+t*delta[i] for i in range(3)))
 
 
+def mid360_visible_from_body(point, body, yaw):
+    """FOV-only check for the mounted MID360S; does not claim a clear ray."""
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    dx, dy, dz = (point[i]-body[i] for i in range(3))
+    body_x = cos_yaw*dx + sin_yaw*dy - 0.1315
+    body_y = -sin_yaw*dx + cos_yaw*dy
+    body_z = dz - 0.223
+    pitch = math.radians(25.0)
+    sensor_x = math.cos(pitch)*body_x - math.sin(pitch)*body_z
+    sensor_z = math.sin(pitch)*body_x + math.cos(pitch)*body_z
+    ray_range = math.sqrt(sensor_x*sensor_x + body_y*body_y + sensor_z*sensor_z)
+    elevation = math.degrees(math.atan2(
+        sensor_z, math.hypot(sensor_x, body_y)))
+    return 0.2 <= ray_range <= 30.0 and -7.0 <= elevation <= 52.0
+
+
 def analyze(rows, start, end, voxel_size, radius, occupied_distance,
-            snapshot_bounds=None):
+            snapshot_bounds=None, mid360_yaw_sweep=False):
     observed = {}
     times = set()
     frames = set()
@@ -67,6 +85,11 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
     examples = {}
     unknown_by_z_index = {}
     unknown_examples = []
+    outside_fov_examples = []
+    fov_counts = {"visible_at_yaw_zero": 0, "visible_during_yaw_sweep": 0,
+                  "outside_yaw_sweep_fov": 0,
+                  "visible_at_opposite_yaws": 0,
+                  "visible_at_four_cardinal_yaws": 0}
     minimum_occupied_center_distance = math.inf
     for ix in range(first[0], last[0]+1):
         for iy in range(first[1], last[1]+1):
@@ -99,6 +122,29 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
                             "center_m": center,
                             "center_to_capsule_axis_m": round(center_distance, 5),
                         })
+                    if mid360_yaw_sweep:
+                        if mid360_visible_from_body(center, start, 0.0):
+                            fov_counts["visible_at_yaw_zero"] += 1
+                        if any(mid360_visible_from_body(
+                                center, start, math.pi*i)
+                                for i in range(2)):
+                            fov_counts["visible_at_opposite_yaws"] += 1
+                        if any(mid360_visible_from_body(
+                                center, start, math.pi*i/2.0)
+                                for i in range(4)):
+                            fov_counts["visible_at_four_cardinal_yaws"] += 1
+                        if any(mid360_visible_from_body(
+                                center, start, 2.0*math.pi*i/72.0)
+                                for i in range(72)):
+                            fov_counts["visible_during_yaw_sweep"] += 1
+                        else:
+                            fov_counts["outside_yaw_sweep_fov"] += 1
+                            if len(outside_fov_examples) < 20:
+                                outside_fov_examples.append({
+                                    "center_m": center,
+                                    "center_to_capsule_axis_m": round(
+                                        center_distance, 5),
+                                })
                 if kind not in examples:
                     examples[kind] = {
                         "index": index, "center_m": center,
@@ -114,6 +160,10 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
         "counts": counts, "first_examples_in_cpp_scan_order": examples,
         "unknown_by_z_index": unknown_by_z_index,
         "unknown_examples": unknown_examples,
+        "mid360_fov_only_unknown_counts": (
+            fov_counts if mid360_yaw_sweep else None),
+        "mid360_outside_fov_examples": (
+            outside_fov_examples if mid360_yaw_sweep else None),
         "min_known_occupied_center_to_axis_m": (
             round(minimum_occupied_center_distance, 5)
             if math.isfinite(minimum_occupied_center_distance) else None),
@@ -130,7 +180,8 @@ def main():
     with args.snapshot.open("r", encoding="utf-8", newline="") as source:
         result = analyze(list(csv.DictReader(source)), tuple(args.start),
                          tuple(args.end), args.voxel_size, args.radius,
-                         args.occupied_distance, args.snapshot_bounds)
+                         args.occupied_distance, args.snapshot_bounds,
+                         args.mid360_yaw_sweep)
     result["snapshot_file"] = str(args.snapshot)
     rendered = json.dumps(result, indent=2, sort_keys=True, allow_nan=False)
     print(rendered, flush=True)
