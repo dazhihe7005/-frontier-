@@ -171,7 +171,7 @@ class StallRecovery:
             rospy.logerr("PCI refused blocked-path replan")
 
     def _select_path(self, current):
-        """Pop the newest path that actually passes close to the vehicle."""
+        """Pop the newest path that passes close to the vehicle."""
         with self._lock:
             while self._history:
                 candidate = self._history.pop()
@@ -247,14 +247,21 @@ class StallRecovery:
             with self._lock:
                 odom = copy.deepcopy(self._odom)
                 failures = self._empty_count
-            source = self._select_path(odom.pose.pose.position)
-            if source is None:
-                self._restart_without_motion("no usable backtrack history")
-                return
-            trajectory, distance, duration = self._make_reverse(source, odom)
-            if len(trajectory.points) < 2 or distance < 0.5:
-                self._restart_without_motion("backtrack path is too short")
-                return
+            # The newest planner path may have been stopped at its first
+            # sample. Reversing that path goes nowhere, so search older paths
+            # until one contains at least 0.5 m of actual travel behind the
+            # current pose. Otherwise PCI can repeatedly replan the same
+            # blocked path without ever moving the vehicle out of danger.
+            while True:
+                source = self._select_path(odom.pose.pose.position)
+                if source is None:
+                    self._restart_without_motion(
+                        "no usable backtrack history")
+                    return
+                trajectory, distance, duration = self._make_reverse(
+                    source, odom)
+                if len(trajectory.points) >= 2 and distance >= 0.5:
+                    break
             rospy.wait_for_service(
                 "/planner_control_interface/std_srvs/stop", timeout=2.0)
             stopped = self._stop()

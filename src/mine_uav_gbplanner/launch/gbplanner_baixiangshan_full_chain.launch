@@ -120,7 +120,7 @@
 
   <node pkg="mine_uav_gbplanner" type="gbplanner_px4_executor.py"
         name="gbplanner_px4_executor" output="screen" required="true">
-    <param name="max_speed" value="0.65"/>
+    <param name="max_speed" value="0.84"/>
     <param name="max_yaw_rate" value="0.45"/>
     <param name="max_horizontal_accel" value="0.50"/>
     <param name="max_vertical_accel" value="0.40"/>
@@ -133,20 +133,19 @@
     <param name="tracking_slowdown_error" value="0.20"/>
     <param name="tracking_hold_error" value="0.50"/>
     <param name="safety_radius" value="1.00"/>
-    <!-- At 0.5 m/s, reserve enough directional distance for a wall hidden
-         behind a bend to appear in the 10 Hz cloud, and for the 6 kg airframe
-         to stop before the 1 m limit.  The values include the largest delayed
-         reveal and braking excursion measured in the Baixiangshan world. -->
-    <param name="proximity_slowdown_margin" value="1.40"/>
-    <param name="proximity_hold_margin" value="0.65"/>
+    <!-- Brake earlier along the direction of travel at 0.7 m/s. Keep the
+         previously validated 3-D ceiling/floor band: expanding that band
+         repeatedly stopped horizontal flight under 1.34 m roof clearance. -->
+    <param name="proximity_slowdown_margin" value="1.60"/>
+    <param name="proximity_hold_margin" value="0.75"/>
     <param name="absolute_clearance_hold_margin" value="0.25"/>
     <param name="absolute_clearance_slowdown_margin" value="0.55"/>
     <param name="vertical_avoidance_margin" value="0.30"/>
     <param name="vertical_escape_distance" value="0.35"/>
     <param name="frontier_guard_min_duration" value="4.0"/>
     <param name="frontier_guard_horizon" value="5.0"/>
-    <param name="frontier_hold_margin" value="0.90"/>
-    <param name="frontier_slowdown_margin" value="1.70"/>
+    <param name="frontier_hold_margin" value="0.95"/>
+    <param name="frontier_slowdown_margin" value="1.85"/>
     <param name="proximity_timeout" value="0.50"/>
     <param name="proximity_block_timeout" value="2.0"/>
     <param name="proximity_z_min" value="-0.35"/>

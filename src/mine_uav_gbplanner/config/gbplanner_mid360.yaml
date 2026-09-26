@@ -130,11 +130,10 @@ PlanningParams:
   type:             kBasicExploration #kAdaptiveExploration, kBasicExploration
   rr_mode:          kGraph
   exp_sensor_list:  ["MID360S"]
-  # Live end-wall tests showed that 0.6 m/s could consume the remaining lidar
-  # and tracking margin before a newly unoccluded wall reached the controller.
-  # 0.5 m/s is the validated target for this 6 kg vehicle.
-  v_max:            0.5
-  v_homing_max:     0.5
+  # Target 0.7 m/s in open space. The live MID360 guard reduces speed near
+  # walls, bends, floors and ceilings before reaching the 1 m sphere.
+  v_max:            0.7
+  v_homing_max:     0.7
   yaw_rate_max:     0.35
   yaw_tangent_correction: true # If true - all headings will be along the path segment
   edge_length_min:  0.4

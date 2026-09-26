@@ -4,7 +4,8 @@
        A 180-degree rotation about the standard spawn (-7, 0.2) preserves the
        known-stable takeoff surface while putting the real branch junction in
        front of the vehicle.  Vehicle yaw, altitude and mesh scale are not
-       changed. -->
+       changed.  For a half-turn around (-7, 0.2), the mesh translation must
+       be twice that pivot: (-14, 0.4). -->
   <world name="baixianshan_crossroad_validation">
     <physics name="default_physics" default="true" type="ode">
       <max_step_size>0.002</max_step_size>
@@ -19,7 +20,7 @@
     </scene>
     <include>
       <uri>model://baixianshan_tunnel</uri>
-      <pose>-14 1 0 0 0 3.141592654</pose>
+      <pose>-14 0.4 0 0 0 3.141592654</pose>
     </include>
     <!-- Match the production world's deterministic takeoff contact.  The
          rotated survey mesh otherwise leaves one landing rail on rough rock,

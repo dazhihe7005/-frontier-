@@ -49,6 +49,8 @@ class Validator:
         self.spatial_clearance_violations = 0
         self.max_tracking_error = 0.0
         self.max_actual_speed = 0.0
+        self.moving_speed_sum = 0.0
+        self.moving_speed_samples = 0
         self.max_command_speed = 0.0
         self.min_flight_z = float("inf")
         self.max_flight_z = -float("inf")
@@ -182,6 +184,9 @@ class Validator:
         speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
         with self._lock:
             self.max_actual_speed = max(self.max_actual_speed, speed)
+            if self._flight_active and speed >= 0.2:
+                self.moving_speed_sum += speed
+                self.moving_speed_samples += 1
 
     def _clearance_cb(self, message):
         if not math.isfinite(message.data):
@@ -306,6 +311,10 @@ class Validator:
                     self.spatial_clearance_violations),
                 "max_tracking_error_m": round(self.max_tracking_error, 4),
                 "max_actual_speed_mps": round(self.max_actual_speed, 4),
+                "mean_moving_speed_mps": (
+                    round(self.moving_speed_sum / self.moving_speed_samples, 4)
+                    if self.moving_speed_samples else None),
+                "moving_speed_samples": self.moving_speed_samples,
                 "max_command_speed_mps": round(self.max_command_speed, 4),
                 "flight_z_range_m": [
                     round(self.min_flight_z, 4), round(self.max_flight_z, 4)]
