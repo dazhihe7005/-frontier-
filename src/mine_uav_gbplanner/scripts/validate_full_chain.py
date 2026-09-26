@@ -3,6 +3,9 @@
 
 import json
 import math
+import os
+from datetime import datetime
+from pathlib import Path
 import threading
 
 import rospy
@@ -29,6 +32,12 @@ class Validator:
     }
 
     def __init__(self):
+        default_report = ("/home/nuc/gbplanner2_isolated_ws/runtime/map_reference/"
+                          "full_chain_{}_{}.json".format(
+                              datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+                              os.getpid()))
+        self.output_file = Path(rospy.get_param("~output_file", default_report))
+        self.ros_run_id = rospy.get_param("/run_id", "")
         self.duration = max(20.0, float(rospy.get_param("~duration", 180.0)))
         self.observe_full_duration = bool(rospy.get_param(
             "~observe_full_duration", False))
@@ -349,13 +358,12 @@ class Validator:
                 "px4_dynamic_flight": {"CONNECTED", "ARMED", "OFFBOARD"}.issubset(self.states) and
                                       self.max_displacement >= self.min_displacement,
                 "executor_streaming": "STREAMING_TO_PX4" in self.executor_states,
-                # The user specified a 1 m collision *radius*, so the hard
-                # invariant is Euclidean 3-D distance.  min_clearance is the
-                # XY projection of returns in a +/-0.35 m height slice; it is
-                # intentionally retained as a conservative diagnostic, but
-                # treating that projection as an infinite cylinder falsely
-                # rejects points whose actual radius remains above 1 m.
-                "hard_1m_clearance":
+                # This checks only the returns observed by MID360/downward
+                # range sensors. Blind cones, occlusion and localization
+                # error can leave an actual collision mesh closer than 1 m.
+                # The 2026-09-26 pipe trial proved this (sensor pass while
+                # independent true mesh minimum was 0.9957 m).
+                "sampled_sensor_clearance_above_1m":
                     math.isfinite(self.min_spatial_clearance) and
                     self.min_spatial_clearance >= 1.0 and
                     self.floor_clearance_samples >= 5 and
@@ -364,6 +372,12 @@ class Validator:
             }
             result = {
                 "passed": all(checks.values()),
+                "pass_scope": "full_chain_and_sampled_sensor_checks_only",
+                "ros_run_id": self.ros_run_id,
+                "observation_start_s": round(started.to_sec(), 3),
+                "observation_end_s": round(rospy.Time.now().to_sec(), 3),
+                "hard_1m_true_mesh_verified": False,
+                "full_map_coverage_verified": False,
                 "checks": checks,
                 "counts": dict(self.counts),
                 "px4_states_seen": sorted(self.states),
@@ -428,6 +442,10 @@ class Validator:
                 "min_clearance_state": self.min_clearance_state,
                 "min_spatial_clearance_state": self.min_spatial_clearance_state,
             }
+        self.output_file.parent.mkdir(parents=True, exist_ok=True)
+        self.output_file.write_text(
+            json.dumps(result, sort_keys=True, indent=2)+"\n",
+            encoding="utf-8")
         print("GBPLANNER_FULL_CHAIN_RESULT=" + json.dumps(result, sort_keys=True))
         return result["passed"]
 

@@ -15,7 +15,8 @@ from std_msgs.msg import String
 class TruthTrajectoryRecorder:
     def __init__(self):
         self.model_name = rospy.get_param("~model_name", "iris")
-        self.sample_period = max(0.02, float(rospy.get_param("~sample_period", 0.1)))
+        self.run_id = rospy.get_param("/run_id", "")
+        self.sample_period = max(0.01, float(rospy.get_param("~sample_period", 0.02)))
         default_dir = Path("/home/nuc/gbplanner2_isolated_ws/runtime/map_reference")
         default_name = "truth_trajectory_{}_{}.csv".format(
             datetime.now().strftime("%Y%m%d_%H%M%S_%f"), os.getpid())
@@ -24,7 +25,8 @@ class TruthTrajectoryRecorder:
         self.file = self.output.open("w", encoding="utf-8", newline="")
         self.writer = csv.writer(self.file)
         self.writer.writerow(("sim_time", "x", "y", "z", "armed", "offboard",
-                              "exploration_started"))
+                              "exploration_started", "qx", "qy", "qz", "qw",
+                              "ros_run_id"))
         self.armed = False
         self.offboard = False
         self.exploration_started = False
@@ -56,10 +58,15 @@ class TruthTrajectoryRecorder:
             return
         self.last_sample = stamp
         position = msg.pose[index].position
+        orientation = msg.pose[index].orientation
         self.writer.writerow(("{:.3f}".format(stamp), "{:.5f}".format(position.x),
                               "{:.5f}".format(position.y), "{:.5f}".format(position.z),
                               int(self.armed), int(self.offboard),
-                              int(self.exploration_started)))
+                              int(self.exploration_started),
+                              "{:.7f}".format(orientation.x),
+                              "{:.7f}".format(orientation.y),
+                              "{:.7f}".format(orientation.z),
+                              "{:.7f}".format(orientation.w), self.run_id))
         self.rows += 1
         if self.rows % 100 == 0:
             self.file.flush()

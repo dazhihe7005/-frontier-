@@ -11,6 +11,7 @@ import gzip
 import json
 import math
 import os
+from datetime import datetime
 from collections import deque
 
 
@@ -123,6 +124,7 @@ def main():
     from sensor_msgs.msg import PointCloud
 
     rospy.init_node("diagnostic_map_coverage")
+    run_id = rospy.get_param("/run_id", "")
     reference_file = rospy.get_param(
         "~reference_file",
         "/home/nuc/gbplanner2_isolated_ws/runtime/map_reference/"
@@ -131,6 +133,10 @@ def main():
         "~output_file",
         "/home/nuc/gbplanner2_isolated_ws/runtime/map_reference/"
         "latest_coverage.json")
+    run_output_file = rospy.get_param(
+        "~run_output_file",
+        os.path.join(os.path.dirname(output_file), "coverage_{}_{}.json".format(
+            datetime.now().strftime("%Y%m%d_%H%M%S_%f"), os.getpid())))
     with gzip.open(reference_file, "rt", encoding="utf-8") as source:
         reference = json.load(source)
     grid = CoverageGrid(reference, float(rospy.get_param(
@@ -155,11 +161,15 @@ def main():
     last_travel_pose = None
     last_travel_stamp = None
     travel_distance = 0.0
+    first_truth_stamp = None
+    last_truth_stamp = None
+    last_scan_stamp = None
 
     def truth_cb(message):
         nonlocal pose, pose_stamp
         nonlocal all_x_min, all_x_max, all_y_min, all_y_max
         nonlocal last_travel_pose, last_travel_stamp, travel_distance
+        nonlocal first_truth_stamp, last_truth_stamp
         try:
             index = message.name.index("iris")
         except ValueError:
@@ -170,6 +180,9 @@ def main():
         body_q = (q.x, q.y, q.z, q.w)
         pose = ((p.x, p.y, p.z), body_q)
         pose_stamp = rospy.Time.now().to_sec()
+        if first_truth_stamp is None:
+            first_truth_stamp = pose_stamp
+        last_truth_stamp = pose_stamp
         all_x_min = min(all_x_min, p.x)
         all_x_max = max(all_x_max, p.x)
         all_y_min = min(all_y_min, p.y)
@@ -187,7 +200,7 @@ def main():
             del flight_x[:500]
 
     def cloud_cb(message):
-        nonlocal scan_count, accepted_scans, rejected_stale_scans
+        nonlocal scan_count, accepted_scans, rejected_stale_scans, last_scan_stamp
         scan_count += 1
         if scan_count % cloud_stride or pose is None:
             return
@@ -209,6 +222,7 @@ def main():
             endpoint = tuple(sensor_p[i]+world_ray[i] for i in range(3))
             grid.trace_ray(sensor_p, endpoint, now)
         accepted_scans += 1
+        last_scan_stamp = now
 
     def report_cb(_event):
         report = grid.report(rospy.Time.now().to_sec())
@@ -226,12 +240,19 @@ def main():
             if math.isfinite(all_y_min) else None,
             "truth_travel_distance_m": round(travel_distance, 2),
             "reference_file": reference_file,
+            "run_output_file": run_output_file,
+            "ros_run_id": run_id,
+            "first_truth_sim_time_s": first_truth_stamp,
+            "last_truth_sim_time_s": last_truth_stamp,
+            "last_accepted_scan_sim_time_s": last_scan_stamp,
+            "report_sim_time_s": rospy.Time.now().to_sec(),
         })
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        temporary = output_file + ".tmp"
-        with open(temporary, "w", encoding="utf-8") as target:
-            json.dump(report, target, sort_keys=True, indent=2)
-        os.replace(temporary, output_file)
+        for destination in (run_output_file, output_file):
+            os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
+            temporary = destination + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as target:
+                json.dump(report, target, sort_keys=True, indent=2)
+            os.replace(temporary, destination)
         rospy.loginfo("COVERAGE_AUDIT=%s", json.dumps(report, sort_keys=True))
 
     rospy.Subscriber("/gazebo/model_states", ModelStates, truth_cb,
@@ -240,6 +261,7 @@ def main():
                      queue_size=2, buff_size=8*1024*1024)
     rospy.Timer(rospy.Duration(float(rospy.get_param(
         "~report_interval", 15.0))), report_cb)
+    rospy.on_shutdown(lambda: report_cb(None))
     rospy.loginfo("Diagnostic coverage audit: %d reachable cells, %.2f m grid",
                   len(grid.cells), grid.resolution)
     rospy.spin()

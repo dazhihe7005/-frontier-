@@ -20,6 +20,7 @@ catkin_install_python(PROGRAMS
   scripts/gbplanner_decision_monitor.py
   scripts/diagnostic_map_coverage.py
   scripts/diagnostic_truth_trajectory.py
+  scripts/diagnostic_planned_trajectory.py
   scripts/gbplanner_mission_trigger.py
   scripts/gbplanner_px4_executor.py
   scripts/gbplanner_stall_recovery.py

@@ -8,6 +8,7 @@
   <arg name="ceiling_follow_experiment" default="false"/>
   <arg name="frontier_percentage_threshold" default="0.04"/>
   <arg name="planner_trigger_lead_time" default="0.4"/>
+  <arg name="planner_vertical_collision_extension" default="0.700"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
@@ -111,6 +112,12 @@
     <remap from="/pointcloud" to="/mine_uav/gbplanner/voxblox_points"/>
     <remap from="/freespace_pointcloud" to="/mine_uav/gbplanner/voxblox_freespace"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/gbplanner_mid360.yaml"/>
+    <!-- Experimental rectangular-box A/B: physical height 0.5 m plus
+         extension 1.6 m gives a 1.05 m vertical half-box, but this is
+         NOT equivalent to the required 1 m sphere. Keep the 0.7 m
+         default; the large-box run failed coverage/controllability. -->
+    <rosparam param="RobotParams/size_extension_min" subst_value="true">[1.019, 1.019, $(arg planner_vertical_collision_extension)]</rosparam>
+    <rosparam param="RobotParams/size_extension" subst_value="true">[1.019, 1.019, $(arg planner_vertical_collision_extension)]</rosparam>
     <param name="SensorParams/MID360S/frontier_percentage_threshold"
            value="$(arg frontier_percentage_threshold)"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/voxblox_mid360.yaml"/>
@@ -193,6 +200,9 @@
         output="screen"/>
   <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
         type="diagnostic_truth_trajectory.py" name="diagnostic_truth_trajectory"
+        output="screen"/>
+  <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
+        type="diagnostic_planned_trajectory.py" name="diagnostic_planned_trajectory"
         output="screen"/>
 
   <!-- If local and global frontier selection both return empty, retreat one

@@ -183,3 +183,11 @@ git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.p
 1.08412 m 并停滞。三个规划/执行试验开关保持默认关闭；仿真扇形不代表
 真机已有对应硬件。记录和后续安全门槛见
 [coverage_trial_20260926.md](src/mine_uav_gbplanner/docs/coverage_trial_20260926.md)。
+
+后续复现发现更严重的管线问题：一轮飞行的真实碰撞网格最小净空
+**0.99570 m**，已经违反用户要求的 1 m 半径。`validate_full_chain.py`
+只检查已观测传感器回波和链路，不能证明上方盲区或真实网格安全。
+目前不应无人值守运行完整地图、提高速度或把本仿真安全结论外推到真机。
+整架次的只读自动预检见
+[full_map_acceptance.md](src/mine_uav_gbplanner/docs/full_map_acceptance.md)；
+任何缺失的网格、覆盖、返航或跨架次证据都会使预检失败。
