@@ -6,6 +6,7 @@ Run with Blender Python. This diagnostic must never feed a flight controller.
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -44,12 +45,30 @@ def main():
     for coordinates in args.probe:
         center = Vector(coordinates)
         clearance_by_mesh = {}
+        nearest_by_mesh = {}
         for name, bvh in bvhs.items():
-            _, _, _, distance = bvh.find_nearest(center, 10.0)
+            nearest, _, _, distance = bvh.find_nearest(center, 10.0)
             clearance_by_mesh[name] = (round(distance, 4)
                                        if distance is not None else None)
+            nearest_by_mesh[name] = ([round(value, 4) for value in nearest]
+                                     if nearest is not None else None)
         probes.append({"xyz_m": coordinates,
-                       "mesh_clearance_m": clearance_by_mesh})
+                       "mesh_clearance_m": clearance_by_mesh,
+                       "nearest_surface_xyz_m": nearest_by_mesh})
+        ground = nearest_by_mesh.get("ground")
+        if ground is not None:
+            # The isolated Gazebo model places its one-beam guard 0.35 m
+            # below the body reference point. This is an offline diagnosis,
+            # never a controller estimate or a replacement for a real sensor.
+            dx = ground[0]-coordinates[0]
+            dy = ground[1]-coordinates[1]
+            down = coordinates[2]-0.35-ground[2]
+            probes[-1]["ground_from_down_sensor"] = {
+                "horizontal_offset_m": round(math.hypot(dx, dy), 4),
+                "ray_length_m": round(math.sqrt(dx*dx+dy*dy+down*down), 4),
+                "off_axis_angle_deg": round(math.degrees(
+                    math.atan2(math.hypot(dx, dy), down)), 2),
+            }
     for x in args.x:
         feasible = []
         best = None
