@@ -147,8 +147,8 @@ Gazebo MID360S PointCloud
   一条几十米的整程返航轨迹；规划器继续重试未知空间。显式返航以及时间/
   电量预算触发的返航能力仍保留。
 - 局部树和全局 frontier 都持续返回空结果时，恢复节点会在 5 次空决策后
-  暂停 PCI，沿最近一段已执行、已碰撞检查的轨迹以 0.35 m/s 回退，再从较早
-  的根节点恢复未知探索；恢复必须由 FAST-LIO2 里程计连续确认到达，不能再
+  暂停 PCI，沿 FAST-LIO2 实际连续观测到的飞行位姿以 0.35 m/s 回退，
+  不再倒放可能未飞过的规划指令；恢复必须由 FAST-LIO2 里程计连续确认到达，不能再
   按预估时长假定成功；若实时防撞连续阻断新回退路线 1 秒，立即放弃
   该路线，从当前实际位姿重新规划，不再原地等几十秒；若垂直脱险等安全
   暂停使回退最终超时，也会从当前位姿重规划。回退同样服从实时方向净空
@@ -171,6 +171,8 @@ git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-cap
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-raw-path-diagnostic.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-strict-final-path-experiment.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-rejection-diagnostic.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-map.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-rrg.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 
@@ -199,3 +201,18 @@ git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.p
 整架次的只读自动预检见
 [full_map_acceptance.md](src/mine_uav_gbplanner/docs/full_map_acceptance.md)；
 任何缺失的网格、覆盖、返航或跨架次证据都会使预检失败。
+
+严格 1 m 球形规划模式仍未跑通全图。为诊断起点上视盲区，可显式设置
+`surveyed_launch_backtrack_m:=3.0`，仅在离线确认的仿真起飞走廊注入
+短程先验；默认值是 0，未知区域仍失败即停。该先验来自仿真碰撞网格，
+并非 MID360 扫描或真实现场测绘，不能直接用于真机。离线证书可用
+`tools/audit_surveyed_launch_corridor.py` 生成；全图完成和安全验收仍须
+满足上文的独立判据。
+
+2026-09-27 的进一步仿真显示：保留原高度融合时，PX4 本地高度上升
+与垂直速度估计“下降”同时出现；试验飞行虽到达 x≈-64 m，碰撞网格
+最小净空只有 1.075 m、三维可见 3482/8460。加强地面锁存约束又造成
+起飞期距顶板仅 1.008 m；视觉 Z 融合 A/B 则让严格球形规划在起点
+持续空图。两项未通过的试验改动已撤回。为避免把这套未验收配置当作
+安全自动飞行，`allow_auto_arm` 现默认为 `false`；仅在有人监控的
+隔离仿真试验中显式设置 `allow_auto_arm:=true`。真实无人机参数未改动。

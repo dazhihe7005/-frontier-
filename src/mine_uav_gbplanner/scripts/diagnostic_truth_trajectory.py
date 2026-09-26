@@ -3,13 +3,15 @@
 
 import csv
 from datetime import datetime
+import math
 import os
 from pathlib import Path
 
 import rospy
 from gazebo_msgs.msg import ModelStates
-from mavros_msgs.msg import State
-from std_msgs.msg import String
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from mavros_msgs.msg import PositionTarget, State
+from std_msgs.msg import Float32, String
 
 
 class TruthTrajectoryRecorder:
@@ -26,13 +28,35 @@ class TruthTrajectoryRecorder:
         self.writer = csv.writer(self.file)
         self.writer.writerow(("sim_time", "x", "y", "z", "armed", "offboard",
                               "exploration_started", "qx", "qy", "qz", "qw",
-                              "ros_run_id"))
+                              "ros_run_id", "px4_local_z", "px4_vz",
+                              "command_z", "command_vz", "floor_clearance",
+                              "upward_room"))
         self.armed = False
         self.offboard = False
         self.exploration_started = False
         self.last_sample = None
         self.rows = 0
+        self.local_z = math.nan
+        self.local_vz = math.nan
+        self.command_z = math.nan
+        self.command_vz = math.nan
+        self.floor_clearance = math.nan
+        self.upward_room = math.nan
         rospy.Subscriber("/mavros/state", State, self._state_cb, queue_size=10)
+        rospy.Subscriber("/mavros/local_position/pose", PoseStamped,
+                         lambda msg: setattr(self, "local_z", msg.pose.position.z),
+                         queue_size=10)
+        rospy.Subscriber("/mavros/local_position/velocity_local", TwistStamped,
+                         lambda msg: setattr(self, "local_vz", msg.twist.linear.z),
+                         queue_size=10)
+        rospy.Subscriber("/mavros/setpoint_raw/local", PositionTarget,
+                         self._command_cb, queue_size=10)
+        rospy.Subscriber("/mine_uav/gbplanner/floor_clearance", Float32,
+                         lambda msg: setattr(self, "floor_clearance", msg.data),
+                         queue_size=10)
+        rospy.Subscriber("/mine_uav/gbplanner/upward_room", Float32,
+                         lambda msg: setattr(self, "upward_room", msg.data),
+                         queue_size=10)
         rospy.Subscriber("/mine_uav/gbplanner/mission_status", String,
                          self._mission_cb, queue_size=5)
         rospy.Subscriber("/gazebo/model_states", ModelStates,
@@ -47,6 +71,10 @@ class TruthTrajectoryRecorder:
     def _mission_cb(self, msg):
         if msg.data == "AUTOMATIC_EXPLORATION_STARTED":
             self.exploration_started = True
+
+    def _command_cb(self, msg):
+        self.command_z = msg.position.z
+        self.command_vz = msg.velocity.z
 
     def _model_cb(self, msg):
         try:
@@ -66,7 +94,13 @@ class TruthTrajectoryRecorder:
                               "{:.7f}".format(orientation.x),
                               "{:.7f}".format(orientation.y),
                               "{:.7f}".format(orientation.z),
-                              "{:.7f}".format(orientation.w), self.run_id))
+                              "{:.7f}".format(orientation.w), self.run_id,
+                              "{:.5f}".format(self.local_z),
+                              "{:.5f}".format(self.local_vz),
+                              "{:.5f}".format(self.command_z),
+                              "{:.5f}".format(self.command_vz),
+                              "{:.5f}".format(self.floor_clearance),
+                              "{:.5f}".format(self.upward_room)))
         self.rows += 1
         if self.rows % 100 == 0:
             self.file.flush()

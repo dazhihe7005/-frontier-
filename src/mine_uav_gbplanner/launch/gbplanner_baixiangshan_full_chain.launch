@@ -13,10 +13,15 @@
        violation; explicitly pass radius:=0 only for isolated A/B diagnosis. -->
   <arg name="planner_collision_sphere_radius" default="1.0"/>
   <arg name="planner_strict_final_path_check" default="true"/>
+  <!-- Opt-in only after independent preflight survey of this 1 m capsule.
+       It inserts a launch-area prior and is NOT MID360 evidence. -->
+  <arg name="surveyed_launch_backtrack_m" default="0.0"/>
   <arg name="voxblox_use_freespace" default="true"/>
   <arg name="ray_snapshot_sim_time" default="32.0"/>
   <arg name="tsdf_snapshot_sim_time" default="32.0"/>
-  <arg name="allow_auto_arm" default="true"/>
+  <!-- Safety gate: current 1 m radius trials have only centimetres of
+       clearance reserve and have not passed full-map acceptance. -->
+  <arg name="allow_auto_arm" default="false"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
   <arg name="spawn_x" default="-7.0"/>
@@ -123,6 +128,7 @@
          The legacy box is not certified for the requested 1 m radius. -->
     <param name="collision_sphere_radius_m" value="$(arg planner_collision_sphere_radius)"/>
     <param name="strict_final_path_check" value="$(arg planner_strict_final_path_check)"/>
+    <param name="surveyed_launch_backtrack_m" value="$(arg surveyed_launch_backtrack_m)"/>
     <!-- Experimental rectangular-box A/B: physical height 0.5 m plus
          extension 1.6 m gives a 1.05 m vertical half-box, but this is
          NOT equivalent to the required 1 m sphere. Keep the 0.7 m
@@ -239,7 +245,6 @@
     <param name="empty_limit" value="5"/>
     <param name="backtrack_speed" value="0.35"/>
     <param name="max_backtrack_distance" value="6.0"/>
-    <param name="endpoint_tolerance" value="0.75"/>
     <param name="arrival_tolerance" value="0.35"/>
     <param name="arrival_stable_duration" value="0.75"/>
   </node>

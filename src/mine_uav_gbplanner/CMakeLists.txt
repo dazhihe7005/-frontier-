@@ -26,6 +26,7 @@ catkin_install_python(PROGRAMS
   scripts/gbplanner_mission_trigger.py
   scripts/gbplanner_px4_executor.py
   scripts/gbplanner_stall_recovery.py
+  scripts/recovery_path_geometry.py
   scripts/sitl_task_operator.py
   scripts/validate_full_chain.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

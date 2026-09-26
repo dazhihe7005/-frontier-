@@ -336,6 +336,8 @@ class GbplannerPx4Executor:
             queue_size=5)
         self._floor_clearance_pub = rospy.Publisher(
             "/mine_uav/gbplanner/floor_clearance", Float32, queue_size=5)
+        self._upward_room_pub = rospy.Publisher(
+            "/mine_uav/gbplanner/upward_room", Float32, queue_size=5)
         self._blocked_pub = rospy.Publisher(
             "/mine_uav/gbplanner/execution_blocked", Bool, queue_size=1,
             latch=True)
@@ -532,6 +534,7 @@ class GbplannerPx4Executor:
             self._spatial_clearance_pub.publish(Float32(data=nearest_spatial))
         if math.isfinite(path_margin):
             self._path_margin_pub.publish(Float32(data=path_margin))
+        self._upward_room_pub.publish(Float32(data=upward_room))
 
     def _trajectory_cb(self, message):
         reason = self._validate(message)

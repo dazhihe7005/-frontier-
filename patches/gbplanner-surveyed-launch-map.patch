@@ -1,0 +1,70 @@
+diff --git a/planner_common/include/planner_common/map_manager_voxblox_impl.h b/planner_common/include/planner_common/map_manager_voxblox_impl.h
+--- a/planner_common/include/planner_common/map_manager_voxblox_impl.h
++++ b/planner_common/include/planner_common/map_manager_voxblox_impl.h
+@@ -153,3 +153,8 @@ class MapManagerVoxblox : MapManager {
+   bool augmentFreeBox(const Eigen::Vector3d& position,
+                       const Eigen::Vector3d& box_size);
++  // Opt-in, pre-surveyed launch-area prior. Never invoke on unknown mine
++  // corridors: it promotes otherwise unknown voxels to weakly known free.
++  bool augmentSurveyedFreeCapsule(const Eigen::Vector3d& start,
++                                  const Eigen::Vector3d& end, double radius);
++  double collisionSphereRadius() const { return collision_sphere_radius_m_; }
+   void getScanStatus(
+diff --git a/planner_common/src/voxblox/voxblox_common_impl.cpp b/planner_common/src/voxblox/voxblox_common_impl.cpp
+--- a/planner_common/src/voxblox/voxblox_common_impl.cpp
++++ b/planner_common/src/voxblox/voxblox_common_impl.cpp
+@@ -338,4 +338,54 @@ bool MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentFreeBox(
+   return true;
+ }
+ 
++template <typename SDFServerType, typename SDFVoxelType>
++bool MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentSurveyedFreeCapsule(
++    const Eigen::Vector3d& start, const Eigen::Vector3d& end,
++    double radius) {
++  if (!std::isfinite(radius) || radius <= 0.0)
++    return false;
++  const double voxel_size = sdf_layer_->voxel_size();
++  const double expanded_radius = radius + 0.5 * std::sqrt(3.0) * voxel_size;
++  const Eigen::Vector3d midpoint = 0.5 * (start + end);
++  const Eigen::Vector3d box_size =
++      (end - start).cwiseAbs() +
++      Eigen::Vector3d::Constant(2.0 * expanded_radius);
++  voxblox::HierarchicalIndexMap block_voxel_list;
++  voxblox::utils::getAndAllocateBoxAroundPoint(
++      midpoint.cast<voxblox::FloatingPoint>(), box_size, sdf_layer_,
++      &block_voxel_list);
++  const Eigen::Vector3d segment = end - start;
++  const double segment_sq = segment.squaredNorm();
++  const double occupied_distance =
++      std::min<double>(occupancy_distance_voxelsize_factor_, 0.25) *
++          voxel_size + 1e-6;
++  std::vector<SDFVoxelType*> unknown_voxels;
++  for (const auto& block_entry : block_voxel_list) {
++    typename voxblox::Block<SDFVoxelType>::Ptr block =
++        sdf_layer_->getBlockPtrByIndex(block_entry.first);
++    for (const voxblox::VoxelIndex& voxel_index : block_entry.second) {
++      if (!block->isValidVoxelIndex(voxel_index)) continue;
++      const Eigen::Vector3d center =
++          block->computeCoordinatesFromVoxelIndex(voxel_index).template cast<double>();
++      const double fraction = segment_sq > 1e-12
++          ? std::max(0.0, std::min(1.0,
++              (center - start).dot(segment) / segment_sq))
++          : 0.0;
++      if ((center - (start + fraction * segment)).squaredNorm() >
++          expanded_radius * expanded_radius) continue;
++      SDFVoxelType& voxel = block->getVoxelByVoxelIndex(voxel_index);
++      if (checkUnknownStatus(&voxel)) {
++        unknown_voxels.push_back(&voxel);
++      } else if (voxel.distance <= occupied_distance) {
++        ROS_ERROR("Surveyed launch capsule conflicts with a measured obstacle; no unknown voxels seeded");
++        return false;
++      }
++    }
++  }
++  for (SDFVoxelType* voxel : unknown_voxels) clearIfUnknown(*voxel);
++  ROS_WARN("Surveyed launch capsule seeded %zu unknown voxels; this is an explicit preflight prior, NOT lidar evidence",
++           unknown_voxels.size());
++  return true;
++}
++
+ template <typename SDFServerType, typename SDFVoxelType>

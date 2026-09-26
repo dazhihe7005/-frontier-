@@ -4,17 +4,17 @@
 The upstream global planner can have no retained frontier at a dead end even
 though unexplored branches exist behind the vehicle.  In that case repeatedly
 calling the local planner cannot change either the map or its root state.  This
-node pauses PCI, retraces one previously executed (therefore collision-checked)
-local trajectory, and resumes automatic exploration from the earlier root.
+node pauses PCI, retraces dense *observed odometry* rather than an unexecuted
+tail of a commanded trajectory, and resumes automatic exploration.
 
-It deliberately does not use Gazebo ground truth and it never invents a direct
-line through mapped space.  Recovery is limited to the reverse of an accepted
-GBPlanner command, with a constant yaw to avoid a sharp 180-degree attitude
-command.
+It deliberately does not use Gazebo ground truth. The reverse path still
+requires the live obstacle guard because the environment or pose may change.
 """
 
 import copy
 import math
+from pathlib import Path
+import sys
 import threading
 from collections import deque
 
@@ -22,20 +22,16 @@ import rospy
 from geometry_msgs.msg import Transform
 from mavros_msgs.msg import State
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from trajectory_msgs.msg import (MultiDOFJointTrajectory,
                                  MultiDOFJointTrajectoryPoint)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from recovery_path_geometry import distance, reverse_observed_path
+
 
 RECOVERY_JOINT = "gbplanner_stall_recovery_backtrack"
-
-
-def _distance(left, right):
-    return math.sqrt(
-        (left.x - right.x) ** 2 +
-        (left.y - right.y) ** 2 +
-        (left.z - right.z) ** 2)
 
 
 class StallRecovery:
@@ -45,8 +41,6 @@ class StallRecovery:
             0.15, float(rospy.get_param("~backtrack_speed", 0.45))))
         self._max_distance = min(8.0, max(
             2.0, float(rospy.get_param("~max_backtrack_distance", 6.0))))
-        self._endpoint_tolerance = max(
-            0.3, float(rospy.get_param("~endpoint_tolerance", 1.5)))
         self._arrival_tolerance = max(
             0.15, float(rospy.get_param("~arrival_tolerance", 0.35)))
         self._arrival_stable_duration = max(
@@ -55,10 +49,10 @@ class StallRecovery:
         self._resume_margin = max(
             0.5, float(rospy.get_param("~resume_margin", 1.0)))
         self._lock = threading.Lock()
-        self._history = deque(maxlen=200)
-        self._last_key = None
+        self._history = deque(maxlen=2000)
         self._odom = None
         self._vision_healthy = False
+        self._mission_started = False
         self._state = State()
         self._empty_count = 0
         self._recovering = False
@@ -77,9 +71,6 @@ class StallRecovery:
             "/planner_control_interface/std_srvs/stop", Trigger)
         self._resume = rospy.ServiceProxy(
             "/planner_control_interface/std_srvs/automatic_planning", Trigger)
-        rospy.Subscriber("/gbplanner/command/trajectory",
-                         MultiDOFJointTrajectory, self._trajectory_cb,
-                         queue_size=10)
         rospy.Subscriber("/gbplanner_status", Bool, self._status_cb,
                          queue_size=50)
         rospy.Subscriber("/mine_uav/gbplanner/planner_odometry", Odometry,
@@ -89,38 +80,49 @@ class StallRecovery:
         rospy.Subscriber("/mine_uav/gbplanner/execution_blocked", Bool,
                          self._blocked_cb, queue_size=2)
         rospy.Subscriber("/mavros/state", State, self._state_cb, queue_size=5)
+        rospy.Subscriber("/mine_uav/gbplanner/mission_status", String,
+                         self._mission_cb, queue_size=2)
 
     def _odom_cb(self, message):
         with self._lock:
             self._odom = message
+            if not (self._mission_started and self._vision_healthy and
+                    self._state.armed and
+                    self._state.mode == "OFFBOARD"):
+                return
+            position = message.pose.pose.position
+            xyz = (position.x, position.y, position.z)
+            if not all(math.isfinite(value) for value in xyz):
+                self._history.clear()
+                return
+            if self._history:
+                gap = distance(xyz, self._history[-1])
+                if gap > 0.30:
+                    # Never splice across estimator resets or stale samples.
+                    self._history.clear()
+                elif gap < 0.05:
+                    return
+            self._history.append(xyz)
 
     def _vision_cb(self, message):
         with self._lock:
             self._vision_healthy = bool(message.data)
+            if not self._vision_healthy:
+                self._history.clear()
 
     def _state_cb(self, message):
         with self._lock:
             self._state = message
+            if not (message.connected and message.armed and
+                    message.mode == "OFFBOARD"):
+                self._history.clear()
 
-    def _trajectory_cb(self, message):
-        if RECOVERY_JOINT in message.joint_names or len(message.points) < 2:
-            return
-        transforms = [point.transforms[0] for point in message.points
-                      if point.transforms]
-        if len(transforms) < 2:
-            return
-        start = transforms[0].translation
-        end = transforms[-1].translation
-        if _distance(start, end) < 0.25:
-            return
-        key = (message.header.seq, round(end.x, 3), round(end.y, 3),
-               round(end.z, 3))
+    def _mission_cb(self, message):
+        started = message.data == "AUTOMATIC_EXPLORATION_STARTED"
         with self._lock:
-            if key == self._last_key:
-                return
-            self._last_key = key
-            self._history.append(copy.deepcopy(message))
-            self._empty_count = 0
+            if started != self._mission_started:
+                self._history.clear()
+            self._mission_started = started
 
     def _status_cb(self, message):
         start_worker = False
@@ -132,7 +134,8 @@ class StallRecovery:
                 return
             self._empty_count += 1
             if self._empty_count >= self._empty_limit:
-                state_ready = (self._vision_healthy and self._state.connected and
+                state_ready = (self._mission_started and self._vision_healthy and
+                               self._state.connected and
                                self._state.armed and self._state.mode == "OFFBOARD")
                 if self._odom is not None and state_ready and self._history:
                     self._recovering = True
@@ -155,7 +158,9 @@ class StallRecovery:
                         self._backtrack_blocked_since = rospy.Time(0)
                 return
             if message.data:
-                ready = (self._vision_healthy and self._state.connected and
+                ready = (self._mission_started and self._odom is not None and
+                         self._vision_healthy and
+                         self._state.connected and
                          self._state.armed and self._state.mode == "OFFBOARD")
                 if ready:
                     self._recovering = True
@@ -181,31 +186,14 @@ class StallRecovery:
         else:
             rospy.logerr("PCI refused blocked-path replan")
 
-    def _select_path(self, current):
-        """Pop the newest path that passes close to the vehicle."""
-        with self._lock:
-            while self._history:
-                candidate = self._history.pop()
-                transforms = [p.transforms[0] for p in candidate.points
-                              if p.transforms]
-                # Exploration paths can be halted well before their nominal
-                # endpoint by the live lidar guard.  Endpoint-only matching
-                # therefore discards the exact path needed for safe reversal.
-                if transforms and min(
-                        _distance(current, transform.translation)
-                        for transform in transforms) <= self._endpoint_tolerance:
-                    return candidate
-        return None
-
-    def _make_reverse(self, source, odom):
+    def _make_reverse(self, positions, odom):
         output = MultiDOFJointTrajectory()
         output.header.stamp = rospy.Time.now()
-        output.header.frame_id = source.header.frame_id
+        output.header.frame_id = odom.header.frame_id
         self._recovery_seq += 1
         output.header.seq = 1000000 + self._recovery_seq
         output.joint_names = [RECOVERY_JOINT]
 
-        current = odom.pose.pose.position
         orientation = odom.pose.pose.orientation
         elapsed = 0.0
         travelled = 0.0
@@ -213,44 +201,22 @@ class StallRecovery:
         def append_point(position):
             point = MultiDOFJointTrajectoryPoint()
             transform = Transform()
-            transform.translation.x = position.x
-            transform.translation.y = position.y
-            transform.translation.z = position.z
+            transform.translation.x = position[0]
+            transform.translation.y = position[1]
+            transform.translation.z = position[2]
             transform.rotation = copy.deepcopy(orientation)
             point.transforms = [transform]
             point.time_from_start = rospy.Duration(elapsed)
             output.points.append(point)
 
-        append_point(current)
-        previous = copy.deepcopy(current)
-        transforms = [point.transforms[0] for point in source.points
-                      if point.transforms]
-        # The executor deliberately leaves a short frontier standoff on long
-        # exploration paths. Start reversal at the sample nearest the actual
-        # vehicle, never by first flying forward into that unexecuted tail.
-        nearest_index = min(
-            range(len(transforms)),
-            key=lambda index: _distance(
-                current, transforms[index].translation))
-        for transform in reversed(transforms[:nearest_index+1]):
-            segment = _distance(previous, transform.translation)
-            if segment < 0.05:
-                continue
-            if travelled + segment > self._max_distance:
-                ratio = (self._max_distance - travelled) / segment
-                target = copy.deepcopy(previous)
-                target.x += ratio * (transform.translation.x - previous.x)
-                target.y += ratio * (transform.translation.y - previous.y)
-                target.z += ratio * (transform.translation.z - previous.z)
-                segment = _distance(previous, target)
-            else:
-                target = transform.translation
+        append_point(positions[0])
+        previous = positions[0]
+        for target in positions[1:]:
+            segment = distance(previous, target)
             elapsed += max(0.05, segment / self._speed)
             append_point(target)
             travelled += segment
-            previous = copy.deepcopy(target)
-            if travelled >= self._max_distance - 1.0e-6:
-                break
+            previous = target
         return output, travelled, elapsed
 
     def _recover(self):
@@ -258,21 +224,19 @@ class StallRecovery:
             with self._lock:
                 odom = copy.deepcopy(self._odom)
                 failures = self._empty_count
-            # The newest planner path may have been stopped at its first
-            # sample. Reversing that path goes nowhere, so search older paths
-            # until one contains at least 0.5 m of actual travel behind the
-            # current pose. Otherwise PCI can repeatedly replan the same
-            # blocked path without ever moving the vehicle out of danger.
-            while True:
-                source = self._select_path(odom.pose.pose.position)
-                if source is None:
-                    self._restart_without_motion(
-                        "no usable backtrack history")
-                    return
-                trajectory, distance, duration = self._make_reverse(
-                    source, odom)
-                if len(trajectory.points) >= 2 and distance >= 0.5:
-                    break
+                history = list(self._history)
+            if odom is None:
+                self._restart_without_motion("no odometry for backtrack")
+                return
+            current = odom.pose.pose.position
+            positions, _ = reverse_observed_path(
+                (current.x, current.y, current.z), history,
+                self._max_distance)
+            trajectory, backtrack_distance, duration = self._make_reverse(
+                positions, odom)
+            if len(trajectory.points) < 2 or backtrack_distance < 0.5:
+                self._restart_without_motion("no continuous observed backtrack")
+                return
             rospy.wait_for_service(
                 "/planner_control_interface/std_srvs/stop", timeout=2.0)
             stopped = self._stop()
@@ -288,7 +252,8 @@ class StallRecovery:
             self._trajectory_pub.publish(trajectory)
             rospy.logwarn(
                 "GBPlanner stall x%d: backtracking %.2fm over %.2fs on "
-                "previously executed safe path", failures, distance, duration)
+                "recorded odometry path with live guard", failures,
+                backtrack_distance, duration)
             target = trajectory.points[-1].transforms[0].translation
             # The live 1 m guard may deliberately pause a reverse trajectory
             # while it performs a vertical escape.  Two nominal trajectory
@@ -315,7 +280,11 @@ class StallRecovery:
                 if current_odom is None or not healthy:
                     arrived_since = rospy.Time(0)
                 else:
-                    error = _distance(current_odom.pose.pose.position, target)
+                    current_position = current_odom.pose.pose.position
+                    error = distance(
+                        (current_position.x, current_position.y,
+                         current_position.z),
+                        (target.x, target.y, target.z))
                     if error <= self._arrival_tolerance:
                         if arrived_since.is_zero():
                             arrived_since = rospy.Time.now()
@@ -352,6 +321,14 @@ class StallRecovery:
                 self._recovering = False
                 self._backtrack_published_at = rospy.Time(0)
                 self._backtrack_blocked_since = rospy.Time(0)
+                self._history.clear()
+                if (self._odom is not None and self._mission_started and
+                        self._vision_healthy and self._state.connected and
+                        self._state.armed and self._state.mode == "OFFBOARD"):
+                    p = self._odom.pose.pose.position
+                    xyz = (p.x, p.y, p.z)
+                    if all(math.isfinite(value) for value in xyz):
+                        self._history.append(xyz)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,48 @@
+diff --git a/gbplanner/include/gbplanner/rrg.h b/gbplanner/include/gbplanner/rrg.h
+--- a/gbplanner/include/gbplanner/rrg.h
++++ b/gbplanner/include/gbplanner/rrg.h
+@@ -475,3 +475,5 @@ class Rrg {
+   bool strict_final_path_check_ = false;
++  double surveyed_launch_backtrack_m_ = 0.0;
++  bool surveyed_launch_seed_attempted_ = false;
+ 
+   //
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -33,3 +33,11 @@ void Rrg::initializeAttributes() {
+   nh_private_.param("strict_final_path_check", strict_final_path_check_,
+                     false);
++  nh_private_.param("surveyed_launch_backtrack_m",
++                    surveyed_launch_backtrack_m_, 0.0);
++  if (!std::isfinite(surveyed_launch_backtrack_m_) ||
++      surveyed_launch_backtrack_m_ < 0.0 ||
++      surveyed_launch_backtrack_m_ > 3.0) {
++    ROS_ERROR("surveyed_launch_backtrack_m must be in [0, 3] m; disabling prior");
++    surveyed_launch_backtrack_m_ = 0.0;
++  }
+   visualization_ = new Visualization(nh_, nh_private_);
+@@ -158,4 +163,23 @@ void Rrg::reset() {
+     global_graph_->addVertex(g_root_vertex);
+   }
+ 
++  if (surveyed_launch_backtrack_m_ > 0.0 &&
++      !surveyed_launch_seed_attempted_) {
++    surveyed_launch_seed_attempted_ = true;
++    if (map_manager_->collisionSphereRadius() < 1.0 ||
++        !strict_final_path_check_) {
++      ROS_ERROR("Surveyed launch backtrack requires 1 m sphere and strict final path checks; prior not seeded");
++    } else {
++      const Eigen::Vector3d end = root_state.head(3) +
++                                  robot_params_.center_offset;
++      const double yaw = root_state[3];
++      const Eigen::Vector3d start = end - surveyed_launch_backtrack_m_ *
++          Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0);
++      if (!map_manager_->augmentSurveyedFreeCapsule(
++              start, end, map_manager_->collisionSphereRadius())) {
++        ROS_ERROR("Surveyed launch backtrack rejected; planner remains fail-closed");
++      }
++    }
++  }
++
+   // First check if this position is free to go.
