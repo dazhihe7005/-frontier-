@@ -32,6 +32,29 @@ if [[ "$has_px4_work_dir" == false ]]; then
   set -- "px4_work_dir:=$px4_run_dir" "$@"
 fi
 
+# The diagnostic reference is built from the collision meshes before the
+# launch, never delivered to mapping, planning, estimation, or flight control.
+coverage_requested=false
+for launch_arg in "$@"; do
+  if [[ "$launch_arg" == coverage_audit:=true ]]; then
+    coverage_requested=true
+    break
+  fi
+done
+if [[ "$coverage_requested" == true ]]; then
+  blender_bin=/home/nuc/.local/opt/blender-portable/blender-5.2.0-linux-x64/blender
+  reference_dir=/home/nuc/gbplanner2_isolated_ws/runtime/map_reference
+  mkdir -p "$reference_dir"
+  "$blender_bin" --background --python \
+    /home/nuc/gbplanner2_isolated_ws/tools/build_baixiangshan_reference.py -- \
+    --resolution 0.5 \
+    --output "$reference_dir/baixianshan_reachable_0p5m.json.gz"
+  "$blender_bin" --background --python \
+    /home/nuc/gbplanner2_isolated_ws/tools/build_baixiangshan_reference_3d.py -- \
+    --resolution 0.5 \
+    --output "$reference_dir/baixianshan_reachable_3d_0p5m.json.gz"
+fi
+
 source /opt/ros/noetic/setup.bash
 source /home/nuc/fastlio2_ws/devel/setup.bash
 source /home/nuc/gbplanner2_isolated_ws/devel/setup.bash --extend

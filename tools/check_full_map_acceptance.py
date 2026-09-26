@@ -2,9 +2,9 @@
 """Fail-closed, offline precheck of one GBPlanner2 simulation flight.
 
 Only read-only diagnostic artifacts are consumed. Passing this precheck is
-*not* a proof of continuous safety or complete 3-D map exploration: the
-coverage reference is a 2-D visibility proxy and trajectory samples are
-discrete. It never supplies Gazebo truth to flight software.
+*not* a proof of continuous safety or complete map exploration: 2-D and 3-D
+coverage references are finite-resolution visibility proxies, and trajectory
+samples are discrete. It never supplies Gazebo truth to flight software.
 """
 
 import argparse
@@ -66,6 +66,9 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
     end = number(chain, "observation_end_s")
     coverage_end = number(coverage, "last_truth_sim_time_s")
     scan_end = number(coverage, "last_accepted_scan_sim_time_s")
+    coverage_3d = coverage.get("three_d", {})
+    if not isinstance(coverage_3d, dict):
+        coverage_3d = {}
     mesh_path = mesh.get("trajectory_file")
     same_truth = isinstance(mesh_path, str) and Path(mesh_path).resolve() == truth_path.resolve()
     run_id = truth.get("ros_run_id")
@@ -89,6 +92,18 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
             coverage["reference_cells"] > 0 and
             coverage.get("visible_cells") == coverage["reference_cells"] and
             coverage.get("unseen_cells") == 0 and coverage.get("complete") is True,
+        "coverage_3d_reference_all_visible": coverage_3d.get("kind") ==
+            "diagnostic_only_3d_lidar_visibility_proxy" and
+            isinstance(coverage_3d.get("reference_cells"), int) and
+            coverage_3d["reference_cells"] > 0 and
+            coverage_3d.get("visible_cells") == coverage_3d["reference_cells"] and
+            coverage_3d.get("unseen_cells") == 0 and
+            coverage_3d.get("complete") is True,
+        "coverage_3d_mesh_matches_flight":
+            coverage.get("reference_3d_mesh_sha256") ==
+            mesh.get("mesh_sha256") and
+            set(coverage.get("reference_3d_mesh_sha256") or {}) ==
+            {"ground", "infrastructure", "rock", "roof"},
         "coverage_observed_whole_flight": flight_start is not None and
             coverage_end is not None and scan_end is not None and
             number(coverage, "first_truth_sim_time_s") is not None and
@@ -124,6 +139,8 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
         "metrics": {
             "reference_visible_cells": coverage.get("visible_cells"),
             "reference_total_cells": coverage.get("reference_cells"),
+            "reference_3d_visible_cells": coverage_3d.get("visible_cells"),
+            "reference_3d_total_cells": coverage_3d.get("reference_cells"),
             "sampled_min_mesh_clearance_m": mesh.get("sampled_min_clearance_m"),
             "mesh_samples_below_1m": mesh.get("sampled_below_radius_count"),
             "truth_exploration_samples": truth["exploration_rows"],
@@ -134,7 +151,7 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
             "recovery_events": chain.get("recovery_events"),
         },
         "limitations": [
-            "Coverage reference is a 2-D lidar-visibility proxy, not all reachable 3-D free space.",
+            "2-D and 3-D coverage references are finite-resolution lidar-visibility proxies, not a proof of all continuous reachable free space.",
             "Discrete mesh samples and linear interpolation do not prove continuous flight clearance.",
             "Simulated extra downward sensing is not confirmed real hardware.",
         ],

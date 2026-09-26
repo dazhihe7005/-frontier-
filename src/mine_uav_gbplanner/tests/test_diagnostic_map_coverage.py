@@ -41,5 +41,31 @@ class CoverageGridTests(unittest.TestCase):
         self.assertEqual(result, (1, 2, 3))
 
 
+class CoverageGrid3DTests(unittest.TestCase):
+    def setUp(self):
+        self.grid = coverage.CoverageGrid3D({
+            "kind": "diagnostic_only_3d_reachable_centres_26_connected",
+            "resolution_m": 1.0,
+            "origin_xyz_m": [0.0, 0.0, 0.0],
+            "reachable_cells": [[0, 0, 0], [1, 0, 0], [1, 0, 1]],
+        })
+
+    def test_distinguishes_stacked_heights(self):
+        self.grid.visit(0.5, 0.5, 0.5, 1.0)
+        self.grid.trace_ray((0.5, 0.5, 0.5), (1.5, 0.5, 0.5), 2.0)
+        report = self.grid.report(3.0)
+        self.assertEqual(report["visible_cells"], 2)
+        self.assertEqual(report["visited_cells"], 1)
+        self.assertEqual(report["unseen_cells"], 1)
+        self.assertEqual(report["largest_unseen_components"][0]["xyz_range_m"][2],
+                         [1.5, 1.5])
+        self.grid.trace_ray((1.5, 0.5, 0.5), (1.5, 0.5, 1.5), 4.0)
+        self.assertTrue(self.grid.report(5.0)["complete"])
+
+    def test_rejects_2d_reference(self):
+        with self.assertRaises(ValueError):
+            coverage.CoverageGrid3D({"kind": "diagnostic_only_coarse_xy_reachability"})
+
+
 if __name__ == "__main__":
     unittest.main()

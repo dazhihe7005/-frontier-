@@ -118,6 +118,96 @@ class CoverageGrid:
         }
 
 
+class CoverageGrid3D:
+    """Read-only ray visibility against the offline 3-D reachable centres."""
+
+    def __init__(self, reference):
+        if reference.get("kind") != \
+                "diagnostic_only_3d_reachable_centres_26_connected":
+            raise ValueError("not a 3-D reachable-centre reference")
+        self.resolution = float(reference["resolution_m"])
+        self.origin = tuple(map(float, reference["origin_xyz_m"]))
+        self.cells = {tuple(map(int, key)) for key in reference["reachable_cells"]}
+        self.seen = set()
+        self.visited = set()
+        self.last_new_at = None
+
+    def key(self, x, y, z):
+        return tuple(math.floor((value-base)/self.resolution)
+                     for value, base in zip((x, y, z), self.origin))
+
+    def _mark(self, target, x, y, z, stamp):
+        key = self.key(x, y, z)
+        if key not in self.cells or key in target:
+            return False
+        target.add(key)
+        if target is self.seen:
+            self.last_new_at = stamp
+        return True
+
+    def visit(self, x, y, z, stamp):
+        self._mark(self.visited, x, y, z, stamp)
+        self._mark(self.seen, x, y, z, stamp)
+
+    def trace_ray(self, origin, endpoint, stamp):
+        vector = tuple(endpoint[i]-origin[i] for i in range(3))
+        distance = math.sqrt(sum(value*value for value in vector))
+        if not math.isfinite(distance) or distance < 0.01:
+            return
+        # Half a voxel prevents a ray from silently skipping a thin reachable
+        # layer. It remains a visibility proxy, not an inverse sensor model.
+        steps = max(1, math.ceil(distance/(0.5*self.resolution)))
+        for index in range(steps+1):
+            fraction = index/steps
+            self._mark(self.seen, *(origin[axis]+fraction*vector[axis]
+                                    for axis in range(3)), stamp)
+
+    def report(self, now):
+        total = len(self.cells)
+        missing = self.cells-self.seen
+        remaining = set(missing)
+        components = []
+        offsets = [(dx, dy, dz) for dx in (-1, 0, 1)
+                   for dy in (-1, 0, 1) for dz in (-1, 0, 1)
+                   if (dx, dy, dz) != (0, 0, 0)]
+        while remaining:
+            seed = remaining.pop()
+            queue = deque([seed])
+            keys = [seed]
+            while queue:
+                current = queue.popleft()
+                for offset in offsets:
+                    neighbor = tuple(current[i]+offset[i] for i in range(3))
+                    if neighbor in remaining:
+                        remaining.remove(neighbor)
+                        keys.append(neighbor)
+                        queue.append(neighbor)
+            centers = [tuple(self.origin[i]+(key[i]+0.5)*self.resolution
+                             for i in range(3)) for key in keys]
+            components.append({
+                "cells": len(keys),
+                "volume_m3": round(len(keys)*self.resolution**3, 3),
+                "xyz_range_m": [[round(min(p[i] for p in centers), 2),
+                                 round(max(p[i] for p in centers), 2)]
+                                for i in range(3)],
+            })
+        components.sort(key=lambda item: item["cells"], reverse=True)
+        return {
+            "kind": "diagnostic_only_3d_lidar_visibility_proxy",
+            "reference_cells": total,
+            "visible_cells": len(self.seen),
+            "visibility_fraction": round(len(self.seen)/total, 5) if total else 0,
+            "visited_cells": len(self.visited),
+            "visited_fraction": round(len(self.visited)/total, 5) if total else 0,
+            "unseen_cells": len(missing),
+            "unseen_component_count": len(components),
+            "largest_unseen_components": components[:5],
+            "seconds_since_new_cell": round(now-self.last_new_at, 1)
+            if self.last_new_at is not None else None,
+            "complete": total > 0 and not missing,
+        }
+
+
 def main():
     import rospy
     from gazebo_msgs.msg import ModelStates
@@ -141,6 +231,16 @@ def main():
         reference = json.load(source)
     grid = CoverageGrid(reference, float(rospy.get_param(
         "~height_tolerance", 0.75)))
+    reference_3d_file = rospy.get_param(
+        "~reference_3d_file",
+        "/home/nuc/gbplanner2_isolated_ws/runtime/map_reference/"
+        "baixianshan_reachable_3d_0p5m.json.gz")
+    if not os.path.isfile(reference_3d_file):
+        raise FileNotFoundError("3-D coverage reference missing: " +
+                                reference_3d_file)
+    with gzip.open(reference_3d_file, "rt", encoding="utf-8") as source:
+        reference_3d = json.load(source)
+    grid_3d = CoverageGrid3D(reference_3d)
     pose = None
     pose_stamp = None
     pitch = float(rospy.get_param("~sensor_pitch", 0.436332313))
@@ -195,6 +295,7 @@ def main():
             last_travel_pose = (p.x, p.y, p.z)
             last_travel_stamp = pose_stamp
         grid.visit(p.x, p.y, p.z, pose_stamp)
+        grid_3d.visit(p.x, p.y, p.z, pose_stamp)
         flight_x.append(p.x)
         if len(flight_x) > 1000:
             del flight_x[:500]
@@ -221,11 +322,13 @@ def main():
             world_ray = rotate(body_q, body_ray)
             endpoint = tuple(sensor_p[i]+world_ray[i] for i in range(3))
             grid.trace_ray(sensor_p, endpoint, now)
+            grid_3d.trace_ray(sensor_p, endpoint, now)
         accepted_scans += 1
         last_scan_stamp = now
 
     def report_cb(_event):
         report = grid.report(rospy.Time.now().to_sec())
+        report["three_d"] = grid_3d.report(rospy.Time.now().to_sec())
         report.update({
             "accepted_scans": accepted_scans,
             "rejected_stale_scans": rejected_stale_scans,
@@ -240,6 +343,8 @@ def main():
             if math.isfinite(all_y_min) else None,
             "truth_travel_distance_m": round(travel_distance, 2),
             "reference_file": reference_file,
+            "reference_3d_file": reference_3d_file,
+            "reference_3d_mesh_sha256": reference_3d["mesh_sha256"],
             "run_output_file": run_output_file,
             "ros_run_id": run_id,
             "first_truth_sim_time_s": first_truth_stamp,

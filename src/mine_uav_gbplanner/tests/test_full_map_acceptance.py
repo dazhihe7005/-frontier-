@@ -34,6 +34,13 @@ class AcceptanceTests(unittest.TestCase):
             "kind": "diagnostic_only_lidar_visibility_proxy",
             "reference_cells": 100, "visible_cells": 100,
             "unseen_cells": 0, "complete": True,
+            "three_d": {
+                "kind": "diagnostic_only_3d_lidar_visibility_proxy",
+                "reference_cells": 200, "visible_cells": 200,
+                "unseen_cells": 0, "complete": True,
+            },
+            "reference_3d_mesh_sha256": {name: "sha" for name in
+                                         ("ground", "infrastructure", "rock", "roof")},
             "first_truth_sim_time_s": 0.0, "last_truth_sim_time_s": 3.0,
             "last_accepted_scan_sim_time_s": 2.0,
             "ros_run_id": "trial-one",
@@ -80,6 +87,20 @@ class AcceptanceTests(unittest.TestCase):
         result = self.evaluate()
         self.assertFalse(result["checks"]["chain_observed_whole_exploration"])
         self.assertFalse(result["checks"]["coverage_reference_all_visible"])
+
+    def test_missing_or_partial_3d_coverage_fails(self):
+        self.coverage.pop("three_d")
+        self.assertFalse(self.evaluate()["checks"]["coverage_3d_reference_all_visible"])
+        self.coverage["three_d"] = {
+            "kind": "diagnostic_only_3d_lidar_visibility_proxy",
+            "reference_cells": 200, "visible_cells": 199,
+            "unseen_cells": 1, "complete": False,
+        }
+        self.assertFalse(self.evaluate()["checks"]["coverage_3d_reference_all_visible"])
+
+    def test_reference_mesh_mismatch_fails(self):
+        self.coverage["reference_3d_mesh_sha256"]["rock"] = "other"
+        self.assertFalse(self.evaluate()["checks"]["coverage_3d_mesh_matches_flight"])
 
     def test_no_return_fails(self):
         self.truth_path.write_text(
