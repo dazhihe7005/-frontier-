@@ -1,0 +1,99 @@
+diff --git a/planner_common/include/planner_common/random_sampler.h b/planner_common/include/planner_common/random_sampler.h
+--- a/planner_common/include/planner_common/random_sampler.h
++++ b/planner_common/include/planner_common/random_sampler.h
+@@ -3,5 +3,6 @@
+ 
+ #include <memory>
+ #include <random>
++#include <cstdint>
+ 
+ #include "planner_common/params.h"
+@@ -33,11 +34,14 @@ class RandomSamplerBase {
+   void setBound(double min_val, double max_val);
+   void setDistributionParams(double mean_val, double std_val);
+   void reset();
++  void setDeterministicSeed(int seed);
+   double generate(double current_val, double devisor = 1);
+   double getZOffset();
+ 
+  private:
+   std::mt19937 generator_;
++  int deterministic_seed_ = -1;
++  uint32_t reset_count_ = 0;
+   RandomDistributionType pdf_type_;
+   SampleModeType sample_mode_;
+   double const_val_;
+@@ -97,5 +101,7 @@ class RandomSampler {
+ 
+   // Used to generate multivariate Cauchy distribution
+   std::mt19937 generator_;
++  int deterministic_seed_ = -1;
++  uint32_t reset_count_ = 0;
+   std::shared_ptr<std::chi_squared_distribution<double>> chi_squared_;
+ };
+diff --git a/planner_common/src/random_sampler.cpp b/planner_common/src/random_sampler.cpp
+--- a/planner_common/src/random_sampler.cpp
++++ b/planner_common/src/random_sampler.cpp
+@@ -132,8 +132,13 @@ void RandomSamplerBase::setDistributionParams(double mean_val, double std_val) {
+ }
+ 
+ void RandomSamplerBase::reset() {
+-  std::random_device rd;
+-  generator_.seed(rd());
++  if (deterministic_seed_ >= 0) {
++    generator_.seed(static_cast<uint32_t>(deterministic_seed_) +
++                    reset_count_++);
++  } else {
++    std::random_device rd;
++    generator_.seed(rd());
++  }
+   if (pdf_type_ == RandomDistributionType::kUniform) {
+     uniform_pdf_.reset(
+         new std::uniform_real_distribution<>(min_val_, max_val_));
+@@ -145,6 +150,11 @@ void RandomSamplerBase::reset() {
+   }
+ }
+ 
++void RandomSamplerBase::setDeterministicSeed(int seed) {
++  deterministic_seed_ = seed;
++  reset_count_ = 0;
++}
++
+ double RandomSamplerBase::generate(double current_val, double chi_sq_var) {
+   double r;
+   if (pdf_type_ == RandomDistributionType::kUniform) {
+@@ -186,6 +196,18 @@ bool RandomSampler::loadParams(std::string ns) {
+   if (!random_sampler_base_[1].loadParams(ns + "/Y")) return false;
+   if (!random_sampler_base_[2].loadParams(ns + "/Z")) return false;
+   if (!random_sampler_base_[3].loadParams(ns + "/Heading")) return false;
++  int seed = -1;
++  ros::param::param<int>(ns + "/seed", seed, -1);
++  if (seed >= 0) {
++    deterministic_seed_ = seed;
++    reset_count_ = 0;
++    for (int axis = 0; axis < 4; ++axis) {
++      random_sampler_base_[axis].setDeterministicSeed(
++          seed + 1009 * (axis + 1));
++    }
++    ROS_WARN("GBPlanner deterministic sampler seed %d for %s", seed,
++             ns.c_str());
++  }
+   isReady = true;
+   return true;
+ }
+@@ -240,8 +262,13 @@ bool RandomSampler::setParams(BoundedSpaceParams& global_params,
+ }
+ 
+ void RandomSampler::RandomSampler::reset() {
+-  std::random_device rd;
+-  generator_.seed(rd());
++  if (deterministic_seed_ >= 0) {
++    generator_.seed(static_cast<uint32_t>(deterministic_seed_) +
++                    reset_count_++);
++  } else {
++    std::random_device rd;
++    generator_.seed(rd());
++  }
+   chi_squared_.reset(new std::chi_squared_distribution<>(1));
+   for (int i = 0; i < 4; ++i) {
+     random_sampler_base_[i].reset();

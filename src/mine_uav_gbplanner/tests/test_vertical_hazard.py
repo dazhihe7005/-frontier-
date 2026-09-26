@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 import threading
 import unittest
+from unittest.mock import MagicMock, patch
+from trajectory_msgs.msg import MultiDOFJointTrajectoryPoint
 
 
 EXECUTOR = Path(__file__).resolve().parents[1] / "scripts/gbplanner_px4_executor.py"
@@ -113,6 +115,25 @@ class VerticalHazardTest(unittest.TestCase):
         self.assertIsNone(
             cap(None, 0.70, 1.29, float("nan"), 2.24, 1.70, 1.60))
 
+    def test_balanced_band_resolves_conflicting_preferred_clearances(self):
+        target = MODULE.balanced_vertical_target_z
+        # 1.70 m + 1.60 m cannot fit in a 3.0 m tunnel. The safe center
+        # preserves 1.50 m on both sides instead of alternating escapes.
+        self.assertAlmostEqual(
+            target(3.8, 3.0, 1.7, 1.3, 1.7, 1.6, 1.0), 2.8)
+        self.assertAlmostEqual(
+            target(2.0, 3.0, 1.3, 1.6, 1.7, 1.6, 1.0), 3.15)
+        # A roomy shaft leaves the planner height untouched inside the band.
+        self.assertAlmostEqual(
+            target(3.0, 3.0, 2.0, 2.0, 1.7, 1.6, 1.0), 3.0)
+
+    def test_balanced_band_fails_closed_when_hard_radius_has_no_reserve(self):
+        target = MODULE.balanced_vertical_target_z
+        self.assertIsNone(target(3.0, 3.0, 1.1, 1.1,
+                                 1.7, 1.6, 1.0))
+        self.assertIsNone(target(3.0, 3.0, 1.4, float("inf"),
+                                 1.7, 1.6, 1.0))
+
     def test_no_hit_downward_range_cannot_be_treated_as_clear_floor(self):
         valid = MODULE.valid_downward_range
         self.assertTrue(valid(1.4, 0.1, 30.0))
@@ -146,6 +167,91 @@ class VerticalHazardTest(unittest.TestCase):
             1.50, 1.50, 0.40, 0.0, True, recovery_active=True), 0.10)
         self.assertEqual(self.executor._proximity_scale(
             1.50, 1.50, 1.00, 0.0, True, recovery_active=True), 1.0)
+
+    def test_vision_loss_hold_latches_xy_and_climbs_only_with_fresh_room(self):
+        executor = self.executor
+        executor._lock = threading.Lock()
+        executor._vision_loss_hold_pose = None
+        executor._vision_loss_active = False
+        executor._setpoint_pub = MagicMock()
+        executor._publish_ready = MagicMock()
+        executor._publish_status = MagicMock()
+        executor.max_height = 10.0
+        pose = MODULE.PoseStamped()
+        pose.pose.orientation.w = 1.0
+        pose.pose.position.x = 4.0
+        pose.pose.position.y = 2.0
+        pose.pose.position.z = 3.0
+        state = MODULE.State(connected=True, armed=True)
+        now = MODULE.rospy.Time(10)
+        with patch.object(MODULE.rospy, "logerr"):
+            executor._publish_last_safe_hold(
+                now, state, pose, True, 1.70, True, 0.8, True,
+                "FASTLIO_UNHEALTHY_HOLD")
+            first = executor._setpoint_pub.publish.call_args.args[0]
+            self.assertAlmostEqual(first.position.x, 4.0)
+            self.assertAlmostEqual(first.position.z, 3.0)
+            pose.pose.position.x = 4.7
+            pose.pose.position.y = 2.4
+            pose.pose.position.z = 2.8
+            executor._publish_last_safe_hold(
+                now, state, pose, True, 1.08, True, 0.5, True,
+                "FASTLIO_UNHEALTHY_HOLD")
+            second = executor._setpoint_pub.publish.call_args.args[0]
+            self.assertAlmostEqual(second.position.x, 4.0)
+            self.assertAlmostEqual(second.position.y, 2.0)
+            self.assertAlmostEqual(second.position.z, 3.15)
+            pose.pose.position.z = 2.5
+            executor._publish_last_safe_hold(
+                now, state, pose, True, 0.80, False, 0.5, True,
+                "FASTLIO_UNHEALTHY_HOLD")
+            third = executor._setpoint_pub.publish.call_args.args[0]
+            self.assertAlmostEqual(third.position.z, 3.15)
+            self.assertEqual(third.velocity.z, 0.0)
+            self.assertTrue(executor._vision_loss_active)
+
+    def test_vision_loss_escape_never_enters_unobserved_roof(self):
+        target = MODULE.vision_loss_hold_z
+        self.assertAlmostEqual(target(3.0, 3.0, 1.08, 0.12,
+                                      True, True, 1.0, 10.0), 3.12)
+        self.assertAlmostEqual(target(3.0, 3.0, 1.08, float("inf"),
+                                      True, True, 1.0, 10.0), 3.0)
+        self.assertAlmostEqual(target(3.0, 3.0, 1.08, 0.5,
+                                      True, False, 1.0, 10.0), 3.0)
+
+    def test_vision_recovery_requires_new_trajectory(self):
+        executor = self.executor
+        executor._lock = threading.Lock()
+        executor._vision_loss_active = True
+        executor._vision_loss_hold_pose = (4.0, 2.0, 3.0, 0.0)
+        executor._vision_healthy = False
+        executor._odom_rx = MODULE.rospy.Time(10)
+        executor.odom_timeout = 0.5
+        executor._alignment = (0.0, 0.0, 0.0, 0.0)
+        executor._local_pose = MODULE.PoseStamped()
+        executor._local_pose.pose.position.z = 3.0
+        executor._validate = MagicMock(return_value="")
+        executor._executable_end_time = MagicMock(return_value=1.0)
+        executor._publish_status = MagicMock()
+        executor._publish_blocked = MagicMock()
+        executor._rejected = 0
+        executor._accepted = 0
+        executor._proximity_blocked_since = MODULE.rospy.Time(0)
+        executor._recovery_floor_abort = False
+        message = MODULE.MultiDOFJointTrajectory()
+        message.points.append(MultiDOFJointTrajectoryPoint())
+        message.points[0].transforms.append(MODULE.TransformStamped().transform)
+        with patch.object(MODULE.rospy.Time, "now",
+                          return_value=MODULE.rospy.Time(10)), \
+                patch.object(MODULE.rospy, "loginfo"):
+            executor._trajectory_cb(message)
+            self.assertEqual(executor._rejected, 1)
+            self.assertTrue(executor._vision_loss_active)
+            executor._vision_healthy = True
+            executor._trajectory_cb(message)
+        self.assertEqual(executor._accepted, 1)
+        self.assertFalse(executor._vision_loss_active)
+        self.assertIsNone(executor._vision_loss_hold_pose)
 
 
 if __name__ == "__main__":

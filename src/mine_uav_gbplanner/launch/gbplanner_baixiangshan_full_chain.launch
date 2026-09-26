@@ -9,6 +9,12 @@
        Explicit A/B only; default remains the validated pose transport. -->
   <arg name="vision_velocity_experiment" default="false"/>
   <arg name="ceiling_follow_experiment" default="false"/>
+  <!-- Fuse fresh downward range with MID360 roof returns into one height band. -->
+  <arg name="balanced_vertical_band_experiment" default="false"/>
+  <!-- Narrow-corridor A/B only; hard safety_radius stays 1.00 m. -->
+  <arg name="absolute_clearance_hold_margin" default="0.25"/>
+  <!-- A/B tuning only; the 1 m collision radius is unchanged. -->
+  <arg name="vertical_escape_distance" default="0.35"/>
   <arg name="frontier_percentage_threshold" default="0.04"/>
   <arg name="planner_trigger_lead_time" default="0.4"/>
   <arg name="planner_vertical_collision_extension" default="0.700"/>
@@ -19,6 +25,16 @@
        branch filter. The safety sphere remains authoritative. -->
   <arg name="visited_endpoint_penalty_radius" default="0.0"/>
   <arg name="visited_endpoint_penalty_weight" default="0.0"/>
+  <!-- A/B: discourage repeatedly selected goals that the live guard cannot
+       reach; never exclude a branch or relax collision checking. -->
+  <arg name="recent_viewpoint_penalty_radius" default="0.75"/>
+  <arg name="recent_viewpoint_penalty_weight" default="1.5"/>
+  <!-- -1 preserves upstream random_device behavior; set an integer for
+       repeatable planner A/B trials on the same map. -->
+  <arg name="planner_random_seed" default="-1"/>
+  <!-- Continue toward an unflown local viewpoint at a bend even if its
+       frustum-wide frontier percentage is small. Explicit A/B only. -->
+  <arg name="defer_global_for_novel_local" default="false"/>
   <!-- Fail closed by default. The previous box mode missed a 1 m mesh
        violation; explicitly pass radius:=0 only for isolated A/B diagnosis. -->
   <arg name="planner_collision_sphere_radius" default="1.0"/>
@@ -160,6 +176,12 @@
     <param name="PlanningParams/nearest_range_max" value="$(arg planner_edge_length_max)"/>
     <param name="PlanningParams/visited_endpoint_penalty_radius" value="$(arg visited_endpoint_penalty_radius)"/>
     <param name="PlanningParams/visited_endpoint_penalty_weight" value="$(arg visited_endpoint_penalty_weight)"/>
+    <param name="PlanningParams/recent_viewpoint_penalty_radius" value="$(arg recent_viewpoint_penalty_radius)"/>
+    <param name="PlanningParams/recent_viewpoint_penalty_weight" value="$(arg recent_viewpoint_penalty_weight)"/>
+    <param name="RandomSamplerParams/SamplerForExploration/seed" value="$(arg planner_random_seed)"/>
+    <param name="RandomSamplerParams/SamplerForSearching/seed" value="$(eval -1 if int(arg('planner_random_seed')) &lt; 0 else int(arg('planner_random_seed')) + 101)"/>
+    <param name="RandomSamplerParams/SamplerForAdaptiveExp/seed" value="$(eval -1 if int(arg('planner_random_seed')) &lt; 0 else int(arg('planner_random_seed')) + 202)"/>
+    <param name="PlanningParams/defer_global_for_novel_local" value="$(arg defer_global_for_novel_local)"/>
     <param name="strict_final_path_check" value="$(arg planner_strict_final_path_check)"/>
     <param name="surveyed_launch_backtrack_m" value="$(arg surveyed_launch_backtrack_m)"/>
     <!-- Experimental rectangular-box A/B: physical height 0.5 m plus
@@ -204,16 +226,17 @@
          repeatedly stopped horizontal flight under 1.34 m roof clearance. -->
     <param name="proximity_slowdown_margin" value="1.60"/>
     <param name="proximity_hold_margin" value="0.75"/>
-    <param name="absolute_clearance_hold_margin" value="0.25"/>
+    <param name="absolute_clearance_hold_margin" value="$(arg absolute_clearance_hold_margin)"/>
     <param name="absolute_clearance_slowdown_margin" value="0.55"/>
     <param name="recovery_floor_abort_margin" value="0.60"/>
     <param name="floor_follow_clearance" value="1.70"/>
     <param name="ceiling_follow_enable" value="$(arg ceiling_follow_experiment)"/>
+    <param name="balanced_vertical_band_enable" value="$(arg balanced_vertical_band_experiment)"/>
     <param name="ceiling_follow_clearance" value="1.60"/>
     <!-- Keep the early 1.30 m ceiling/floor brake. A 1.15 m trigger let PX4
          vertical inertia carry the aircraft inside the hard 1 m envelope. -->
     <param name="vertical_avoidance_margin" value="0.30"/>
-    <param name="vertical_escape_distance" value="0.35"/>
+    <param name="vertical_escape_distance" value="$(arg vertical_escape_distance)"/>
     <param name="vertical_escape_reserve" value="0.20"/>
     <!-- The existing downward ray is a simulation-only safety rangefinder.
          MID360S itself cannot see the 1 m cone directly below this mount. -->

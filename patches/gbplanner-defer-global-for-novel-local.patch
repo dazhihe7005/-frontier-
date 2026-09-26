@@ -1,0 +1,92 @@
+diff --git a/planner_common/include/planner_common/params.h b/planner_common/include/planner_common/params.h
+--- a/planner_common/include/planner_common/params.h
++++ b/planner_common/include/planner_common/params.h
+@@ -305,5 +305,6 @@ struct PlanningParams {
+   double recent_viewpoint_penalty_weight;
+   double visited_endpoint_penalty_radius;
+   double visited_endpoint_penalty_weight;
++  bool defer_global_for_novel_local;
+   double hanging_vertex_penalty;
+   bool leafs_only_for_volumetric_gain;
+diff --git a/planner_common/src/params.cpp b/planner_common/src/params.cpp
+--- a/planner_common/src/params.cpp
++++ b/planner_common/src/params.cpp
+@@ -991,5 +991,10 @@ bool PlanningParams::loadParams(std::string ns) {
+   visited_endpoint_penalty_weight = std::max(
+       0.0, visited_endpoint_penalty_weight);
+ 
++  param_name = ns + "/defer_global_for_novel_local";
++  if (!ros::param::get(param_name, defer_global_for_novel_local)) {
++    defer_global_for_novel_local = false;
++  }
++
+   param_name = ns + "/hanging_vertex_penalty";
+   if (!ros::param::get(param_name, hanging_vertex_penalty)) {
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1637,9 +1637,40 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+              planner_trigger_count_, num_leaf_vertices,
+              candidates_over_two_meters, longest_candidate_length,
+              selected_candidate_length, best_gain);
+   }
+ 
++  // Diagnose the winning endpoint before deciding between local and global.
++  Vertex* selected_leaf = best_gain > 0.0
++                              ? local_graph_->getVertex(best_path_id) : nullptr;
++  double selected_visit_distance = -1.0;
++  if (selected_leaf != nullptr) {
++    StateVec* nearest_visited = nullptr;
++    if (robot_state_hist_->getNearestState(&selected_leaf->state,
++                                           &nearest_visited) &&
++        nearest_visited != nullptr) {
++      selected_visit_distance =
++          (selected_leaf->state.head(3) - nearest_visited->head(3)).norm();
++    }
++  }
++
+   if (planning_params_.auto_global_planner_enable) {
+-    if (!frontier_exists) {
++    // The frustum-wide frontier percentage can be small at a genuine tight
++    // bend. Keep following a collision-checked, information-bearing local
++    // path whose endpoint has not yet been flown through. This opt-in only
++    // defers a global switch; it never relaxes collision/unknown checks.
++    const bool novel_local_progress =
++        planning_params_.defer_global_for_novel_local && !frontier_exists &&
++        selected_leaf != nullptr &&
++        selected_leaf->vol_gain.num_unknown_voxels > 0 &&
++        selected_candidate_length >= 2.0 &&
++        (selected_visit_distance < 0.0 || selected_visit_distance >= 2.0);
++    if (novel_local_progress) {
++      num_low_gain_iters_ = 0;
++      ROS_WARN("LOCAL_GLOBAL_DEFER goal=(%.2f,%.2f,%.2f) length=%.2f unknown=%d visited_distance=%.2f",
++               selected_leaf->state[0], selected_leaf->state[1],
++               selected_leaf->state[2], selected_candidate_length,
++               selected_leaf->vol_gain.num_unknown_voxels,
++               selected_visit_distance);
++    } else if (!frontier_exists) {
+       ++num_low_gain_iters_;
+       ROS_WARN_COND(global_verbosity >= Verbosity::DEBUG, "No frontier found in this round. Total rounds: %d",
+@@ -1680,12 +1711,4 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+           local_graph_->getVertex(path[i + 1]);
+     }
+     best_vertex_ = local_graph_->getVertex(path[0]);
+-    StateVec* nearest_visited = nullptr;
+-    double visited_distance = -1.0;
+-    if (robot_state_hist_->getNearestState(&best_vertex_->state,
+-                                           &nearest_visited) &&
+-        nearest_visited != nullptr) {
+-      visited_distance =
+-          (best_vertex_->state.head(3) - nearest_visited->head(3)).norm();
+-    }
+     ROS_WARN("LOCAL_PATH_SELECTED current=(%.2f,%.2f,%.2f) root=(%.2f,%.2f,%.2f) goal=(%.2f,%.2f,%.2f) score=%.1f frontier=%d",
+@@ -1697,6 +1720,7 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+              best_vertex_->state[1], best_vertex_->state[2],
+              best_gain, frontier_exists);
+-    ROS_WARN("LOCAL_PATH_NOVELTY goal_frontier=%d visited_distance=%.2f penalty_radius=%.2f penalty_weight=%.2f",
+-             best_vertex_->vol_gain.is_frontier, visited_distance,
++    ROS_WARN("LOCAL_PATH_NOVELTY goal_frontier=%d goal_unknown=%d visited_distance=%.2f penalty_radius=%.2f penalty_weight=%.2f",
++             best_vertex_->vol_gain.is_frontier,
++             best_vertex_->vol_gain.num_unknown_voxels, selected_visit_distance,
+              planning_params_.visited_endpoint_penalty_radius,
+              planning_params_.visited_endpoint_penalty_weight);

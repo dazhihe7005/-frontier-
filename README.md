@@ -174,13 +174,16 @@ git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-rej
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-map.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-rrg.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-visited-endpoint-soft-penalty.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-defer-global-for-novel-local.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-deterministic-sampler-opt-in.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 
 随后按当前工作区配置使用 `catkin build`。仓库不包含第三方 Git 工作树、
 编译产物、运行日志或 PX4 持久状态。
 
-最新提速验证见 [VALIDATION_2026-09-26.md](VALIDATION_2026-09-26.md)；原始
+最新全图续测与失败因果链见 [VALIDATION_2026-09-27.md](VALIDATION_2026-09-27.md)；
+此前提速验证见 [VALIDATION_2026-09-26.md](VALIDATION_2026-09-26.md)；原始
 0.5 m/s 验收见 [VALIDATION_2026-09-25.md](VALIDATION_2026-09-25.md)，早期
 问题定位过程保留在 [VALIDATION_2026-09-24.md](VALIDATION_2026-09-24.md)。
 同日后续复核发现 0.85 m/s 试验净空仅 1.0369 m，0.80 m/s 试验均速

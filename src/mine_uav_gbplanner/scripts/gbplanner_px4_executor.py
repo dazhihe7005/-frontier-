@@ -122,6 +122,37 @@ def ceiling_follow_cap(previous_cap, actual_z, roof_clearance, roof_z,
     return cap if previous_cap is None else min(previous_cap, cap)
 
 
+def balanced_vertical_target_z(planned_z, actual_z, floor_clearance,
+                               roof_clearance, floor_preferred,
+                               roof_preferred, safety_radius,
+                               minimum_margin=0.15):
+    """Project a planned height into one jointly feasible floor/roof band.
+
+    Fixed 1.7 m floor and 1.6 m roof targets conflict in a 2.9 m passage.
+    Divide the available height instead of alternately chasing each wall.
+    None means the observed band cannot preserve the requested hard radius
+    plus reserve; callers must stop rather than assume it is traversable.
+    """
+    if not finite(planned_z, actual_z, floor_clearance, roof_clearance):
+        return None
+    total = floor_clearance + roof_clearance
+    minimum = safety_radius + minimum_margin
+    if total < 2.0 * minimum:
+        return None
+    if total >= floor_preferred + roof_preferred:
+        floor_target, roof_target = floor_preferred, roof_preferred
+    else:
+        floor_target = min(floor_preferred, total / 2.0)
+        roof_target = min(roof_preferred, total - floor_target)
+    if floor_target < minimum or roof_target < minimum:
+        return None
+    lower_z = actual_z + floor_target - floor_clearance
+    upper_z = actual_z + roof_clearance - roof_target
+    if lower_z > upper_z + 1.0e-6:
+        return None
+    return max(lower_z, min(upper_z, planned_z))
+
+
 def valid_downward_range(measured, minimum, maximum):
     """A max-range return is no-hit, not evidence of free space below."""
     return (math.isfinite(measured) and math.isfinite(minimum) and
@@ -148,6 +179,19 @@ def should_proximity_stop(scale):
     # The recovery path is only *historically* safe. Fresh MID360/floor data
     # may reveal a new obstacle or pose error, so no mode bypasses a live stop.
     return scale <= 0.10
+
+
+def vision_loss_hold_z(latched_z, actual_z, floor_clearance, upward_room,
+                       floor_fresh, proximity_fresh, safety_radius,
+                       max_height):
+    """Never chase a drifting pose; allow only a sensor-bounded floor escape."""
+    if not (floor_fresh and proximity_fresh and
+            finite(latched_z, actual_z, floor_clearance, upward_room)):
+        return latched_z
+    if floor_clearance > safety_radius + 0.35 or upward_room <= 0.05:
+        return latched_z
+    climb = min(0.35, upward_room)
+    return max(latched_z, min(max_height, actual_z + climb))
 
 
 class GbplannerPx4Executor:
@@ -224,6 +268,8 @@ class GbplannerPx4Executor:
             float(rospy.get_param("~floor_follow_clearance", 1.70)))
         self.ceiling_follow_enable = bool(rospy.get_param(
             "~ceiling_follow_enable", False))
+        self.balanced_vertical_band_enable = bool(rospy.get_param(
+            "~balanced_vertical_band_enable", False))
         self.ceiling_follow_clearance = max(
             self.safety_radius + self.vertical_avoidance_margin + 0.15,
             float(rospy.get_param("~ceiling_follow_clearance", 1.60)))
@@ -274,6 +320,7 @@ class GbplannerPx4Executor:
         self._nearest_spatial_z = float("nan")
         self._vertical_clearance = float("inf")
         self._nearest_vertical_z = float("nan")
+        self._roof_clearance = float("inf")
         self._upward_room = float("inf")
         self._downward_room = float("inf")
         self._floor_clearance = float("inf")
@@ -281,6 +328,8 @@ class GbplannerPx4Executor:
         self._path_margin = float("inf")
         self._proximity_rx = rospy.Time(0)
         self._last_command = None
+        self._vision_loss_hold_pose = None
+        self._vision_loss_active = False
         self._planned_velocity = (0.0, 0.0, 0.0)
         self._recovery_active = False
         self._recovery_floor_abort = False
@@ -466,6 +515,7 @@ class GbplannerPx4Executor:
         nearest_spatial_z = float("nan")
         nearest_vertical = float("inf")
         nearest_vertical_z = float("nan")
+        nearest_roof = float("inf")
         upward_room = float("inf")
         downward_room = float("inf")
         nearest_horizontal = float("inf")
@@ -493,6 +543,8 @@ class GbplannerPx4Executor:
                 if spatial < nearest_vertical:
                     nearest_vertical = spatial
                     nearest_vertical_z = bz
+                if bz > 0.0:
+                    nearest_roof = min(nearest_roof, spatial)
             # An escape away from one surface must not cross the 1 m sphere
             # around the opposite surface. Keep a small extra reserve for
             # scan age and PX4 tracking, and bound the commanded Z displacement
@@ -524,6 +576,7 @@ class GbplannerPx4Executor:
             self._nearest_spatial_z = nearest_spatial_z
             self._vertical_clearance = nearest_vertical
             self._nearest_vertical_z = nearest_vertical_z
+            self._roof_clearance = nearest_roof
             self._upward_room = max(0.0, upward_room)
             self._downward_room = max(0.0, downward_room)
             self._path_margin = path_margin
@@ -544,6 +597,12 @@ class GbplannerPx4Executor:
             rospy.logerr("Rejected GBPlanner trajectory: %s", reason)
             return
         with self._lock:
+            if self._vision_loss_active and (
+                    not self._vision_healthy or self._odom_rx.is_zero() or
+                    (rospy.Time.now()-self._odom_rx).to_sec() > self.odom_timeout):
+                self._rejected += 1
+                self._publish_status("REJECT_TRAJECTORY:VISION_RECOVERY_PENDING")
+                return
             alignment = self._alignment
             local_pose = self._local_pose
             first = message.points[0].transforms[0].translation
@@ -567,6 +626,10 @@ class GbplannerPx4Executor:
             self._accepted += 1
             self._proximity_blocked_since = rospy.Time(0)
             self._recovery_floor_abort = False
+            # A recovered vision stream may resume flight only on a newly
+            # validated plan, never from the interrupted trajectory clock.
+            self._vision_loss_active = False
+            self._vision_loss_hold_pose = None
         if abs(z_correction) > 0.05:
             rospy.logwarn("Trajectory Z re-anchored by %.3f m", z_correction)
         self._publish_blocked(False)
@@ -810,9 +873,11 @@ class GbplannerPx4Executor:
                 path_margin-directional_hold) / span
         return min(absolute_scale, directional_scale)
 
-    def _publish_last_safe_hold(self, now, state, local_pose, local_fresh):
+    def _publish_last_safe_hold(self, now, state, local_pose, local_fresh,
+                                floor_clearance, floor_fresh, upward_room,
+                                proximity_fresh, status):
         """Keep OFFBOARD alive instead of dropping all setpoints on vision loss."""
-        if not state.connected or not state.armed or not local_fresh:
+        if not state.connected or not state.armed or not local_fresh or local_pose is None:
             self._publish_ready(False)
             self._publish_status("PX4_NOT_READY")
             return
@@ -824,22 +889,36 @@ class GbplannerPx4Executor:
             PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY |
             PositionTarget.IGNORE_AFZ | PositionTarget.IGNORE_YAW_RATE)
         position = local_pose.pose.position
-        command.position.x = position.x
-        command.position.y = position.y
-        command.position.z = position.z
+        with self._lock:
+            if self._vision_loss_hold_pose is None:
+                try:
+                    hold_yaw = yaw_of(local_pose.pose.orientation)
+                except ValueError:
+                    hold_yaw = 0.0
+                self._vision_loss_hold_pose = (
+                    position.x, position.y, position.z, hold_yaw)
+                rospy.logerr("Vision lost: latching PX4 hold at (%.3f, %.3f, %.3f)",
+                             position.x, position.y, position.z)
+            self._vision_loss_active = True
+            hold_x, hold_y, hold_z, hold_yaw = self._vision_loss_hold_pose
+            hold_z = vision_loss_hold_z(
+                hold_z, position.z, floor_clearance, upward_room,
+                floor_fresh, proximity_fresh, self.safety_radius,
+                self.max_height)
+            self._vision_loss_hold_pose = (hold_x, hold_y, hold_z, hold_yaw)
+        command.position.x = hold_x
+        command.position.y = hold_y
+        command.position.z = hold_z
         command.velocity.x = 0.0
         command.velocity.y = 0.0
         command.velocity.z = 0.0
-        try:
-            command.yaw = yaw_of(local_pose.pose.orientation)
-        except ValueError:
-            command.yaw = 0.0
+        command.yaw = hold_yaw
         command.header.stamp = now
         self._setpoint_pub.publish(command)
         with self._lock:
             self._last_command = command
         self._publish_ready(False)
-        self._publish_status("FASTLIO_UNHEALTHY_HOLD")
+        self._publish_status(status)
 
     def _shape_velocity_and_yaw(self, velocity, yaw, speed_scale, now):
         """Limit command handoff acceleration and yaw discontinuities."""
@@ -896,6 +975,7 @@ class GbplannerPx4Executor:
             nearest_spatial_z = self._nearest_spatial_z
             vertical_clearance = self._vertical_clearance
             nearest_vertical_z = self._nearest_vertical_z
+            roof_clearance = self._roof_clearance
             upward_room = self._upward_room
             downward_room = self._downward_room
             floor_clearance = self._floor_clearance
@@ -916,10 +996,22 @@ class GbplannerPx4Executor:
                           (now-self._odom_rx).to_sec() <= self.odom_timeout)
             local_fresh = (not self._local_pose_rx.is_zero() and
                            (now-self._local_pose_rx).to_sec() <= self.local_pose_timeout)
+            vision_loss_active = self._vision_loss_active
+            if not state.armed and vision_loss_active:
+                self._vision_loss_active = False
+                self._vision_loss_hold_pose = None
+                vision_loss_active = False
         if not proximity_fresh:
             upward_room = downward_room = 0.0
         if self.require_downward_range and not floor_fresh:
             downward_room = 0.0
+        if not vision or not odom_fresh or vision_loss_active:
+            self._publish_last_safe_hold(
+                now, state, local_pose, local_fresh, floor_clearance,
+                floor_fresh, upward_room, proximity_fresh,
+                "WAIT_FRESH_TRAJECTORY_AFTER_VISION_LOSS"
+                if vision and odom_fresh else "FASTLIO_UNHEALTHY_HOLD")
+            return
         if trajectory is None:
             self._publish_ready(False)
             self._publish_status("WAIT_TRAJECTORY")
@@ -927,10 +1019,6 @@ class GbplannerPx4Executor:
         if alignment is None:
             self._publish_ready(False)
             self._publish_status("WAIT_ALIGNMENT")
-            return
-        if not vision or not odom_fresh:
-            self._publish_last_safe_hold(
-                now, state, local_pose, local_fresh)
             return
         if not state.connected or not state.armed or not local_fresh:
             self._publish_ready(False)
@@ -942,8 +1030,24 @@ class GbplannerPx4Executor:
         desired_now = self._apply_alignment(
             self._sample(trajectory, progress), alignment)
         actual = local_pose.pose.position
+        balanced_band_ready = (
+            self.balanced_vertical_band_enable and not recovery_active and
+            proximity_fresh and floor_fresh and
+            math.isfinite(roof_clearance))
+        balanced_tracking_z = None
+        if balanced_band_ready:
+            balanced_tracking_z = balanced_vertical_target_z(
+                desired_now[2], actual.z, floor_clearance, roof_clearance,
+                self.floor_follow_clearance, self.ceiling_follow_clearance,
+                self.safety_radius)
+            if (balanced_tracking_z is not None and
+                    abs(balanced_tracking_z-desired_now[2]) > 0.05):
+                rospy.logwarn_throttle(
+                    2.0, "Balanced vertical band: floor %.3f roof %.3f "
+                    "planned z %.3f target z %.3f", floor_clearance,
+                    roof_clearance, desired_now[2], balanced_tracking_z)
         ceiling_cap_z = None
-        if self.ceiling_follow_enable and not recovery_active and (
+        if self.ceiling_follow_enable and not balanced_band_ready and not recovery_active and (
                 proximity_fresh and floor_fresh):
             ceiling_cap_z = ceiling_follow_cap(
                 self._ceiling_follow_cap_z, actual.z,
@@ -955,7 +1059,9 @@ class GbplannerPx4Executor:
                               actual.z, ceiling_cap_z)
             self._ceiling_follow_cap_z = ceiling_cap_z
         desired_tracking_z = desired_now[2]
-        if self.require_downward_range and floor_fresh:
+        if balanced_band_ready and balanced_tracking_z is not None:
+            desired_tracking_z = balanced_tracking_z
+        elif self.require_downward_range and floor_fresh:
             desired_tracking_z = floor_follow_target_z(
                 desired_tracking_z, actual.z, floor_clearance,
                 self.floor_follow_clearance, upward_room)
@@ -976,6 +1082,11 @@ class GbplannerPx4Executor:
             proximity_fresh,
             recovery_active,
             frontier_approach)
+        if balanced_band_ready and balanced_tracking_z is None:
+            proximity_scale = 0.0
+            rospy.logwarn_throttle(
+                2.0, "No feasible vertical band: floor %.3f roof %.3f radius %.3f",
+                floor_clearance, roof_clearance, self.safety_radius)
         floor_limited = False
         floor_intended_vz = 0.0
         floor_measured_vz = 0.0
@@ -1127,6 +1238,16 @@ class GbplannerPx4Executor:
         if proximity_stop:
             x, y, z = proximity_hold_pose
             velocity = (0.0, 0.0, 0.0)
+        elif balanced_band_ready and balanced_tracking_z is not None:
+            balanced_z = balanced_vertical_target_z(
+                z, actual.z, floor_clearance, roof_clearance,
+                self.floor_follow_clearance, self.ceiling_follow_clearance,
+                self.safety_radius)
+            if balanced_z is not None and abs(balanced_z-z) > 1.0e-6:
+                velocity = (velocity[0], velocity[1],
+                            max(0.0, velocity[2]) if balanced_z > z else
+                            min(0.0, velocity[2]))
+                z = balanced_z
         elif self.require_downward_range and floor_fresh:
             floor_follow_z = floor_follow_target_z(
                 z, actual.z, floor_clearance,
