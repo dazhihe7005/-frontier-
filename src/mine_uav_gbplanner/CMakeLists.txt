@@ -18,6 +18,7 @@ catkin_install_python(PROGRAMS
   scripts/fastlio_voxblox_adapter.py
   scripts/fastlio_planner_odometry.py
   scripts/gbplanner_decision_monitor.py
+  scripts/diagnostic_map_coverage.py
   scripts/gbplanner_mission_trigger.py
   scripts/gbplanner_px4_executor.py
   scripts/gbplanner_stall_recovery.py

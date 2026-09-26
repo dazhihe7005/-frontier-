@@ -184,7 +184,11 @@ PlanningParams:
   clustering_radius: 0.5
   path_interpolation_distance: 0.5
 
-  time_budget_limit: 900
+  # The 1:1 map spans about 294 m in X and contains side branches. At the
+  # validated ~0.5 m/s moving speed, 900 s can force homing before both ends
+  # are inspected. This 3600 s limit is for SITL coverage trials only; it is
+  # NOT an endurance claim for the two physical batteries.
+  time_budget_limit: 3600
   auto_homing_enable: true
   # A single low-gain/global-frontier miss is not proof that an unknown mine
   # is fully explored.  Keep retrying local/global exploration instead of

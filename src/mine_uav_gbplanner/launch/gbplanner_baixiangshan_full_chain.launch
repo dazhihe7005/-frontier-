@@ -4,6 +4,7 @@
        instance 2 by the wrapper script.  It never sources frontier/SUPER. -->
   <arg name="gui" default="false"/>
   <arg name="rviz" default="false"/>
+  <arg name="coverage_audit" default="false"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
@@ -172,6 +173,13 @@
 
   <node pkg="mine_uav_gbplanner" type="gbplanner_decision_monitor.py"
         name="gbplanner_decision_monitor" output="screen"/>
+
+  <!-- Read-only Gazebo-truth coverage audit. Never publishes flight inputs.
+       Generate its reference with tools/build_baixiangshan_reference.py
+       before enabling this optional diagnostic. -->
+  <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
+        type="diagnostic_map_coverage.py" name="diagnostic_map_coverage"
+        output="screen"/>
 
   <!-- If local and global frontier selection both return empty, retreat one
        already executed collision-checked segment and replan.  This avoids an
