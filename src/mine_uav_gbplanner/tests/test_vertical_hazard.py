@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 import unittest
 from unittest.mock import MagicMock, patch
+import xml.etree.ElementTree as ET
 from trajectory_msgs.msg import MultiDOFJointTrajectoryPoint
 
 
@@ -23,6 +24,8 @@ class VerticalHazardTest(unittest.TestCase):
         self.executor.proximity_z_max = 0.35
         self.executor.safety_radius = 1.0
         self.executor.vertical_avoidance_margin = 0.30
+        self.executor.absolute_clearance_hold_margin = 0.25
+        self.executor.absolute_clearance_slowdown_margin = 0.55
 
     def test_raised_side_wall_is_not_a_ceiling(self):
         # This return previously locked the UAV at x ~= 2.5 m for >100 s.
@@ -141,6 +144,40 @@ class VerticalHazardTest(unittest.TestCase):
         self.assertFalse(valid(29.98, 0.1, 30.0))
         self.assertFalse(valid(float("inf"), 0.1, 30.0))
 
+    def test_fan_slant_range_is_not_body_center_clearance(self):
+        lower = MODULE.cone_body_clearance_lower_bound
+        self.assertAlmostEqual(lower(0.65, 0.35, 0.0), 1.0)
+        self.assertAlmostEqual(lower(0.65, 0.35, math.pi/3.0),
+                               math.sqrt(0.65**2+0.35**2+0.65*0.35))
+        self.assertLess(lower(0.65, 0.35, math.pi/3.0, 0.03), 0.90)
+        self.assertEqual(lower(float("nan"), 0.35, math.pi/3.0), 0.0)
+
+    def test_fan_geometry_matches_launch_clearance_bound(self):
+        workspace = Path(__file__).resolve().parents[3]
+        sdf = ET.parse(workspace / "isolated_assets/models/iris_mid360/iris_mid360.sdf")
+        launch = ET.parse(workspace / "src/mine_uav_gbplanner/launch/gbplanner_baixiangshan_full_chain.launch")
+        link = sdf.find(".//link[@name='mid360_link']")
+        sensor = link.find(".//sensor[@name='shaft_downward_ray']")
+        link_x, _, link_z, _, link_pitch, _ = map(float, link.findtext("pose").split())
+        rel_x, _, rel_z, _, sensor_pitch, _ = map(float, sensor.findtext("pose").split())
+        body_x = link_x+math.cos(link_pitch)*rel_x+math.sin(link_pitch)*rel_z
+        body_z = link_z-math.sin(link_pitch)*rel_x+math.cos(link_pitch)*rel_z
+        self.assertAlmostEqual(body_x, 0.0, places=5)
+        self.assertAlmostEqual(link_pitch+sensor_pitch, math.pi/2.0, places=5)
+        horizontal = max(abs(float(sensor.findtext("ray/scan/horizontal/min_angle"))),
+                         abs(float(sensor.findtext("ray/scan/horizontal/max_angle"))))
+        vertical = max(abs(float(sensor.findtext("ray/scan/vertical/min_angle"))),
+                       abs(float(sensor.findtext("ray/scan/vertical/max_angle"))))
+        max_off_axis = math.acos(math.cos(horizontal)*math.cos(vertical))
+        params = {node.get("name"): node.get("value")
+                  for node in launch.findall(".//node[@name='gbplanner_px4_executor']/param")}
+        self.assertAlmostEqual(-body_z,
+                               float(params["downward_range_origin_below_body"]),
+                               places=5)
+        self.assertAlmostEqual(math.degrees(max_off_axis),
+                               float(params["downward_range_max_off_axis_deg"]),
+                               places=5)
+
     def test_new_floor_threat_reverses_old_roof_escape(self):
         direction = MODULE.vertical_escape_direction
         self.assertEqual(direction(True, True, 1.20, True, -1.0), 1.0)
@@ -166,7 +203,27 @@ class VerticalHazardTest(unittest.TestCase):
         self.assertLess(self.executor._proximity_scale(
             1.50, 1.50, 0.40, 0.0, True, recovery_active=True), 0.10)
         self.assertEqual(self.executor._proximity_scale(
-            1.50, 1.50, 1.00, 0.0, True, recovery_active=True), 1.0)
+            1.55, 1.55, 1.00, 0.0, True, recovery_active=True), 1.0)
+
+    def test_recovery_never_bypasses_absolute_1m_sphere(self):
+        scale = self.executor._proximity_scale
+        for nearby in (0.80, 1.00, 1.20, 1.25):
+            with self.subTest(nearby=nearby):
+                self.assertEqual(scale(nearby, nearby, float("inf"), 0.0,
+                                       True, recovery_active=True), 0.0)
+        # Directional freedom cannot turn a side/overhead return into a
+        # clearance exception. Above the hold reserve, speed rises smoothly.
+        self.assertAlmostEqual(scale(1.40, 1.40, float("inf"), 0.0,
+                                     True, recovery_active=True), 0.50)
+        self.assertEqual(scale(1.55, 1.55, float("inf"), 0.0,
+                               True, recovery_active=True), 1.0)
+        for bad in (float("nan"),):
+            self.assertEqual(scale(bad, 2.0, float("inf"), 0.0,
+                                   True, recovery_active=True), 0.0)
+            self.assertEqual(scale(2.0, bad, float("inf"), 0.0,
+                                   True, recovery_active=True), 0.0)
+            self.assertEqual(scale(2.0, 2.0, bad, 0.0,
+                                   True, recovery_active=True), 0.0)
 
     def test_vision_loss_hold_latches_xy_and_climbs_only_with_fresh_room(self):
         executor = self.executor

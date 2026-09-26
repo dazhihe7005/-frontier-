@@ -89,8 +89,10 @@
       <!-- Simulation-only downward range guard. The STEP landing rails end
            at body z=-0.272 m; the old ray started at the body origin and
            returned its own landing gear at 0.238 m. Start 0.350 m below the
-           body origin, clear of the rails, and add 0.350 m at the consumer
-           to recover body-origin floor clearance. A single central beam
+           body origin, clear of the rails. The consumer combines its minimum
+           slant range with that offset and the full 60-degree cone angle to
+           obtain a conservative body-center distance; simply adding 0.350 m
+           would overstate clearance for oblique returns. A central beam
            missed the sloped floor 0.41 m to the side at x=79.5 m. Use a
            45-degree 2-D fan around body -Z; gazebo_ros_range publishes the
            minimum of these rays. This is still extra simulation hardware,

@@ -160,6 +160,25 @@ def valid_downward_range(measured, minimum, maximum):
             minimum <= measured < maximum-0.05)
 
 
+def cone_body_clearance_lower_bound(measured, origin_below_body,
+                                    max_off_axis_rad, range_error=0.0):
+    """Conservative body-center distance from a minimum slant-range return.
+
+    A ROS Range sample from a fan has no bearing. For every ray within
+    ``max_off_axis_rad`` of body -Z, the body-to-hit distance is at least
+    sqrt(r²+d²+2*r*d*cos(max_angle)); simply adding d is only valid for a
+    vertical ray and can overstate clearance on sloped ground.
+    """
+    if not finite(measured, origin_below_body, max_off_axis_rad,
+                  range_error) or measured < 0.0 or origin_below_body < 0.0 or (
+                      not 0.0 <= max_off_axis_rad <= math.pi/2.0) or (
+                      range_error < 0.0):
+        return 0.0
+    ray = max(0.0, measured-range_error)
+    return math.sqrt(ray*ray + origin_below_body**2 +
+                     2.0*ray*origin_below_body*math.cos(max_off_axis_rad))
+
+
 def vertical_escape_direction(floor_emergency, vertical_detected,
                               nearest_vertical_z, escape_pending,
                               previous_direction):
@@ -288,6 +307,11 @@ class GbplannerPx4Executor:
         self.downward_range_origin_below_body = max(
             0.0, float(rospy.get_param(
                 "~downward_range_origin_below_body", 0.0)))
+        self.downward_range_max_off_axis_rad = math.radians(min(
+            90.0, max(0.0, float(rospy.get_param(
+                "~downward_range_max_off_axis_deg", 60.0)))))
+        self.downward_range_error_m = max(0.0, float(rospy.get_param(
+            "~downward_range_error_m", 0.03)))
         self.sensor_offset = tuple(float(value) for value in rospy.get_param(
             "~sensor_offset", [0.1315, 0.0, 0.223]))
         self.sensor_pitch = float(rospy.get_param("~sensor_pitch", 0.436332313))
@@ -454,8 +478,10 @@ class GbplannerPx4Executor:
             rospy.logwarn_throttle(
                 2.0, "Downward range is invalid or no-hit; holding flight")
             return
-        clearance = (float(message.range) +
-                     self.downward_range_origin_below_body)
+        clearance = cone_body_clearance_lower_bound(
+            float(message.range), self.downward_range_origin_below_body,
+            self.downward_range_max_off_axis_rad,
+            self.downward_range_error_m)
         with self._lock:
             self._floor_clearance = clearance
             self._floor_rx = rospy.Time.now()
@@ -806,7 +832,8 @@ class GbplannerPx4Executor:
                          nearest_spatial_z, fresh, recovery_active=False,
                          frontier_approach=False):
         """Brake before motion intersects the live 1 m lidar envelope."""
-        if not fresh:
+        if not fresh or any(math.isnan(value) for value in
+                            (clearance, spatial_clearance, path_margin)):
             return 0.0
         vertical_hazard = self._is_vertical_hazard(
             spatial_clearance, nearest_spatial_z, fresh)
@@ -816,26 +843,27 @@ class GbplannerPx4Executor:
             # _timer will command a short motion away from the measured side.
             return 0.0
         if recovery_active:
-            # This is the exact reverse of an already executed path at no more
-            # than 0.45 m/s.  If a delayed observation has already put the
-            # reference point inside the 1 m envelope, immobilising it cannot
-            # restore clearance. Permit only a very slow retreat when the
-            # live cloud confirms the reverse corridor itself is clear.
-            if min(clearance, spatial_clearance) <= self.safety_radius:
-                if path_margin > 0.35 or math.isinf(path_margin):
-                    return 0.25
-                return 0.0
-            recovery_full = self.safety_radius + 0.30
+            # The reverse path was once traversed, but its cached clearance
+            # does not override the *current* 1 m sphere. In particular, a
+            # clear direction is not proof that a nearby side or overhead
+            # return is safe. Apply the same absolute braking reserve used
+            # in ordinary flight before considering the directional margin.
             nearest_clearance = min(clearance, spatial_clearance)
+            recovery_hold = (
+                self.safety_radius + self.absolute_clearance_hold_margin)
+            recovery_full = (
+                self.safety_radius + self.absolute_clearance_slowdown_margin)
+            if nearest_clearance <= recovery_hold:
+                return 0.0
             if nearest_clearance >= recovery_full:
                 absolute_scale = 1.0
             else:
-                absolute_scale = ((nearest_clearance-self.safety_radius) /
-                                  (recovery_full-self.safety_radius))
+                absolute_scale = ((nearest_clearance-recovery_hold) /
+                                  (recovery_full-recovery_hold))
             # A reverse trajectory was safe when it was first flown, but
             # LIO drift and new returns can invalidate that assumption.
-            # At 0.35 m/s the 0.35 m live directional stop still leaves
-            # braking distance before the 1 m protected sphere.
+            # Directional clearance is an additional guard, not an exception
+            # to the absolute 3-D stop above.
             if path_margin <= 0.35:
                 return 0.0
             if path_margin >= 1.0:

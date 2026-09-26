@@ -245,6 +245,10 @@
     <param name="require_downward_range" value="true"/>
     <param name="downward_range_topic" value="/mine_uav/sitl/shaft_downward_range"/>
     <param name="downward_range_origin_below_body" value="0.35"/>
+    <!-- Two +/-45 deg scan axes allow rays up to 60 deg off body -Z.
+         A Range message has no hit bearing, so use this worst-case angle. -->
+    <param name="downward_range_max_off_axis_deg" value="60.0"/>
+    <param name="downward_range_error_m" value="0.03"/>
     <param name="frontier_guard_min_duration" value="4.0"/>
     <param name="frontier_guard_horizon" value="5.0"/>
     <param name="frontier_hold_margin" value="0.95"/>
