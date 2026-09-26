@@ -40,6 +40,9 @@ class Validator:
         self.executor_states = set()
         self.mission_states = set()
         self.first_position = None
+        self.first_position_time = None
+        self.time_to_2m = None
+        self.time_to_5m = None
         self.max_displacement = 0.0
         self.trajectory_points = 0
         self.setpoints_finite = True
@@ -69,6 +72,9 @@ class Validator:
         self.fastlio_reference = None
         self.max_truth_relative_error = 0.0
         self.max_fastlio_truth_relative_error = 0.0
+        self.max_truth_relative_xy_error = 0.0
+        self.max_fastlio_truth_relative_xy_error = 0.0
+        self.max_fastlio_truth_relative_z_error = 0.0
         self.min_clearance_state = None
         for key, (topic, message_type) in self.TOPICS.items():
             rospy.Subscriber(topic, message_type,
@@ -137,9 +143,15 @@ class Validator:
             self.latest_local_position = current
             if self.first_position is None:
                 self.first_position = current
+                self.first_position_time = rospy.Time.now()
             displacement = math.sqrt(sum((current[i]-self.first_position[i])**2
                                          for i in range(3)))
             self.max_displacement = max(self.max_displacement, displacement)
+            since_first = (rospy.Time.now()-self.first_position_time).to_sec()
+            if self.time_to_2m is None and displacement >= 2.0:
+                self.time_to_2m = since_first
+            if self.time_to_5m is None and displacement >= 5.0:
+                self.time_to_5m = since_first
             self.min_flight_z = min(self.min_flight_z, p.z)
             self.max_flight_z = max(self.max_flight_z, p.z)
             self._update_truth_error()
@@ -168,6 +180,10 @@ class Validator:
                               for i in range(3)))
         self.max_truth_relative_error = max(
             self.max_truth_relative_error, error)
+        self.max_truth_relative_xy_error = max(
+            self.max_truth_relative_xy_error,
+            math.hypot(local_delta[0]-truth_delta[0],
+                       local_delta[1]-truth_delta[1]))
         if self.latest_fastlio_position is not None:
             if self.fastlio_reference is None:
                 self.fastlio_reference = self.latest_fastlio_position
@@ -178,6 +194,13 @@ class Validator:
                 (fastlio_delta[i]-truth_delta[i])**2 for i in range(3)))
             self.max_fastlio_truth_relative_error = max(
                 self.max_fastlio_truth_relative_error, fastlio_error)
+            self.max_fastlio_truth_relative_xy_error = max(
+                self.max_fastlio_truth_relative_xy_error,
+                math.hypot(fastlio_delta[0]-truth_delta[0],
+                           fastlio_delta[1]-truth_delta[1]))
+            self.max_fastlio_truth_relative_z_error = max(
+                self.max_fastlio_truth_relative_z_error,
+                abs(fastlio_delta[2]-truth_delta[2]))
 
     def _velocity_cb(self, message):
         velocity = message.twist.linear
@@ -298,6 +321,10 @@ class Validator:
                 "executor_states_seen": sorted(self.executor_states),
                 "mission_states_seen": sorted(self.mission_states),
                 "max_px4_displacement_m": round(self.max_displacement, 4),
+                "time_to_2m_s": (round(self.time_to_2m, 3)
+                                 if self.time_to_2m is not None else None),
+                "time_to_5m_s": (round(self.time_to_5m, 3)
+                                 if self.time_to_5m is not None else None),
                 "max_trajectory_points": self.trajectory_points,
                 "setpoints_finite": self.setpoints_finite,
                 "min_horizontal_clearance_m": (
@@ -327,6 +354,12 @@ class Validator:
                     self.max_truth_relative_error, 4),
                 "max_fastlio_vs_truth_relative_error_m": round(
                     self.max_fastlio_truth_relative_error, 4),
+                "max_px4_vs_truth_relative_xy_error_m": round(
+                    self.max_truth_relative_xy_error, 4),
+                "max_fastlio_vs_truth_relative_xy_error_m": round(
+                    self.max_fastlio_truth_relative_xy_error, 4),
+                "max_fastlio_vs_truth_relative_z_error_m": round(
+                    self.max_fastlio_truth_relative_z_error, 4),
                 "diagnostic_references": {
                     "local": self.local_reference,
                     "fastlio": self.fastlio_reference,

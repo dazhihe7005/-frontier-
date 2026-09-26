@@ -80,6 +80,11 @@ Gazebo MID360S PointCloud
   才显露的凹凸墙面，持续受阻时从实际位置触发重规划/安全回退。
 - 当前运动方向只参与软评分，权重为 0.30；它不会过滤反向候选，因此仍允许
   回退和探索可达分支，但信息增益近似相同时不会无故 180° 掉头。
+- 对 1.5 m 以下的短路径降低信息增益评分，并在候选路径短于 2 m 时，对
+  最近 12 次选中过的观察位置
+  施加 0.75 m 范围内的软性重复惩罚；这不放行未知/占用体素，也不限定世界坐标
+  主方向。起点附近的 2.2 m 宽规划碰撞盒常因侧向少量未知体素只能生成
+  约 0.4–1.0 m 的短路径，故冷启动离开起点的时间仍有随机性。
 - 已修复 GBPlanner2 上游方向参考轨迹把所有采样点错误放在同一终点的问题；
   补丁保存在 `patches/gbplanner-direction-reference.patch`。
 - 起飞平台使冷启动接触稳定，扫描与位姿又已严格同步，因此不再在悬停后
@@ -87,7 +92,7 @@ Gazebo MID360S PointCloud
   稀疏地图开始产生大量短航段。
 - 起飞交接要求位置、姿态和速度连续稳定 2 秒。外部视觉速度门槛为
   3.5 m/s，与 PX4 最高 3.0 m/s 起飞包络匹配。当前开阔段规划上限为
-  0.7 m/s；狭窄环境上限仍为 0.35 m/s，实时安全层还会按净空和跟踪
+  0.70 m/s；狭窄环境上限仍为 0.35 m/s，实时安全层还会按净空和跟踪
   误差降速。2.0 m/s 试验因换段误差导致碰撞，已禁用。
 - 不对首次或后续候选施加最短路径硬过滤；短路径也会被执行并触发下一轮
   决策，避免执行器拒绝后与 PCI 相互等待。1 m 是碰撞安全包络，不是
@@ -104,7 +109,8 @@ Gazebo MID360S PointCloud
   距离，普通航段从 1.60 m 制动余量开始降速、到 0.75 m 余量时停止；接近
   frontier 末端时使用 1.85/0.95 m 的更保守阈值。三维绝对净空从 1.55 m
   开始降速，到 1.25 m 停止；顶板/地面净空低于 1.30 m 时另执行 0.35 m
-  垂直脱离。更大的全方向顶板保护区曾在 1.34 m 正常顶板净空处反复停车，
+  垂直脱离。只有垂直距离不小于水平距离的回波才作为顶板/地面候选；更大的
+  全方向顶板保护区曾在 1.34 m 正常顶板净空处反复停车，
   因而只扩大前进方向的制动区。
   平行侧墙不会误触发，点云超时则立即停止。新航段首点相对 PX4 实际位置
   超过 0.60 m 会被拒绝，FAST-LIO2
@@ -115,6 +121,10 @@ Gazebo MID360S PointCloud
   实际位姿重新规划；已执行轨迹足够长时才回退，否则原地重规划，不再出现
   “安全层已停车、PCI 却一直等待到达末点”的死锁。
 - FAST-LIO2 输入跳变或速度异常时，外部视觉输出立即停止。
+- MID360S 当前仍是 Gazebo 10 Hz 整帧 ray 近似：PointCloud2 只有 XYZI，
+  FAST-LIO2 仿真入口将逐点相对时间置零，因此没有真实逐点扫描运动畸变
+  与去畸变验证。急转弯下的定位和净空结果可能偏乐观；本轮先不改动这条
+  高影响链路，不能据此宣称真机快转定位误差一定很小。
 - 外部视觉严格按 FAST-LIO2 的 10 Hz 新帧逐帧发送，不再把同一帧以 30 Hz
   重复灌入 PX4；处理延迟由隔离 1018 空机架的 `EKF2_EV_DELAY` 明确补偿。
 - 单次低信息增益或一次全局 frontier 未命中不会自动判定“探索完成”并执行
@@ -134,6 +144,7 @@ Gazebo MID360S PointCloud
 ```bash
 vcs import < dependencies.repos
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-direction-reference.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-short-path-gain.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 
@@ -143,3 +154,6 @@ git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.p
 最新提速验证见 [VALIDATION_2026-09-26.md](VALIDATION_2026-09-26.md)；原始
 0.5 m/s 验收见 [VALIDATION_2026-09-25.md](VALIDATION_2026-09-25.md)，早期
 问题定位过程保留在 [VALIDATION_2026-09-24.md](VALIDATION_2026-09-24.md)。
+同日后续复核发现 0.85 m/s 试验净空仅 1.0369 m，0.80 m/s 试验均速
+反降，均已回退；最终 0.70 m/s 配置在交叉口测试的最小净空为
+1.0095 m，不能视为拥有足够安全裕量或已完成真机快转验收。

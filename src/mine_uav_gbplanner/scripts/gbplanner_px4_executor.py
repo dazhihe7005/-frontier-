@@ -517,17 +517,30 @@ class GbplannerPx4Executor:
         span = self.tracking_hold_error - self.tracking_slowdown_error
         return (self.tracking_hold_error - error) / span
 
+    def _is_vertical_hazard(self, spatial_clearance, nearest_spatial_z, fresh):
+        """Only an overhead/underfoot return warrants a vertical escape.
+
+        A point slightly above the horizontal slice can still be a side wall.
+        Descending from such a return traps the vehicle in a narrow tunnel
+        while the ordinary 3-D and directional guards already protect it.
+        """
+        if not (fresh and math.isfinite(spatial_clearance) and
+                math.isfinite(nearest_spatial_z)):
+            return False
+        height = abs(nearest_spatial_z)
+        lateral = math.sqrt(max(0.0, spatial_clearance**2-height**2))
+        return (height > self.proximity_z_max and height >= lateral and
+                spatial_clearance <=
+                self.safety_radius + self.vertical_avoidance_margin)
+
     def _proximity_scale(self, clearance, spatial_clearance, path_margin,
                          nearest_spatial_z, fresh, recovery_active=False,
                          frontier_approach=False):
         """Brake before motion intersects the live 1 m lidar envelope."""
         if not fresh:
             return 0.0
-        vertical_hazard = (
-            math.isfinite(nearest_spatial_z) and
-            abs(nearest_spatial_z) > self.proximity_z_max and
-            spatial_clearance <=
-            self.safety_radius + self.vertical_avoidance_margin)
+        vertical_hazard = self._is_vertical_hazard(
+            spatial_clearance, nearest_spatial_z, fresh)
         if vertical_hazard:
             # A blind backtrack can include a small climb or descent and make
             # a floor/ceiling hazard worse.  Stop every trajectory mode here;
@@ -713,11 +726,8 @@ class GbplannerPx4Executor:
             proximity_fresh,
             recovery_active,
             frontier_approach)
-        vertical_detected = (
-            proximity_fresh and math.isfinite(nearest_spatial_z) and
-            abs(nearest_spatial_z) > self.proximity_z_max and
-            spatial_clearance <=
-            self.safety_radius + self.vertical_avoidance_margin)
+        vertical_detected = self._is_vertical_hazard(
+            spatial_clearance, nearest_spatial_z, proximity_fresh)
         vertical_release_clearance = (
             self.safety_radius + self.vertical_avoidance_margin + 0.15)
         vertical_escape_pending = (

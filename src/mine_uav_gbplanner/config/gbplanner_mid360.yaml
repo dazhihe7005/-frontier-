@@ -157,6 +157,12 @@ PlanningParams:
   # score (not a +X gate), so a higher-gain branch or required retreat remains
   # reachable while near-equal candidates no longer cause immediate U-turns.
   path_direction_penalty: 0.30
+  # Softly down-rank tiny local loops; never reject a short branch outright.
+  short_path_gain_scale_length: 1.5
+  # Soft recency penalty for viewpoints that repeatedly fail to reveal new
+  # free space. This never bypasses unknown/occupied collision checks.
+  recent_viewpoint_penalty_radius: 0.75
+  recent_viewpoint_penalty_weight: 1.5
   occupied_voxel_gain: 0.0
   free_voxel_gain:  0.0 # prefer directions towards more free voxels in case of the dead-end
   unknown_voxel_gain: 60.0

@@ -1,0 +1,164 @@
+diff --git a/gbplanner/include/gbplanner/rrg.h b/gbplanner/include/gbplanner/rrg.h
+index 747a6cd..eabc724 100644
+--- a/gbplanner/include/gbplanner/rrg.h
++++ b/gbplanner/include/gbplanner/rrg.h
+@@ -483,6 +483,10 @@ class Rrg {
+   //
+   std::shared_ptr<RobotStateHistory> robot_state_hist_;
+ 
++  // Recently commanded viewpoints, including ones rejected by the executor.
++  // A bounded history discourages repeatedly requesting the same scan pose.
++  std::vector<Eigen::Vector3d> recent_selected_viewpoints_;
++
+   std::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> obs_pcl_;
+ 
+   std::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> feasible_corridor_pcl_;
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+index 208c4c1..531b576 100644
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1,5 +1,6 @@
+ #include "gbplanner/rrg.h"
+ 
++#include <algorithm>
+ #include <opencv2/highgui.hpp>
+ #include <opencv2/opencv.hpp>
+ #include <pcl/common/transforms.h>
+@@ -1451,6 +1452,9 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+   double best_gain = 0;
+   int best_path_id = 0;
+   int num_leaf_vertices = leaf_vertices.size();
++  double longest_candidate_length = 0.0;
++  double selected_candidate_length = 0.0;
++  int candidates_over_two_meters = 0;
+   bool frontier_exists = false;
+   std::vector<int> negative_edge_leafs;
+   std::vector<Eigen::Vector3d> inadmissible_negative_edges;
+@@ -1461,6 +1465,11 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+     int path_size = path.size();
+     int num_unknown_voxels = 0;
+     if (path_size > 1) {
++      const double candidate_length = local_graph_->getShortestDistance(
++          id, local_graph_rep_);
++      longest_candidate_length = std::max(longest_candidate_length,
++                                          candidate_length);
++      if (candidate_length >= 2.0) ++candidates_over_two_meters;
+       // At least 2 vertices: root + leaf.
+       double path_gain = 0;
+       double lambda = planning_params_.path_length_penalty;
+@@ -1514,13 +1523,48 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+               path_list, exploring_direction_, 0.2, true);
+       path_gain *= exp(-lambda2 * fw_ratio);
+ 
++      // A succession of 0.3-0.5 m high-gain branches can keep a flying robot
++      // orbiting the takeoff point while a useful corridor is already mapped.
++      // Prefer comparable longer candidates without rejecting a short path
++      // when it is the only safe way through a bend or around an obstacle.
++      if (planning_params_.short_path_gain_scale_length > 0.0) {
++        const double progress = local_graph_->getShortestDistance(
++            id, local_graph_rep_);
++        path_gain *= std::min(
++            1.0, std::max(0.0, progress) /
++                     planning_params_.short_path_gain_scale_length);
++      }
++
++      if (candidate_length < 2.0 &&
++          planning_params_.recent_viewpoint_penalty_radius > 0.0 &&
++          planning_params_.recent_viewpoint_penalty_weight > 0.0) {
++        const Eigen::Vector3d endpoint = leaf_vertices[i]->state.head(3);
++        double repeat_cost = 0.0;
++        for (const Eigen::Vector3d& old : recent_selected_viewpoints_) {
++          const double distance = (endpoint - old).norm();
++          repeat_cost += std::max(
++              0.0, 1.0 - distance /
++                       planning_params_.recent_viewpoint_penalty_radius);
++        }
++        path_gain *= std::exp(
++            -planning_params_.recent_viewpoint_penalty_weight * repeat_cost);
++      }
++
+       if (path_gain > best_gain) {
+         best_gain = path_gain;
+         best_path_id = id;
++        selected_candidate_length = candidate_length;
+       }
+     }
+   }
+ 
++  if (planner_trigger_count_ <= 20) {
++    ROS_WARN("STARTUP_CANDIDATES trigger=%d leaves=%d over2m=%d longest=%.2f selected=%.2f score=%.3f",
++             planner_trigger_count_, num_leaf_vertices,
++             candidates_over_two_meters, longest_candidate_length,
++             selected_candidate_length, best_gain);
++  }
++
+   if (planning_params_.auto_global_planner_enable) {
+     if (!frontier_exists) {
+       ++num_low_gain_iters_;
+@@ -1557,6 +1601,13 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+           local_graph_->getVertex(path[i + 1]);
+     }
+     best_vertex_ = local_graph_->getVertex(path[0]);
++    if (planning_params_.recent_viewpoint_penalty_radius > 0.0) {
++      recent_selected_viewpoints_.push_back(best_vertex_->state.head(3));
++      if (recent_selected_viewpoints_.size() > 12) {
++        recent_selected_viewpoints_.erase(
++            recent_selected_viewpoints_.begin());
++      }
++    }
+     //
+     ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Best path: with gain [%f] and ID [%d] ", best_gain, best_path_id);
+     gstatus = Rrg::GraphStatus::OK;
+diff --git a/planner_common/include/planner_common/params.h b/planner_common/include/planner_common/params.h
+index f274a62..9e69cdb 100644
+--- a/planner_common/include/planner_common/params.h
++++ b/planner_common/include/planner_common/params.h
+@@ -298,6 +298,9 @@ struct PlanningParams {
+   double unknown_voxel_gain;
+   double path_length_penalty;
+   double path_direction_penalty;
++  double short_path_gain_scale_length;
++  double recent_viewpoint_penalty_radius;
++  double recent_viewpoint_penalty_weight;
+   double hanging_vertex_penalty;
+   bool leafs_only_for_volumetric_gain;
+   bool cluster_vertices_for_gain;
+diff --git a/planner_common/src/params.cpp b/planner_common/src/params.cpp
+index 4ecc6e0..2026a57 100644
+--- a/planner_common/src/params.cpp
++++ b/planner_common/src/params.cpp
+@@ -1,5 +1,7 @@
+ #include "planner_common/params.h"
+ 
++#include <algorithm>
++
+ bool SensorParamsBase::loadParams(std::string ns) {
+   ROSPARAM_INFO("Loading: " + ns);
+   std::string param_name;
+@@ -951,6 +953,26 @@ bool PlanningParams::loadParams(std::string ns) {
+     ROSPARAM_WARN(param_name, path_direction_penalty);
+   }
+ 
++  param_name = ns + "/short_path_gain_scale_length";
++  if (!ros::param::get(param_name, short_path_gain_scale_length)) {
++    short_path_gain_scale_length = 0.0;  // disabled by default
++    ROSPARAM_WARN(param_name, short_path_gain_scale_length);
++  }
++  short_path_gain_scale_length = std::max(0.0, short_path_gain_scale_length);
++
++  param_name = ns + "/recent_viewpoint_penalty_radius";
++  if (!ros::param::get(param_name, recent_viewpoint_penalty_radius)) {
++    recent_viewpoint_penalty_radius = 0.0;
++  }
++  recent_viewpoint_penalty_radius = std::max(
++      0.0, recent_viewpoint_penalty_radius);
++  param_name = ns + "/recent_viewpoint_penalty_weight";
++  if (!ros::param::get(param_name, recent_viewpoint_penalty_weight)) {
++    recent_viewpoint_penalty_weight = 0.0;
++  }
++  recent_viewpoint_penalty_weight = std::max(
++      0.0, recent_viewpoint_penalty_weight);
++
+   param_name = ns + "/hanging_vertex_penalty";
+   if (!ros::param::get(param_name, hanging_vertex_penalty)) {
+     hanging_vertex_penalty = 0.0;  // no penalty
