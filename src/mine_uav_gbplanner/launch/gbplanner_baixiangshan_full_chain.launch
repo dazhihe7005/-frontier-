@@ -12,6 +12,13 @@
   <arg name="frontier_percentage_threshold" default="0.04"/>
   <arg name="planner_trigger_lead_time" default="0.4"/>
   <arg name="planner_vertical_collision_extension" default="0.700"/>
+  <!-- Diagnostic A/B only: shorter sampling edges retain the 1 m collision
+       sphere. They do not by themselves establish safety or coverage. -->
+  <arg name="planner_edge_length_max" default="2.0"/>
+  <!-- Soft, opt-in A/B preference for unflown viewpoints; no +X or hard
+       branch filter. The safety sphere remains authoritative. -->
+  <arg name="visited_endpoint_penalty_radius" default="0.0"/>
+  <arg name="visited_endpoint_penalty_weight" default="0.0"/>
   <!-- Fail closed by default. The previous box mode missed a 1 m mesh
        violation; explicitly pass radius:=0 only for isolated A/B diagnosis. -->
   <arg name="planner_collision_sphere_radius" default="1.0"/>
@@ -22,6 +29,8 @@
   <arg name="voxblox_use_freespace" default="true"/>
   <arg name="ray_snapshot_sim_time" default="32.0"/>
   <arg name="tsdf_snapshot_sim_time" default="32.0"/>
+  <arg name="tsdf_snapshot_bounds" default="[-1.0, 10.0, -6.0, 2.0, -1.0, 5.0]"/>
+  <arg name="tsdf_snapshot_x_range" default="[]"/>
   <!-- Safety gate: current 1 m radius trials have only centimetres of
        clearance reserve and have not passed full-map acceptance. -->
   <arg name="allow_auto_arm" default="false"/>
@@ -146,6 +155,11 @@
     <!-- The 1 m sphere/capsule check deliberately stops on unknown roof voxels.
          The legacy box is not certified for the requested 1 m radius. -->
     <param name="collision_sphere_radius_m" value="$(arg planner_collision_sphere_radius)"/>
+    <param name="PlanningParams/edge_length_max" value="$(arg planner_edge_length_max)"/>
+    <param name="PlanningParams/nearest_range" value="$(arg planner_edge_length_max)"/>
+    <param name="PlanningParams/nearest_range_max" value="$(arg planner_edge_length_max)"/>
+    <param name="PlanningParams/visited_endpoint_penalty_radius" value="$(arg visited_endpoint_penalty_radius)"/>
+    <param name="PlanningParams/visited_endpoint_penalty_weight" value="$(arg visited_endpoint_penalty_weight)"/>
     <param name="strict_final_path_check" value="$(arg planner_strict_final_path_check)"/>
     <param name="surveyed_launch_backtrack_m" value="$(arg surveyed_launch_backtrack_m)"/>
     <!-- Experimental rectangular-box A/B: physical height 0.5 m plus
@@ -250,6 +264,8 @@
         type="diagnostic_tsdf_snapshot.py" name="diagnostic_tsdf_snapshot"
         output="screen">
     <param name="target_sim_time" value="$(arg tsdf_snapshot_sim_time)"/>
+    <rosparam param="bounds" subst_value="true">$(arg tsdf_snapshot_bounds)</rosparam>
+    <rosparam param="planner_x_range" subst_value="true">$(arg tsdf_snapshot_x_range)</rosparam>
   </node>
 
   <!-- If local and global frontier selection both return empty, retreat one

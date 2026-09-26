@@ -12,6 +12,18 @@ SPEC.loader.exec_module(GEOMETRY)
 
 
 class ReverseObservedPathTests(unittest.TestCase):
+    def test_blocked_path_replans_before_backtracking(self):
+        decide = GEOMETRY.blocked_path_needs_backtrack
+        self.assertFalse(decide(None, (0, 0, 0), 2.0))
+        self.assertTrue(decide((0, 0, 0), (0.5, 0, 0), 2.0))
+        self.assertFalse(decide((0, 0, 0), (2.5, 0, 0), 2.0))
+
+    def test_vertical_escape_does_not_count_as_exploration_progress(self):
+        self.assertAlmostEqual(GEOMETRY.horizontal_progress(
+            (1.0, 2.0, 0.0), (1.0, 2.0, 1.0)), 0.0)
+        self.assertAlmostEqual(GEOMETRY.horizontal_progress(
+            (1.0, 2.0, 0.0), (1.6, 2.8, 1.0)), 1.0)
+
     def test_reverses_actual_history_without_altitude_excursion(self):
         history = [(i*0.1, 0.0, 1.0) for i in range(12)]
         points, travelled = GEOMETRY.reverse_observed_path(

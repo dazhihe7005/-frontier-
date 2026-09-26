@@ -28,7 +28,8 @@ from trajectory_msgs.msg import (MultiDOFJointTrajectory,
                                  MultiDOFJointTrajectoryPoint)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from recovery_path_geometry import distance, reverse_observed_path
+from recovery_path_geometry import (blocked_path_needs_backtrack, distance,
+                                    horizontal_progress, reverse_observed_path)
 
 
 RECOVERY_JOINT = "gbplanner_stall_recovery_backtrack"
@@ -59,6 +60,16 @@ class StallRecovery:
         self._recovery_seq = 0
         self._backtrack_published_at = rospy.Time(0)
         self._backtrack_blocked_since = rospy.Time(0)
+        self._blocked_retry_origin = None
+        self._blocked_retry_reset_distance = max(
+            0.5, float(rospy.get_param("~blocked_retry_reset_distance", 2.0)))
+        self._stagnation_seconds = max(
+            15.0, float(rospy.get_param("~stagnation_seconds", 30.0)))
+        self._stagnation_progress_m = max(
+            0.3, float(rospy.get_param("~stagnation_progress_m", 0.75)))
+        self._stagnation_anchor = None
+        self._stagnation_since = rospy.Time(0)
+        self._executor_streaming = False
 
         self._trajectory_pub = rospy.Publisher(
             "/gbplanner/command/trajectory", MultiDOFJointTrajectory,
@@ -82,6 +93,65 @@ class StallRecovery:
         rospy.Subscriber("/mavros/state", State, self._state_cb, queue_size=5)
         rospy.Subscriber("/mine_uav/gbplanner/mission_status", String,
                          self._mission_cb, queue_size=2)
+        rospy.Subscriber("/mine_uav/gbplanner/executor_status", String,
+                         self._executor_status_cb, queue_size=2)
+        rospy.Timer(rospy.Duration(1.0), self._stagnation_cb)
+
+    def _executor_status_cb(self, message):
+        with self._lock:
+            self._executor_streaming = message.data == "STREAMING_TO_PX4"
+
+    def _stagnation_cb(self, _event):
+        start_worker = False
+        backtrack = False
+        with self._lock:
+            ready = (self._mission_started and self._vision_healthy and
+                     self._state.connected and self._state.armed and
+                     self._state.mode == "OFFBOARD" and
+                     self._executor_streaming and self._odom is not None and
+                     not self._recovering)
+            if not ready:
+                self._stagnation_anchor = None
+                self._stagnation_since = rospy.Time(0)
+                return
+            p = self._odom.pose.pose.position
+            xyz = (p.x, p.y, p.z)
+            if not all(math.isfinite(value) for value in xyz):
+                self._stagnation_anchor = None
+                self._stagnation_since = rospy.Time(0)
+                return
+            now = rospy.Time.now()
+            if (self._stagnation_anchor is None or
+                    horizontal_progress(self._stagnation_anchor, xyz) >=
+                    self._stagnation_progress_m):
+                self._stagnation_anchor = xyz
+                self._stagnation_since = now
+                return
+            if (now-self._stagnation_since).to_sec() < self._stagnation_seconds:
+                return
+            self._stagnation_anchor = xyz
+            self._stagnation_since = now
+            backtrack = blocked_path_needs_backtrack(
+                self._blocked_retry_origin, xyz,
+                self._blocked_retry_reset_distance)
+            if not backtrack:
+                self._blocked_retry_origin = xyz
+            self._recovering = True
+            start_worker = True
+        if start_worker:
+            if backtrack:
+                rospy.logwarn("GBPlanner stagnated %.1fs with less than %.2fm "
+                              "horizontal progress; backtracking observed path",
+                              self._stagnation_seconds,
+                              self._stagnation_progress_m)
+                threading.Thread(target=self._recover, daemon=True).start()
+            else:
+                rospy.logwarn("GBPlanner stagnated %.1fs with less than %.2fm "
+                              "horizontal progress; replanning from pose",
+                              self._stagnation_seconds,
+                              self._stagnation_progress_m)
+                threading.Thread(target=self._replan_blocked,
+                                 daemon=True).start()
 
     def _odom_cb(self, message):
         with self._lock:
@@ -122,6 +192,9 @@ class StallRecovery:
         with self._lock:
             if started != self._mission_started:
                 self._history.clear()
+                self._blocked_retry_origin = None
+                self._stagnation_anchor = None
+                self._stagnation_since = rospy.Time(0)
             self._mission_started = started
 
     def _status_cb(self, message):
@@ -145,6 +218,7 @@ class StallRecovery:
 
     def _blocked_cb(self, message):
         start_worker = False
+        backtrack = False
         with self._lock:
             if self._recovering:
                 # The path was collision-checked when first flown, not at
@@ -163,11 +237,40 @@ class StallRecovery:
                          self._state.connected and
                          self._state.armed and self._state.mode == "OFFBOARD")
                 if ready:
+                    p = self._odom.pose.pose.position
+                    xyz = (p.x, p.y, p.z)
+                    if not all(math.isfinite(value) for value in xyz):
+                        return
+                    backtrack = blocked_path_needs_backtrack(
+                        self._blocked_retry_origin, xyz,
+                        self._blocked_retry_reset_distance)
+                    if not backtrack:
+                        self._blocked_retry_origin = xyz
+                    self._stagnation_anchor = xyz
+                    self._stagnation_since = rospy.Time.now()
                     self._recovering = True
                     start_worker = True
         if start_worker:
-            rospy.logwarn("Live MID360 guard blocked execution; replanning")
-            threading.Thread(target=self._recover, daemon=True).start()
+            if backtrack:
+                rospy.logwarn("Live MID360 guard blocked a retried region; "
+                              "backtracking on observed odometry")
+                threading.Thread(target=self._recover, daemon=True).start()
+            else:
+                rospy.logwarn("Live MID360 guard blocked execution; "
+                              "replanning first from measured pose")
+                threading.Thread(target=self._replan_blocked,
+                                 daemon=True).start()
+
+    def _replan_blocked(self):
+        try:
+            self._restart_without_motion("first guard stop in region")
+        except (rospy.ROSException, rospy.ServiceException) as error:
+            rospy.logerr("GBPlanner blocked-path replan failed: %s", error)
+        finally:
+            with self._lock:
+                self._recovering = False
+                self._stagnation_anchor = None
+                self._stagnation_since = rospy.Time(0)
 
     def _restart_without_motion(self, reason):
         rospy.wait_for_service(
@@ -319,6 +422,8 @@ class StallRecovery:
             with self._lock:
                 self._empty_count = 0
                 self._recovering = False
+                self._stagnation_anchor = None
+                self._stagnation_since = rospy.Time(0)
                 self._backtrack_published_at = rospy.Time(0)
                 self._backtrack_blocked_since = rospy.Time(0)
                 self._history.clear()

@@ -1,0 +1,84 @@
+diff --git a/planner_common/include/planner_common/params.h b/planner_common/include/planner_common/params.h
+--- a/planner_common/include/planner_common/params.h
++++ b/planner_common/include/planner_common/params.h
+@@ -303,4 +303,6 @@ struct PlanningParams {
+   double recent_viewpoint_penalty_radius;
+   double recent_viewpoint_penalty_weight;
++  double visited_endpoint_penalty_radius;
++  double visited_endpoint_penalty_weight;
+   double hanging_vertex_penalty;
+   bool leafs_only_for_volumetric_gain;
+diff --git a/planner_common/src/params.cpp b/planner_common/src/params.cpp
+--- a/planner_common/src/params.cpp
++++ b/planner_common/src/params.cpp
+@@ -978,6 +978,19 @@ bool PlanningParams::loadParams(std::string ns) {
+   recent_viewpoint_penalty_weight = std::max(
+       0.0, recent_viewpoint_penalty_weight);
+ 
++  param_name = ns + "/visited_endpoint_penalty_radius";
++  if (!ros::param::get(param_name, visited_endpoint_penalty_radius)) {
++    visited_endpoint_penalty_radius = 0.0;
++  }
++  visited_endpoint_penalty_radius = std::max(
++      0.0, visited_endpoint_penalty_radius);
++  param_name = ns + "/visited_endpoint_penalty_weight";
++  if (!ros::param::get(param_name, visited_endpoint_penalty_weight)) {
++    visited_endpoint_penalty_weight = 0.0;
++  }
++  visited_endpoint_penalty_weight = std::max(
++      0.0, visited_endpoint_penalty_weight);
++
+   param_name = ns + "/hanging_vertex_penalty";
+   if (!ros::param::get(param_name, hanging_vertex_penalty)) {
+     hanging_vertex_penalty = 0.0;  // no penalty
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1609,7 +1609,26 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+         path_gain *= std::exp(
+             -planning_params_.recent_viewpoint_penalty_weight * repeat_cost);
+       }
+ 
++      // Prefer a genuinely new viewpoint over an equally valuable endpoint
++      // already flown through. This is a soft score only: returning to a
++      // branch remains possible when no better safe frontier is available.
++      if (planning_params_.visited_endpoint_penalty_radius > 0.0 &&
++          planning_params_.visited_endpoint_penalty_weight > 0.0) {
++        StateVec* visited = nullptr;
++        if (robot_state_hist_->getNearestState(
++                &(leaf_vertices[i]->state), &visited) && visited != nullptr) {
++          const double visit_distance =
++              (leaf_vertices[i]->state.head(3) - visited->head(3)).norm();
++          const double repeat_fraction = std::max(
++              0.0, 1.0 - visit_distance /
++                           planning_params_.visited_endpoint_penalty_radius);
++          path_gain *= std::exp(
++              -planning_params_.visited_endpoint_penalty_weight *
++              repeat_fraction);
++        }
++      }
++
+       if (path_gain > best_gain) {
+         best_gain = path_gain;
+         best_path_id = id;
+@@ -1662,3 +1681,11 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+     }
+     best_vertex_ = local_graph_->getVertex(path[0]);
++    StateVec* nearest_visited = nullptr;
++    double visited_distance = -1.0;
++    if (robot_state_hist_->getNearestState(&best_vertex_->state,
++                                           &nearest_visited) &&
++        nearest_visited != nullptr) {
++      visited_distance =
++          (best_vertex_->state.head(3) - nearest_visited->head(3)).norm();
++    }
+     ROS_WARN("LOCAL_PATH_SELECTED current=(%.2f,%.2f,%.2f) root=(%.2f,%.2f,%.2f) goal=(%.2f,%.2f,%.2f) score=%.1f frontier=%d",
+@@ -1667,4 +1694,8 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+              best_vertex_->state[1], best_vertex_->state[2],
+              best_gain, frontier_exists);
++    ROS_WARN("LOCAL_PATH_NOVELTY goal_frontier=%d visited_distance=%.2f penalty_radius=%.2f penalty_weight=%.2f",
++             best_vertex_->vol_gain.is_frontier, visited_distance,
++             planning_params_.visited_endpoint_penalty_radius,
++             planning_params_.visited_endpoint_penalty_weight);
+     if (planning_params_.recent_viewpoint_penalty_radius > 0.0) {
+       recent_selected_viewpoints_.push_back(best_vertex_->state.head(3));

@@ -173,6 +173,7 @@ git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-strict-fin
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-rejection-diagnostic.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-map.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-rrg.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-visited-endpoint-soft-penalty.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 

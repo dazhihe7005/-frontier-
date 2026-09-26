@@ -8,6 +8,19 @@ def distance(left, right):
     return math.dist(left, right)
 
 
+def blocked_path_needs_backtrack(previous_retry, current, reset_distance):
+    """Try a fresh plan once; retrace only on a repeated nearby guard stop."""
+    if reset_distance <= 0:
+        raise ValueError("invalid retry reset distance")
+    return (previous_retry is not None and
+            distance(previous_retry, current) < reset_distance)
+
+
+def horizontal_progress(anchor, current):
+    """Ignore vertical escape oscillation when testing exploration progress."""
+    return math.hypot(current[0]-anchor[0], current[1]-anchor[1])
+
+
 def reverse_observed_path(current, history, max_distance=6.0,
                           max_gap=0.30, min_step=0.05):
     """Return [current, ...] along dense observed poses, never commands.
