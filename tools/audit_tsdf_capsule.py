@@ -65,6 +65,8 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
     counts = {"known_free": 0, "known_occupied": 0,
               "unknown_in_csv": 0, "outside_snapshot": 0}
     examples = {}
+    unknown_by_z_index = {}
+    unknown_examples = []
     minimum_occupied_center_distance = math.inf
     for ix in range(first[0], last[0]+1):
         for iy in range(first[1], last[1]+1):
@@ -89,6 +91,14 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
                 else:
                     kind = "known_free"
                 counts[kind] += 1
+                if kind == "unknown_in_csv":
+                    unknown_by_z_index[str(iz)] = (
+                        unknown_by_z_index.get(str(iz), 0) + 1)
+                    if len(unknown_examples) < 20:
+                        unknown_examples.append({
+                            "center_m": center,
+                            "center_to_capsule_axis_m": round(center_distance, 5),
+                        })
                 if kind not in examples:
                     examples[kind] = {
                         "index": index, "center_m": center,
@@ -102,6 +112,8 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
         "expanded_center_test_radius_m": round(expanded, 5),
         "occupancy_tsdf_threshold_m": occupied_distance,
         "counts": counts, "first_examples_in_cpp_scan_order": examples,
+        "unknown_by_z_index": unknown_by_z_index,
+        "unknown_examples": unknown_examples,
         "min_known_occupied_center_to_axis_m": (
             round(minimum_occupied_center_distance, 5)
             if math.isfinite(minimum_occupied_center_distance) else None),

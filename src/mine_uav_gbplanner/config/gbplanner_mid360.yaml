@@ -30,13 +30,15 @@ SensorParams:
   MID360S:
     type:           kLidar
     max_range:      29.5
-    center_offset:  [0.1315, 0.0, 0.203]
-    # GBPlanner's lidar model is symmetric around its optical centre.  A
-    # native -7..+52 deg MID360S cone has a +22.5 deg optical-centre offset.
-    # Combined with the 25 deg downward housing mount, its body-frame centre
-    # points only 2.5 deg down, with the real 59 deg vertical aperture.
-    rotations:      [0.0, 0.0436332313, 0.0]
+    center_offset:  [0.1315, 0.0, 0.223]
+    # Preserve the native asymmetric -7..+52 deg sensor-frame aperture and
+    # the physical +25 deg housing pitch. A 360-deg scan cannot approximate
+    # this by one body-frame elevation centre: forward and backward rays
+    # have very different body-frame vertical reach.
+    rotations:      [0.0, 0.436332313, 0.0]
     fov:            [rad(2*pi), rad(59.0*pi/180)]
+    lidar_vertical_center_offset: rad(22.5*pi/180)
+    spherical_lidar_rays: true
     resolution:     [rad(5.0*pi/180), rad(5.0*pi/180)]
     frontier_percentage_threshold: 0.04
 #-------------------------------------------------------------------------------

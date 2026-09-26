@@ -152,7 +152,7 @@
         name="fastlio_voxblox_adapter" output="screen" required="true">
     <param name="world_frame" value="camera_init"/>
     <param name="sensor_frame" value="gbplanner_mid360"/>
-    <rosparam param="sensor_offset">[0.1315, 0.0, 0.203]</rosparam>
+    <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
     <param name="sensor_pitch" value="0.436332313"/>
     <param name="self_filter_radius" value="0.65"/>
     <param name="self_filter_z_min" value="-0.32"/>

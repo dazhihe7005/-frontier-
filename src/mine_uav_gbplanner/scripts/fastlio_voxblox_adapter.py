@@ -42,7 +42,7 @@ class FastlioVoxbloxAdapter:
         self.world_frame = rospy.get_param("~world_frame", "camera_init")
         self.sensor_frame = rospy.get_param("~sensor_frame", "gbplanner_mid360")
         self.sensor_offset = tuple(float(v) for v in rospy.get_param(
-            "~sensor_offset", [0.1315, 0.0, 0.203]))
+            "~sensor_offset", [0.1315, 0.0, 0.223]))
         sensor_pitch = float(rospy.get_param("~sensor_pitch", 0.436332313))
         self.sensor_q = (0.0, math.sin(0.5*sensor_pitch), 0.0,
                          math.cos(0.5*sensor_pitch))

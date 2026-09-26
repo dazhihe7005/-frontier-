@@ -1,0 +1,1218 @@
+diff --git a/gbplanner/include/gbplanner/rrg.h b/gbplanner/include/gbplanner/rrg.h
+index 747a6cd..9e0823b 100644
+--- a/gbplanner/include/gbplanner/rrg.h
++++ b/gbplanner/include/gbplanner/rrg.h
+@@ -472,6 +472,9 @@ class Rrg {
+ 
+   bool homing_engaged_ = false;
+   bool landing_engaged_ = false;
++  bool strict_final_path_check_ = false;
++  double surveyed_launch_backtrack_m_ = 0.0;
++  bool surveyed_launch_seed_attempted_ = false;
+ 
+   //
+   bool add_frontiers_to_global_graph_;
+@@ -483,6 +486,10 @@ class Rrg {
+   //
+   std::shared_ptr<RobotStateHistory> robot_state_hist_;
+ 
++  // Recently commanded viewpoints, including ones rejected by the executor.
++  // A bounded history discourages repeatedly requesting the same scan pose.
++  std::vector<Eigen::Vector3d> recent_selected_viewpoints_;
++
+   std::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> obs_pcl_;
+ 
+   std::shared_ptr<pcl::PointCloud<pcl::PointXYZ>> feasible_corridor_pcl_;
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+index 208c4c1..46b8a06 100644
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -1,5 +1,6 @@
+ #include "gbplanner/rrg.h"
+ 
++#include <algorithm>
+ #include <opencv2/highgui.hpp>
+ #include <opencv2/opencv.hpp>
+ #include <pcl/common/transforms.h>
+@@ -30,6 +31,16 @@ Rrg::Rrg(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private,
+ }
+ 
+ void Rrg::initializeAttributes() {
++  nh_private_.param("strict_final_path_check", strict_final_path_check_,
++                    false);
++  nh_private_.param("surveyed_launch_backtrack_m",
++                    surveyed_launch_backtrack_m_, 0.0);
++  if (!std::isfinite(surveyed_launch_backtrack_m_) ||
++      surveyed_launch_backtrack_m_ < 0.0 ||
++      surveyed_launch_backtrack_m_ > 3.0) {
++    ROS_ERROR("surveyed_launch_backtrack_m must be in [0, 3] m; disabling prior");
++    surveyed_launch_backtrack_m_ = 0.0;
++  }
+   visualization_ = new Visualization(nh_, nh_private_);
+ 
+   geofence_manager_.reset(new GeofenceManager());
+@@ -151,6 +162,25 @@ void Rrg::reset() {
+     global_graph_->addVertex(g_root_vertex);
+   }
+ 
++  if (surveyed_launch_backtrack_m_ > 0.0 &&
++      !surveyed_launch_seed_attempted_) {
++    surveyed_launch_seed_attempted_ = true;
++    if (map_manager_->collisionSphereRadius() < 1.0 ||
++        !strict_final_path_check_) {
++      ROS_ERROR("Surveyed launch backtrack requires 1 m sphere and strict final path checks; prior not seeded");
++    } else {
++      const Eigen::Vector3d end = root_state.head(3) +
++                                  robot_params_.center_offset;
++      const double yaw = root_state[3];
++      const Eigen::Vector3d start = end - surveyed_launch_backtrack_m_ *
++          Eigen::Vector3d(std::cos(yaw), std::sin(yaw), 0.0);
++      if (!map_manager_->augmentSurveyedFreeCapsule(
++              start, end, map_manager_->collisionSphereRadius())) {
++        ROS_ERROR("Surveyed launch backtrack rejected; planner remains fail-closed");
++      }
++    }
++  }
++
+   // First check if this position is free to go.
+   MapManager::VoxelStatus voxel_state = map_manager_->getBoxStatus(
+       Eigen::Vector3d(root_state[0], root_state[1], root_state[2]) +
+@@ -576,6 +606,11 @@ void Rrg::expandGraph(std::shared_ptr<GraphManager> graph_manager,
+         map_manager_->getPathStatus(start_pos, end_pos, robot_box_size_, true);
+     if (MapManager::VoxelStatus::kFree == vs) {
+       admissible_edge = true;
++    } else if (graph_manager == local_graph_ && nearest_vertex->id == 0) {
++      ROS_WARN_THROTTLE(5.0,
++          "GBPLANNER_ROOT_EDGE_REJECTED status=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++          static_cast<int>(vs), start_pos.x(), start_pos.y(), start_pos.z(),
++          end_pos.x(), end_pos.y(), end_pos.z());
+     }
+   } else if (robot_params_.type == RobotType::kGroundRobot) {
+     std::vector<Eigen::Vector3d> projected_edge;
+@@ -837,6 +872,11 @@ void Rrg::expandGraph(std::shared_ptr<GraphManager> graph_manager,
+         map_manager_->getPathStatus(start_pos, end_pos, robot_box_size_, true);
+     if (MapManager::VoxelStatus::kFree == vs) {
+       admissible_edge = true;
++    } else if (graph_manager == local_graph_ && nearest_vertex->id == 0) {
++      ROS_WARN_THROTTLE(5.0,
++          "GBPLANNER_ROOT_EDGE_REJECTED_VERTEX status=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++          static_cast<int>(vs), start_pos.x(), start_pos.y(), start_pos.z(),
++          end_pos.x(), end_pos.y(), end_pos.z());
+     }
+   } else if (robot_params_.type == RobotType::kGroundRobot) {
+     bool is_hanging = nearest_vertex->is_hanging || new_vertex.is_hanging;
+@@ -1158,6 +1198,11 @@ Rrg::GraphStatus Rrg::buildGraph() {
+     return Rrg::GraphStatus::OK;
+   } else {
+     visualization_->visualizeFailedEdges(stat_);
++    ROS_WARN_THROTTLE(5.0,
++        "GBPLANNER_GRAPH_EMPTY root=(%.2f,%.2f,%.2f) failed_vertices=%d failed_edges=%d loops=%d",
++        root_vertex_->state[0], root_vertex_->state[1],
++        root_vertex_->state[2], stat_->num_vertices_fail,
++        stat_->num_edges_fail, loop_count);
+     ROS_INFO_COND(global_verbosity >= Verbosity::DEBUG, "Number of failed samples: [%d] vertices and [%d] edges",
+              stat_->num_vertices_fail, stat_->num_edges_fail);
+     return Rrg::GraphStatus::ERR_NO_FEASIBLE_PATH;
+@@ -1451,6 +1496,9 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+   double best_gain = 0;
+   int best_path_id = 0;
+   int num_leaf_vertices = leaf_vertices.size();
++  double longest_candidate_length = 0.0;
++  double selected_candidate_length = 0.0;
++  int candidates_over_two_meters = 0;
+   bool frontier_exists = false;
+   std::vector<int> negative_edge_leafs;
+   std::vector<Eigen::Vector3d> inadmissible_negative_edges;
+@@ -1461,6 +1509,11 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+     int path_size = path.size();
+     int num_unknown_voxels = 0;
+     if (path_size > 1) {
++      const double candidate_length = local_graph_->getShortestDistance(
++          id, local_graph_rep_);
++      longest_candidate_length = std::max(longest_candidate_length,
++                                          candidate_length);
++      if (candidate_length >= 2.0) ++candidates_over_two_meters;
+       // At least 2 vertices: root + leaf.
+       double path_gain = 0;
+       double lambda = planning_params_.path_length_penalty;
+@@ -1514,15 +1567,115 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+               path_list, exploring_direction_, 0.2, true);
+       path_gain *= exp(-lambda2 * fw_ratio);
+ 
++      // In low tunnels, repeatedly winning a little roof/floor gain by
++      // climbing or descending 0.1-0.3 m sends the vehicle into the live
++      // clearance brake. Penalize total vertical travel softly, not endpoint
++      // altitude or a fixed world direction: a necessary sloped branch is
++      // still reachable when its information gain warrants the motion.
++      if (planning_params_.vertical_travel_penalty > 0.0) {
++        double vertical_travel = 0.0;
++        for (int j = 1; j < path_size; ++j) {
++          vertical_travel += std::abs(
++              path[j]->state[2] - path[j - 1]->state[2]);
++        }
++        path_gain *= std::exp(
++            -planning_params_.vertical_travel_penalty * vertical_travel);
++      }
++
++      // A succession of 0.3-0.5 m high-gain branches can keep a flying robot
++      // orbiting the takeoff point while a useful corridor is already mapped.
++      // Prefer comparable longer candidates without rejecting a short path
++      // when it is the only safe way through a bend or around an obstacle.
++      if (planning_params_.short_path_gain_scale_length > 0.0) {
++        const double progress = local_graph_->getShortestDistance(
++            id, local_graph_rep_);
++        path_gain *= std::min(
++            1.0, std::max(0.0, progress) /
++                     planning_params_.short_path_gain_scale_length);
++      }
++
++      // Penalize repeated long blocked destinations as well as short loops.
++      if (planning_params_.recent_viewpoint_penalty_radius > 0.0 &&
++          planning_params_.recent_viewpoint_penalty_weight > 0.0) {
++        const Eigen::Vector3d endpoint = leaf_vertices[i]->state.head(3);
++        double repeat_cost = 0.0;
++        for (const Eigen::Vector3d& old : recent_selected_viewpoints_) {
++          const double distance = (endpoint - old).norm();
++          repeat_cost += std::max(
++              0.0, 1.0 - distance /
++                       planning_params_.recent_viewpoint_penalty_radius);
++        }
++        path_gain *= std::exp(
++            -planning_params_.recent_viewpoint_penalty_weight * repeat_cost);
++      }
++
++      // Prefer a genuinely new viewpoint over an equally valuable endpoint
++      // already flown through. This is a soft score only: returning to a
++      // branch remains possible when no better safe frontier is available.
++      if (planning_params_.visited_endpoint_penalty_radius > 0.0 &&
++          planning_params_.visited_endpoint_penalty_weight > 0.0) {
++        StateVec* visited = nullptr;
++        if (robot_state_hist_->getNearestState(
++                &(leaf_vertices[i]->state), &visited) && visited != nullptr) {
++          const double visit_distance =
++              (leaf_vertices[i]->state.head(3) - visited->head(3)).norm();
++          const double repeat_fraction = std::max(
++              0.0, 1.0 - visit_distance /
++                           planning_params_.visited_endpoint_penalty_radius);
++          path_gain *= std::exp(
++              -planning_params_.visited_endpoint_penalty_weight *
++              repeat_fraction);
++        }
++      }
++
+       if (path_gain > best_gain) {
+         best_gain = path_gain;
+         best_path_id = id;
++        selected_candidate_length = candidate_length;
+       }
+     }
+   }
+ 
++  if (planner_trigger_count_ <= 20) {
++    ROS_WARN("STARTUP_CANDIDATES trigger=%d leaves=%d over2m=%d longest=%.2f selected=%.2f score=%.3f",
++             planner_trigger_count_, num_leaf_vertices,
++             candidates_over_two_meters, longest_candidate_length,
++             selected_candidate_length, best_gain);
++  }
++
++  // Diagnose the winning endpoint before deciding between local and global.
++  Vertex* selected_leaf = best_gain > 0.0
++                              ? local_graph_->getVertex(best_path_id) : nullptr;
++  double selected_visit_distance = -1.0;
++  if (selected_leaf != nullptr) {
++    StateVec* nearest_visited = nullptr;
++    if (robot_state_hist_->getNearestState(&selected_leaf->state,
++                                           &nearest_visited) &&
++        nearest_visited != nullptr) {
++      selected_visit_distance =
++          (selected_leaf->state.head(3) - nearest_visited->head(3)).norm();
++    }
++  }
++
+   if (planning_params_.auto_global_planner_enable) {
+-    if (!frontier_exists) {
++    // The frustum-wide frontier percentage can be small at a genuine tight
++    // bend. Keep following a collision-checked, information-bearing local
++    // path whose endpoint has not yet been flown through. This opt-in only
++    // defers a global switch; it never relaxes collision/unknown checks.
++    const bool novel_local_progress =
++        planning_params_.defer_global_for_novel_local && !frontier_exists &&
++        selected_leaf != nullptr &&
++        selected_leaf->vol_gain.num_unknown_voxels > 0 &&
++        selected_candidate_length >= 2.0 &&
++        (selected_visit_distance < 0.0 || selected_visit_distance >= 2.0);
++    if (novel_local_progress) {
++      num_low_gain_iters_ = 0;
++      ROS_WARN("LOCAL_GLOBAL_DEFER goal=(%.2f,%.2f,%.2f) length=%.2f unknown=%d visited_distance=%.2f",
++               selected_leaf->state[0], selected_leaf->state[1],
++               selected_leaf->state[2], selected_candidate_length,
++               selected_leaf->vol_gain.num_unknown_voxels,
++               selected_visit_distance);
++    } else if (!frontier_exists) {
+       ++num_low_gain_iters_;
+       ROS_WARN_COND(global_verbosity >= Verbosity::DEBUG, "No frontier found in this round. Total rounds: %d",
+                num_low_gain_iters_);
+@@ -1557,6 +1710,24 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+           local_graph_->getVertex(path[i + 1]);
+     }
+     best_vertex_ = local_graph_->getVertex(path[0]);
++    ROS_WARN("LOCAL_PATH_SELECTED current=(%.2f,%.2f,%.2f) root=(%.2f,%.2f,%.2f) goal=(%.2f,%.2f,%.2f) score=%.1f frontier=%d",
++             current_state_[0], current_state_[1], current_state_[2],
++             root_vertex_->state[0], root_vertex_->state[1],
++             root_vertex_->state[2], best_vertex_->state[0],
++             best_vertex_->state[1], best_vertex_->state[2],
++             best_gain, frontier_exists);
++    ROS_WARN("LOCAL_PATH_NOVELTY goal_frontier=%d goal_unknown=%d visited_distance=%.2f penalty_radius=%.2f penalty_weight=%.2f",
++             best_vertex_->vol_gain.is_frontier,
++             best_vertex_->vol_gain.num_unknown_voxels, selected_visit_distance,
++             planning_params_.visited_endpoint_penalty_radius,
++             planning_params_.visited_endpoint_penalty_weight);
++    if (planning_params_.recent_viewpoint_penalty_radius > 0.0) {
++      recent_selected_viewpoints_.push_back(best_vertex_->state.head(3));
++      if (recent_selected_viewpoints_.size() > 12) {
++        recent_selected_viewpoints_.erase(
++            recent_selected_viewpoints_.begin());
++      }
++    }
+     //
+     ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Best path: with gain [%f] and ID [%d] ", best_gain, best_path_id);
+     gstatus = Rrg::GraphStatus::OK;
+@@ -1846,23 +2017,54 @@ void Rrg::addFrontiers(int best_vertex_id) {
+   std::vector<Vertex*> leaf_vertices;
+   local_graph_->getLeafVertices(leaf_vertices);
+   std::vector<Vertex*> frontier_vertices;
++  int positive_unknown_leaves = 0;
++  int max_unknown_voxels = 0;
++  double max_leaf_x = -std::numeric_limits<double>::infinity();
++  double min_leaf_x = std::numeric_limits<double>::infinity();
+   for (auto& v : leaf_vertices) {
++    if (v->vol_gain.num_unknown_voxels > 0) ++positive_unknown_leaves;
++    max_unknown_voxels = std::max(max_unknown_voxels,
++                                  v->vol_gain.num_unknown_voxels);
++    max_leaf_x = std::max(max_leaf_x, v->state[0]);
++    min_leaf_x = std::min(min_leaf_x, v->state[0]);
+     if (v->type == VertexType::kFrontier) {
+       frontier_vertices.push_back(v);
+     }
+   }
++  const auto& frontier_sensor = sensor_params_.sensor.at(
++      planning_params_.exp_sensor_list.front());
++  const double full_fov_ray_metres =
++      (frontier_sensor.fov[0] / frontier_sensor.resolution[0]) *
++      (frontier_sensor.fov[1] / frontier_sensor.resolution[1]) *
++      frontier_sensor.max_range;
++  const double max_unknown_fraction =
++      max_unknown_voxels * map_manager_->getResolution() /
++      full_fov_ray_metres;
++  ROS_WARN_THROTTLE(10.0,
++      "LOCAL_FRONTIER_AUDIT leaves=%zu frontier=%zu positive_unknown=%d max_unknown=%d max_fraction=%.5f x_span=(%.2f,%.2f) current_x=%.2f",
++      leaf_vertices.size(), frontier_vertices.size(),
++      positive_unknown_leaves, max_unknown_voxels,
++      max_unknown_fraction, min_leaf_x, max_leaf_x, current_state_[0]);
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Get %d leaf vertices from newly local graph.",
+            (int)leaf_vertices.size());
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Get %d frontiers from newly local graph.",
+            (int)frontier_vertices.size());
+ 
+   // Clustering the frontier and add principle path to the global.
++  // A 1 m principal-path cutoff discards every 0.4-0.9 m frontier around
++  // tight bends. Keep the shortest collision-checked graph edge instead.
+   std::vector<int> cluster_ids = performShortestPathsClustering(
+-      local_graph_, local_graph_rep_, frontier_vertices);
++      local_graph_, local_graph_rep_, frontier_vertices,
++      1.0, planning_params_.edge_length_min, true);
+   visualization_->visualizeClusteredPaths(local_graph_, local_graph_rep_,
+                                           frontier_vertices, cluster_ids);
+-  const double kRangeCheck = 1.0;
+-  const double kUpdateRadius = 3.0;
++  const double kRangeCheck = 0.35;
++  // A nearby visited state is not evidence that a side branch has been seen.
++  const double kUpdateRadius = 0.50;
++  int skipped_near_graph = 0;
++  int skipped_near_history = 0;
++  int added_frontier_paths = 0;
++  int promoted_near_graph = 0;
+   for (int i = 0; i < cluster_ids.size(); ++i) {
+     Vertex* nearest_vertex = NULL;
+     // To add principal path, verify if around that area already have vertices
+@@ -1883,9 +2085,27 @@ void Rrg::addFrontiers(int best_vertex_id) {
+           (*pa)->type = VertexType::kUnvisited;
+         }
+         addRefPathToGraph(global_graph_, path);
++        ++added_frontier_paths;
++      } else {
++        ++skipped_near_history;
++      }
++    } else {
++      ++skipped_near_graph;
++      // Reuse the connected global-graph vertex instead of dropping a real
++      // local frontier. The global planner recomputes its gain before use, so
++      // this promotion cannot turn a stale point into a valid target.
++      if (nearest_vertex != NULL) {
++        nearest_vertex->type = VertexType::kFrontier;
++        ++promoted_near_graph;
+       }
+     }
+   }
++  ROS_WARN_THROTTLE(10.0,
++      "GLOBAL_FRONTIER_INSERT leaves=%zu frontier_leaves=%zu clusters=%zu added=%d promoted=%d near_graph=%d near_history=%d graph=%d",
++      leaf_vertices.size(), frontier_vertices.size(), cluster_ids.size(),
++      added_frontier_paths, promoted_near_graph, skipped_near_graph,
++      skipped_near_history,
++      global_graph_->getNumVertices());
+   visualization_->visualizeRobotStateHistory(robot_state_hist_->state_hist_);
+ }
+ 
+@@ -2899,7 +3119,8 @@ void Rrg::computeVolumetricGain(StateVec& state, VolumetricGain& vgain,
+ 
+     int num_unknown_voxels = 0, num_free_voxels = 0, num_occupied_voxels = 0;
+     // Check all voxels inside local bound.
+-    Eigen::Vector3d origin(state[0], state[1], state[2]);
++    Eigen::Vector3d origin =
++        sensor_params_.sensor[sensor_name].getRayOrigin(state);
+     Eigen::Vector3d voxel;
+     for (voxel[0] = bound_min[0]; voxel[0] < bound_max[0];
+          voxel[0] += step_size) {
+@@ -2962,7 +3183,8 @@ void Rrg::computeVolumetricGainRayModel(StateVec& state, VolumetricGain& vgain,
+   for (int ind = 0; ind < planning_params_.exp_sensor_list.size(); ++ind) {
+     std::string sensor_name = planning_params_.exp_sensor_list[ind];
+ 
+-    Eigen::Vector3d origin(state[0], state[1], state[2]);
++    Eigen::Vector3d origin =
++        sensor_params_.sensor[sensor_name].getRayOrigin(state);
+     std::tuple<int, int, int> gain_log_tmp;
+     std::vector<std::pair<Eigen::Vector3d, MapManager::VoxelStatus>>
+         voxel_log_tmp;
+@@ -3071,7 +3293,8 @@ void Rrg::computeVolumetricGainRayModelNoBound(StateVec& state,
+   for (int ind = 0; ind < planning_params_.exp_sensor_list.size(); ++ind) {
+     std::string sensor_name = planning_params_.exp_sensor_list[ind];
+ 
+-    Eigen::Vector3d origin(state[0], state[1], state[2]);
++    Eigen::Vector3d origin =
++        sensor_params_.sensor[sensor_name].getRayOrigin(state);
+     std::tuple<int, int, int> gain_log_tmp;
+     std::vector<std::pair<Eigen::Vector3d, MapManager::VoxelStatus>>
+         voxel_log_tmp;
+@@ -3784,10 +4007,13 @@ std::vector<geometry_msgs::Pose> Rrg::getBestPath(std::string tgt_frame,
+     Eigen::Vector3d p_start = p0 + robot_params_.center_offset - p_overshoot;
+     Eigen::Vector3d p_end =
+         p0 + robot_params_.center_offset + dir_vec + p_overshoot;
+-    if ((dir_vec.norm() > 0) &&
+-        (MapManager::VoxelStatus::kFree !=
+-         map_manager_->getPathStatus(p_start, p_end, robot_box_size_, true))) {
+-      ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Segment [%d] is not clear.", i);
++    if (dir_vec.norm() > 0 &&
++        MapManager::VoxelStatus::kFree !=
++            map_manager_->getPathStatus(p_start, p_end, robot_box_size_, true)) {
++      ROS_WARN("GBPLANNER_RAW_SEGMENT_NOT_FREE index=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++               i, p_start.x(), p_start.y(), p_start.z(),
++               p_end.x(), p_end.y(), p_end.z());
++      if (strict_final_path_check_) return empty_path;
+     }
+ 
+     tf::Quaternion quat;
+@@ -3846,6 +4072,25 @@ std::vector<geometry_msgs::Pose> Rrg::getBestPath(std::string tgt_frame,
+     ret = interp_path;
+   }
+ 
++  if (strict_final_path_check_) {
++    for (size_t i = 1; i < ret.size(); ++i) {
++      const Eigen::Vector3d start(
++          ret[i - 1].position.x, ret[i - 1].position.y,
++          ret[i - 1].position.z);
++      const Eigen::Vector3d end(
++          ret[i].position.x, ret[i].position.y, ret[i].position.z);
++      const MapManager::VoxelStatus status = map_manager_->getPathStatus(
++          start + robot_params_.center_offset,
++          end + robot_params_.center_offset, robot_box_size_, true);
++      if (status != MapManager::VoxelStatus::kFree) {
++        ROS_WARN("GBPLANNER_FINAL_PATH_REJECTED segment=%zu status=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++                 i, static_cast<int>(status), start.x(), start.y(), start.z(),
++                 end.x(), end.y(), end.z());
++        return empty_path;
++      }
++    }
++  }
++
+   visualization_->visualizeRefPath(ret);
+ 
+   return ret;
+@@ -4558,7 +4803,9 @@ void Rrg::timerCallback(const ros::TimerEvent& event) {
+     // significantly. Let's store them in a database, then add later if
+     // requires. Get position from odometry to add more vertices to the graph
+     // for homing.
+-    constexpr double kUpdateRadius = 3.0;
++    // A 3 m visit radius clears a branch mouth before the aircraft has seen
++    // around its bend. Retire only a viewpoint actually flown through.
++    constexpr double kUpdateRadius = 0.75;
+     StateVec* state_add = new StateVec(current_state_[0], current_state_[1],
+                                        current_state_[2], current_state_[3]);
+     robot_state_hist_->addState(state_add);
+@@ -4892,18 +5139,24 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+   // Re-update all the frontiers based on the volumetric gain.
+   std::vector<Vertex*> global_frontiers;
+   int num_vertices = global_graph_->getNumVertices();
++  int stale_global_frontiers = 0;
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Re-check all frontiers.");
+   global_frontiers.clear();
+   for (int id = 0; id < num_vertices; ++id) {
+     if (global_graph_->getVertex(id)->type == VertexType::kFrontier) {
+       Vertex* v = global_graph_->getVertex(id);
+       computeVolumetricGainRayModelNoBound(v->state, v->vol_gain);
+-      if (!v->vol_gain.is_frontier)
++      if (!v->vol_gain.is_frontier) {
+         v->type = VertexType::kUnvisited;
+-      else
++        ++stale_global_frontiers;
++      } else {
+         global_frontiers.push_back(global_graph_->getVertex(id));
++      }
+     }
+   }
++  ROS_WARN("GLOBAL_FRONTIER_AUDIT current=(%.2f,%.2f,%.2f) graph=%d retained=%zu stale=%d",
++           current_state_[0], current_state_[1], current_state_[2],
++           num_vertices, global_frontiers.size(), stale_global_frontiers);
+   ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Currently have %d frontiers in the global graph.",
+            (int)global_frontiers.size());
+   if ((!not_check_frontier) && (global_frontiers.size() <= 0)) {
+@@ -5026,9 +5279,9 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+             current_to_frontier_distance / planning_params_.v_homing_max;
+         double time_to_home =
+             frontier_to_home_distance / planning_params_.v_homing_max;
+-        double time_cost = time_to_target + planning_params_.auto_homing_enable
+-                               ? time_to_home
+-                               : 0;
++        double time_cost = time_to_target +
++                           (planning_params_.auto_homing_enable
++                                ? time_to_home : 0.0);
+         double time_spare = 0;
+         if (isRemainingTimeSufficient(time_cost, time_spare)) {
+           feasible_global_frontiers.push_back(f);
+@@ -5049,37 +5302,23 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+     for (int i = 0; i < feasible_global_frontiers.size(); ++i) {
+       Vertex* f = feasible_global_frontiers[i];
+       // get gain.
+-      std::vector<int> current_to_frontier_path_id;
+-      std::vector<int> frontier_to_home_path_id;
+       double current_to_frontier_distance;
+-      double frontier_to_home_distance;
+-
+-      global_graph_->getShortestPath(f->id, frontier_graph_rep, true,
+-                                     current_to_frontier_path_id);
+-      global_graph_->getShortestPath(f->id, global_graph_rep_, false,
+-                                     frontier_to_home_path_id);
+       current_to_frontier_distance =
+           global_graph_->getShortestDistance(f->id, frontier_graph_rep);
+-      frontier_to_home_distance =
+-          global_graph_->getShortestDistance(f->id, global_graph_rep_);
+-
+-      // Duplication from above but easier to understand.
+-      double time_to_target =
+-          current_to_frontier_distance / planning_params_.v_homing_max;
+-      double time_to_home =
+-          frontier_to_home_distance / planning_params_.v_homing_max;
+-      double time_cost = time_to_target + planning_params_.auto_homing_enable
+-                             ? time_to_home
+-                             : 0;
+-      double time_spare = 0;
+-      if (!isRemainingTimeSufficient(time_cost, time_spare)) {
+-        time_spare = 1;
++
++      if (!std::isfinite(current_to_frontier_distance) ||
++          current_to_frontier_distance < 0.0 ||
++          f->vol_gain.gain <= 0.0) {
++        continue;
+       }
+ 
+-      const double kGDistancePenalty = 0.01;
+-      double exp_gain = f->vol_gain.gain *
+-                        exp(-kGDistancePenalty * current_to_frontier_distance);
+-      if (!ignore_time) exp_gain *= time_spare;
++      // Raw unknown-voxel gain can differ by orders of magnitude in a
++      // partially mapped tunnel; a stale nearby blind cone then outweighs
++      // a long unnecessary backtrack. Rank positive information per metre
++      // of actual graph travel, while still allowing a distant branch when
++      // nearby frontiers are exhausted. There is no fixed +X filter.
++      double exp_gain = std::log1p(f->vol_gain.gain) /
++                        (1.0 + current_to_frontier_distance);
+       frontier_exp_gain[f->id] = exp_gain;
+       if (exp_gain > best_gain) {
+         best_gain = exp_gain;
+@@ -5094,6 +5333,17 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+               [&frontier_exp_gain](const Vertex* a, const Vertex* b) {
+                 return frontier_exp_gain[a->id] > frontier_exp_gain[b->id];
+               });
++    for (size_t rank = 0;
++         rank < std::min<size_t>(3, feasible_global_frontiers.size()); ++rank) {
++      Vertex* candidate = feasible_global_frontiers[rank];
++      ROS_WARN("GLOBAL_FRONTIER_RANK rank=%zu id=%d goal=(%.2f,%.2f,%.2f) distance=%.2f raw=%.1f score=%.3f",
++               rank, candidate->id, candidate->state[0],
++               candidate->state[1], candidate->state[2],
++               global_graph_->getShortestDistance(candidate->id,
++                                                  frontier_graph_rep),
++               candidate->vol_gain.gain,
++               frontier_exp_gain[candidate->id]);
++    }
+     // Print out
+     // ROS_WARN_COND(global_verbosity >= Verbosity::WARN, "List of potential frontier in decreasing order of gain:");
+     // for (int i = 0; i < feasible_global_frontiers.size(); ++i) {
+@@ -5106,6 +5356,10 @@ std::vector<geometry_msgs::Pose> Rrg::runGlobalPlanner(int vertex_id,
+   std::vector<int> current_to_frontier_path_id;
+   std::vector<int> frontier_to_home_path_id;
+   if (best_gain >= 0) {
++    ROS_WARN("GLOBAL_FRONTIER_SELECTED id=%d goal=(%.2f,%.2f,%.2f) score=%.3f retained=%zu",
++             best_frontier->id, best_frontier->state[0],
++             best_frontier->state[1], best_frontier->state[2],
++             best_gain, global_frontiers.size());
+     ROS_WARN_COND(global_verbosity >= Verbosity::WARN, "Found the best frontier to go is: %d", best_frontier->id);
+ 
+     if (auto_global_planner_trig_) {
+diff --git a/planner_common/CMakeLists.txt b/planner_common/CMakeLists.txt
+index bc331b0..999fb67 100644
+--- a/planner_common/CMakeLists.txt
++++ b/planner_common/CMakeLists.txt
+@@ -42,4 +42,4 @@ cs_add_library(${PROJECT_NAME}
+ )
+ 
+ cs_install()
+-cs_export(LIBRARIES)
+\ No newline at end of file
++cs_export(LIBRARIES)
+diff --git a/planner_common/include/planner_common/map_manager_voxblox_impl.h b/planner_common/include/planner_common/map_manager_voxblox_impl.h
+index 7eb37c6..1c02d6b 100644
+--- a/planner_common/include/planner_common/map_manager_voxblox_impl.h
++++ b/planner_common/include/planner_common/map_manager_voxblox_impl.h
+@@ -152,6 +152,11 @@ class MapManagerVoxblox : MapManager {
+ 
+   bool augmentFreeBox(const Eigen::Vector3d& position,
+                       const Eigen::Vector3d& box_size);
++  // Opt-in, pre-surveyed launch-area prior. Never invoke on unknown mine
++  // corridors: it promotes otherwise unknown voxels to weakly known free.
++  bool augmentSurveyedFreeCapsule(const Eigen::Vector3d& start,
++                                  const Eigen::Vector3d& end, double radius);
++  double collisionSphereRadius() const { return collision_sphere_radius_m_; }
+   void getScanStatus(
+       Eigen::Vector3d& pos, std::vector<Eigen::Vector3d>& multiray_endpoints,
+       std::tuple<int, int, int>& gain_log,
+@@ -206,6 +211,9 @@ class MapManagerVoxblox : MapManager {
+   void setRobotRadius(double robot_radius) { robot_radius_ = robot_radius; }
+ 
+  private:
++  VoxelStatus getCapsuleStatus(const Eigen::Vector3d& start,
++                               const Eigen::Vector3d& end, double radius,
++                               bool stop_at_unknown_voxel) const;
+   VoxelStatus getBoxStatusInVoxels(
+       const voxblox::LongIndex& bounding_box_center,
+       const voxblox::AnyIndex& bounding_box_voxels,
+@@ -223,6 +231,9 @@ class MapManagerVoxblox : MapManager {
+   // multiplier of a single voxel size to consider as a distance metric for
+   // occupancy threshold
+   float occupancy_distance_voxelsize_factor_;
++  // Disabled by default; when enabled, all planner point/edge occupancy
++  // queries use a conservative spherical/capsule footprint instead of boxes.
++  double collision_sphere_radius_m_ = 0.0;
+ 
+   // Separate object to setup because tsdf_server_ has
+   // protected tsdf_integrator_, otherwise could use getConfig()
+diff --git a/planner_common/include/planner_common/params.h b/planner_common/include/planner_common/params.h
+index f274a62..f519cc2 100644
+--- a/planner_common/include/planner_common/params.h
++++ b/planner_common/include/planner_common/params.h
+@@ -116,6 +116,10 @@ struct SensorParamsBase {
+   Eigen::Vector3d center_offset;  // Offset from the body center (odometry).
+   Eigen::Vector3d rotations;      // Body to sensor; [Y, P, R] (rad).
+   Eigen::Vector2d fov;            // [Horizontal, Vertical] angles (rad).
++  // Opt-in lidar model for a physically tilted, asymmetric 360-degree scan.
++  // Native vertical samples are centered at this sensor-frame elevation.
++  double lidar_vertical_center_offset;
++  bool spherical_lidar_rays;
+   Eigen::Vector2d resolution;  // Resolution in rad [H x V] for volumetric gain.
+   std::string frame_id;        // Frame id of the sensor
+   std::string callback_topic;  // Topic on which sensor data is being published
+@@ -136,6 +140,7 @@ struct SensorParamsBase {
+   void getFrustumEndpoints(StateVec& state, std::vector<Eigen::Vector3d>& ep);
+   void getFrustumEndpoints(StateVec& state, std::vector<Eigen::Vector3d>& ep,
+                            float darkness_range);
++  Eigen::Vector3d getRayOrigin(StateVec& state);
+ 
+   void updateFrustumEndpoints();
+   // Get all edges in (W).
+@@ -298,6 +303,13 @@ struct PlanningParams {
+   double unknown_voxel_gain;
+   double path_length_penalty;
+   double path_direction_penalty;
++  double vertical_travel_penalty;
++  double short_path_gain_scale_length;
++  double recent_viewpoint_penalty_radius;
++  double recent_viewpoint_penalty_weight;
++  double visited_endpoint_penalty_radius;
++  double visited_endpoint_penalty_weight;
++  bool defer_global_for_novel_local;
+   double hanging_vertex_penalty;
+   bool leafs_only_for_volumetric_gain;
+   bool cluster_vertices_for_gain;
+diff --git a/planner_common/include/planner_common/random_sampler.h b/planner_common/include/planner_common/random_sampler.h
+index 5e0d029..4d7a19f 100644
+--- a/planner_common/include/planner_common/random_sampler.h
++++ b/planner_common/include/planner_common/random_sampler.h
+@@ -3,6 +3,7 @@
+ 
+ #include <memory>
+ #include <random>
++#include <cstdint>
+ 
+ #include "planner_common/params.h"
+ 
+@@ -33,11 +34,14 @@ class RandomSamplerBase {
+   void setBound(double min_val, double max_val);
+   void setDistributionParams(double mean_val, double std_val);
+   void reset();
++  void setDeterministicSeed(int seed);
+   double generate(double current_val, double devisor = 1);
+   double getZOffset();
+ 
+  private:
+   std::mt19937 generator_;
++  int deterministic_seed_ = -1;
++  uint32_t reset_count_ = 0;
+   RandomDistributionType pdf_type_;
+   SampleModeType sample_mode_;
+   double const_val_;
+@@ -97,6 +101,8 @@ class RandomSampler {
+ 
+   // Used to generate multivariate Cauchy distribution
+   std::mt19937 generator_;
++  int deterministic_seed_ = -1;
++  uint32_t reset_count_ = 0;
+   std::shared_ptr<std::chi_squared_distribution<double>> chi_squared_;
+ };
+ 
+diff --git a/planner_common/src/params.cpp b/planner_common/src/params.cpp
+index 4ecc6e0..f72d9a2 100644
+--- a/planner_common/src/params.cpp
++++ b/planner_common/src/params.cpp
+@@ -1,5 +1,7 @@
+ #include "planner_common/params.h"
+ 
++#include <algorithm>
++
+ bool SensorParamsBase::loadParams(std::string ns) {
+   ROSPARAM_INFO("Loading: " + ns);
+   std::string param_name;
+@@ -91,6 +93,15 @@ bool SensorParamsBase::loadParams(std::string ns) {
+   }
+   fov << param_val[0], param_val[1];
+ 
++  // The upstream lidar sampler assumes a symmetric, body-centred aperture.
++  // Keep that legacy behavior unless a sensor explicitly opts into physical
++  // spherical rays and an asymmetric elevation centre.
++  lidar_vertical_center_offset = 0.0;
++  spherical_lidar_rays = false;
++  ros::param::get(ns + "/lidar_vertical_center_offset",
++                  lidar_vertical_center_offset);
++  ros::param::get(ns + "/spherical_lidar_rays", spherical_lidar_rays);
++
+   param_val.clear();
+   param_name = ns + "/resolution";
+   if ((!ros::param::get(param_name, param_val)) || (param_val.size() != 2)) {
+@@ -212,25 +223,53 @@ bool SensorParamsBase::loadParams(std::string ns) {
+     width = 0;
+     double h_lim_2 = fov[0] / 2;
+     double v_lim_2 = fov[1] / 2;
+-    for (double dv = -v_lim_2; dv < v_lim_2; dv += v_res) {
+-      ++h;
+-      for (double dh = -h_lim_2; dh < h_lim_2; dh += h_res) {
+-        if (width == 0) {
+-          ++w;
++    if (spherical_lidar_rays) {
++      // Include both vertical aperture limits. The horizontal 360-degree
++      // sweep omits the duplicated +pi direction.
++      const int vertical_intervals =
++          std::max(1, static_cast<int>(std::ceil(fov[1] / v_res)));
++      const int horizontal_samples =
++          std::max(1, static_cast<int>(std::ceil(fov[0] / h_res)));
++      const double vertical_step = fov[1] / vertical_intervals;
++      const double horizontal_step = fov[0] / horizontal_samples;
++      for (int vi = 0; vi <= vertical_intervals; ++vi) {
++        const double elevation = -v_lim_2 + vi * vertical_step +
++                                 lidar_vertical_center_offset;
++        for (int hi = 0; hi < horizontal_samples; ++hi) {
++          const double azimuth = -h_lim_2 + hi * horizontal_step;
++          const Eigen::Vector3d ep(
++              max_range * std::cos(elevation) * std::cos(azimuth),
++              max_range * std::cos(elevation) * std::sin(azimuth),
++              max_range * std::sin(elevation));
++          frustum_endpoints.push_back(ep);
++          frustum_endpoints_B.push_back(rot_B2S * ep + center_offset);
+         }
+-        double x = max_range * cos(dh);
+-        double y = max_range * sin(dh);
+-        double z = max_range * sin(dv);
+-        Eigen::Vector3d ep = Eigen::Vector3d(x, y, z);
+-        frustum_endpoints.push_back(ep);
+-        Eigen::Vector3d ep_B = rot_B2S * ep + center_offset;
+-        frustum_endpoints_B.push_back(ep_B);
+       }
+-      if (width == 0) {
+-        width = w;
++      width = horizontal_samples;
++      height = vertical_intervals + 1;
++      ROS_INFO("Spherical lidar gain rays: %d x %d, elevation centre %.2f deg",
++               width, height, lidar_vertical_center_offset * 180.0 / M_PI);
++    } else {
++      for (double dv = -v_lim_2; dv < v_lim_2; dv += v_res) {
++        ++h;
++        for (double dh = -h_lim_2; dh < h_lim_2; dh += h_res) {
++          if (width == 0) {
++            ++w;
++          }
++          double x = max_range * cos(dh);
++          double y = max_range * sin(dh);
++          double z = max_range * sin(dv);
++          Eigen::Vector3d ep = Eigen::Vector3d(x, y, z);
++          frustum_endpoints.push_back(ep);
++          Eigen::Vector3d ep_B = rot_B2S * ep + center_offset;
++          frustum_endpoints_B.push_back(ep_B);
++        }
++        if (width == 0) {
++          width = w;
++        }
+       }
++      height = h;
+     }
+-    height = h;
+     ROS_INFO_COND(global_verbosity >= Verbosity::INFO, 
+         "Computed multiray_endpoints for volumetric gain [kLidar]: [%d] "
+         "points.",
+@@ -238,7 +277,9 @@ bool SensorParamsBase::loadParams(std::string ns) {
+   }
+ 
+   // Compute a number to compare to check for frontier.
+-  num_voxels_full_fov = (fov[0] / h_res) * (fov[1] / v_res) * max_range;
++  num_voxels_full_fov = spherical_lidar_rays
++      ? static_cast<double>(width * height) * max_range
++      : (fov[0] / h_res) * (fov[1] / v_res) * max_range;
+ 
+   ROSPARAM_INFO("Done.");
+   return true;
+@@ -259,6 +300,13 @@ void SensorParamsBase::getFrustumEndpoints(StateVec& state,
+   }
+ }
+ 
++Eigen::Vector3d SensorParamsBase::getRayOrigin(StateVec& state) {
++  Eigen::Vector3d origin(state[0], state[1], state[2]);
++  if (!spherical_lidar_rays) return origin;
++  const Eigen::AngleAxisd yaw(state[3], Eigen::Vector3d::UnitZ());
++  return origin + yaw * center_offset;
++}
++
+ void SensorParamsBase::getFrustumEndpoints(StateVec& state,
+                                            std::vector<Eigen::Vector3d>& ep,
+                                            float darkness_range) {
+@@ -394,14 +442,20 @@ bool SensorParamsBase::isInsideFOV(StateVec& state, Eigen::Vector3d& pos) {
+ 
+   // Transform to sensor coordinate.
+   Eigen::Vector3d origin(state[0], state[1], state[2]);
+-  Eigen::Vector3d pos_S =
+-      rot_S2B * Eigen::AngleAxisd(-state[3], Eigen::Vector3d::UnitZ()) *
+-          (pos - origin) -
+-      center_offset;
++  const Eigen::Vector3d pos_B =
++      Eigen::AngleAxisd(-state[3], Eigen::Vector3d::UnitZ()) *
++      (pos - origin);
++  // Preserve upstream legacy math for all other sensor configurations.
++  Eigen::Vector3d pos_S;
++  if (spherical_lidar_rays) {
++    pos_S = rot_S2B * (pos_B - center_offset);
++  } else {
++    pos_S = rot_S2B * pos_B - center_offset;
++  }
+   float pos_S_norm = pos_S.norm();
+ 
+   // Check range.
+-  if (pos_S_norm > max_range) return false;
++  if (pos_S_norm > max_range || pos_S_norm < 1e-6) return false;
+ 
+   // Check FOV angles.
+   if (type == SensorType::kCamera) {
+@@ -414,7 +468,9 @@ bool SensorParamsBase::isInsideFOV(StateVec& state, Eigen::Vector3d& pos) {
+     float h_angle = std::atan2((float)pos_S.y(), (float)pos_S.x());
+     float v_angle = std::asin((float)pos_S.z() / pos_S_norm);
+     if ((std::abs(h_angle) > (fov[0] / 2)) ||
+-        (std::abs(v_angle) > (fov[1] / 2)))
++        (std::abs(v_angle - (spherical_lidar_rays
++                                 ? lidar_vertical_center_offset : 0.0)) >
++         (fov[1] / 2)))
+       return false;
+   } else {
+     // Unsupported sensor.
+@@ -951,6 +1007,50 @@ bool PlanningParams::loadParams(std::string ns) {
+     ROSPARAM_WARN(param_name, path_direction_penalty);
+   }
+ 
++  param_name = ns + "/vertical_travel_penalty";
++  if (!ros::param::get(param_name, vertical_travel_penalty)) {
++    vertical_travel_penalty = 0.0;
++  }
++  vertical_travel_penalty = std::max(0.0, vertical_travel_penalty);
++
++  param_name = ns + "/short_path_gain_scale_length";
++  if (!ros::param::get(param_name, short_path_gain_scale_length)) {
++    short_path_gain_scale_length = 0.0;  // disabled by default
++    ROSPARAM_WARN(param_name, short_path_gain_scale_length);
++  }
++  short_path_gain_scale_length = std::max(0.0, short_path_gain_scale_length);
++
++  param_name = ns + "/recent_viewpoint_penalty_radius";
++  if (!ros::param::get(param_name, recent_viewpoint_penalty_radius)) {
++    recent_viewpoint_penalty_radius = 0.0;
++  }
++  recent_viewpoint_penalty_radius = std::max(
++      0.0, recent_viewpoint_penalty_radius);
++  param_name = ns + "/recent_viewpoint_penalty_weight";
++  if (!ros::param::get(param_name, recent_viewpoint_penalty_weight)) {
++    recent_viewpoint_penalty_weight = 0.0;
++  }
++  recent_viewpoint_penalty_weight = std::max(
++      0.0, recent_viewpoint_penalty_weight);
++
++  param_name = ns + "/visited_endpoint_penalty_radius";
++  if (!ros::param::get(param_name, visited_endpoint_penalty_radius)) {
++    visited_endpoint_penalty_radius = 0.0;
++  }
++  visited_endpoint_penalty_radius = std::max(
++      0.0, visited_endpoint_penalty_radius);
++  param_name = ns + "/visited_endpoint_penalty_weight";
++  if (!ros::param::get(param_name, visited_endpoint_penalty_weight)) {
++    visited_endpoint_penalty_weight = 0.0;
++  }
++  visited_endpoint_penalty_weight = std::max(
++      0.0, visited_endpoint_penalty_weight);
++
++  param_name = ns + "/defer_global_for_novel_local";
++  if (!ros::param::get(param_name, defer_global_for_novel_local)) {
++    defer_global_for_novel_local = false;
++  }
++
+   param_name = ns + "/hanging_vertex_penalty";
+   if (!ros::param::get(param_name, hanging_vertex_penalty)) {
+     hanging_vertex_penalty = 0.0;  // no penalty
+diff --git a/planner_common/src/random_sampler.cpp b/planner_common/src/random_sampler.cpp
+index e6ee159..b7b6882 100644
+--- a/planner_common/src/random_sampler.cpp
++++ b/planner_common/src/random_sampler.cpp
+@@ -132,8 +132,13 @@ void RandomSamplerBase::setDistributionParams(double mean_val, double std_val) {
+ }
+ 
+ void RandomSamplerBase::reset() {
+-  std::random_device rd;
+-  generator_.seed(rd());
++  if (deterministic_seed_ >= 0) {
++    generator_.seed(static_cast<uint32_t>(deterministic_seed_) +
++                    reset_count_++);
++  } else {
++    std::random_device rd;
++    generator_.seed(rd());
++  }
+   if (pdf_type_ == RandomDistributionType::kUniform) {
+     uniform_pdf_.reset(
+         new std::uniform_real_distribution<>(min_val_, max_val_));
+@@ -145,6 +150,11 @@ void RandomSamplerBase::reset() {
+   }
+ }
+ 
++void RandomSamplerBase::setDeterministicSeed(int seed) {
++  deterministic_seed_ = seed;
++  reset_count_ = 0;
++}
++
+ double RandomSamplerBase::generate(double current_val, double chi_sq_var) {
+   double r;
+   if (pdf_type_ == RandomDistributionType::kUniform) {
+@@ -186,6 +196,18 @@ bool RandomSampler::loadParams(std::string ns) {
+   if (!random_sampler_base_[1].loadParams(ns + "/Y")) return false;
+   if (!random_sampler_base_[2].loadParams(ns + "/Z")) return false;
+   if (!random_sampler_base_[3].loadParams(ns + "/Heading")) return false;
++  int seed = -1;
++  ros::param::param<int>(ns + "/seed", seed, -1);
++  if (seed >= 0) {
++    deterministic_seed_ = seed;
++    reset_count_ = 0;
++    for (int axis = 0; axis < 4; ++axis) {
++      random_sampler_base_[axis].setDeterministicSeed(
++          seed + 1009 * (axis + 1));
++    }
++    ROS_WARN("GBPlanner deterministic sampler seed %d for %s", seed,
++             ns.c_str());
++  }
+   isReady = true;
+   return true;
+ }
+@@ -240,8 +262,13 @@ bool RandomSampler::setParams(BoundedSpaceParams& global_params,
+ }
+ 
+ void RandomSampler::RandomSampler::reset() {
+-  std::random_device rd;
+-  generator_.seed(rd());
++  if (deterministic_seed_ >= 0) {
++    generator_.seed(static_cast<uint32_t>(deterministic_seed_) +
++                    reset_count_++);
++  } else {
++    std::random_device rd;
++    generator_.seed(rd());
++  }
+   chi_squared_.reset(new std::chi_squared_distribution<>(1));
+   for (int i = 0; i < 4; ++i) {
+     random_sampler_base_[i].reset();
+@@ -270,4 +297,4 @@ void RandomSampler::pushSample(StateVec& state, bool valid) {
+     if (invalid_samples_.size() < kInvalidSamplesMaxSize)
+       invalid_samples_.emplace_back(state);
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/planner_common/src/trajectory.cpp b/planner_common/src/trajectory.cpp
+index 3353a6e..b2917fc 100644
+--- a/planner_common/src/trajectory.cpp
++++ b/planner_common/src/trajectory.cpp
+@@ -90,7 +90,10 @@ double Trajectory::computeDistanceBetweenTrajectoryAndDirection(
+   std::vector<Eigen::Vector3d> path_ref;
+   int n = (int)(path_length / discrete_length);
+   for (int i = 0; i < n; ++i) {
+-    Eigen::Vector3d ei = p0 + uvector * n;
++    // Build a line in the preferred direction.  Using n here made every
++    // reference sample the same endpoint, so the DTW direction cost could
++    // not reliably distinguish a continuing path from a U-turn.
++    Eigen::Vector3d ei = p0 + uvector * i;
+     path_ref.push_back(ei);
+   }
+ 
+@@ -358,4 +361,4 @@ void Trajectory::TestDTW() {
+ 
+     std::cout << "T4: " << compareTwoTrajectories(pa, pb) << std::endl;
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/planner_common/src/voxblox/voxblox_alt_impl.cpp b/planner_common/src/voxblox/voxblox_alt_impl.cpp
+index 78d8a55..de964ed 100644
+--- a/planner_common/src/voxblox/voxblox_alt_impl.cpp
++++ b/planner_common/src/voxblox/voxblox_alt_impl.cpp
+@@ -1,11 +1,73 @@
+ #include "planner_common/map_manager_voxblox_impl.h"
+ 
++// A voxel cube may intersect the requested spherical envelope even when its
++// centre does not. The half-diagonal is deliberately conservative; this is
++// an occupancy-map test, not a certificate against unseen real geometry.
++template <typename SDFServerType, typename SDFVoxelType>
++typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
++MapManagerVoxblox<SDFServerType, SDFVoxelType>::getCapsuleStatus(
++    const Eigen::Vector3d& start, const Eigen::Vector3d& end, double radius,
++    bool stop_at_unknown_voxel) const {
++  const double voxel_size = sdf_layer_->voxel_size();
++  const double voxel_size_inv = 1.0 / voxel_size;
++  const double expanded_radius = radius + 0.5 * std::sqrt(3.0) * voxel_size;
++  const double expanded_radius_sq = expanded_radius * expanded_radius;
++  // The legacy 1-voxel positive TSDF threshold plus the voxel half-diagonal
++  // margin would reject centres more than 1.3 m from a wall for a 1 m sphere.
++  // In this mode, treat the near-zero TSDF band as the surface; the voxel
++  // half-diagonal already accounts for where that surface lies in the cube.
++  const double occupancy_distance =
++      std::min<double>(occupancy_distance_voxelsize_factor_, 0.25) *
++          voxel_size + 1e-6;
++  const Eigen::Vector3d margin = Eigen::Vector3d::Constant(expanded_radius);
++  const Eigen::Vector3d lower = start.cwiseMin(end) - margin;
++  const Eigen::Vector3d upper = start.cwiseMax(end) + margin;
++  const voxblox::LongIndex first =
++      voxblox::getGridIndexFromPoint<voxblox::LongIndex>(
++          lower.cast<voxblox::FloatingPoint>(), voxel_size_inv);
++  const voxblox::LongIndex last =
++      voxblox::getGridIndexFromPoint<voxblox::LongIndex>(
++          upper.cast<voxblox::FloatingPoint>(), voxel_size_inv);
++  const Eigen::Vector3d segment = end - start;
++  const double segment_sq = segment.squaredNorm();
++  VoxelStatus status = VoxelStatus::kFree;
++  for (int64_t x = first.x(); x <= last.x(); ++x) {
++    for (int64_t y = first.y(); y <= last.y(); ++y) {
++      for (int64_t z = first.z(); z <= last.z(); ++z) {
++        const voxblox::LongIndex index(x, y, z);
++        const Eigen::Vector3d voxel_center =
++            voxblox::getCenterPointFromGridIndex(index, voxel_size)
++                .cast<double>();
++        const double fraction = segment_sq > 1e-12
++            ? std::max(0.0, std::min(1.0,
++                (voxel_center - start).dot(segment) / segment_sq))
++            : 0.0;
++        const Eigen::Vector3d nearest = start + fraction * segment;
++        if ((voxel_center - nearest).squaredNorm() > expanded_radius_sq)
++          continue;
++        const SDFVoxelType* voxel =
++            sdf_layer_->getVoxelPtrByGlobalIndex(index);
++        if (checkUnknownStatus(voxel)) {
++          if (stop_at_unknown_voxel) return VoxelStatus::kUnknown;
++          status = VoxelStatus::kUnknown;
++        } else if (voxel->distance <= occupancy_distance) {
++          return VoxelStatus::kOccupied;
++        }
++      }
++    }
++  }
++  return status;
++}
++
+ #if (COL_CHECK_METHOD == 0)
+ template <typename SDFServerType, typename SDFVoxelType>
+ typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
+ MapManagerVoxblox<SDFServerType, SDFVoxelType>::getBoxStatus(
+     const Eigen::Vector3d& center, const Eigen::Vector3d& size,
+     bool stop_at_unknown_voxel) const {
++  if (collision_sphere_radius_m_ > 0.0)
++    return getCapsuleStatus(center, center, collision_sphere_radius_m_,
++                            stop_at_unknown_voxel);
+   float voxel_size = sdf_layer_->voxel_size();
+   float voxel_size_inv = 1.0 / voxel_size;
+ 
+@@ -119,6 +181,9 @@ typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
+ MapManagerVoxblox<SDFServerType, SDFVoxelType>::getPathStatus(
+     const Eigen::Vector3d& start, const Eigen::Vector3d& end,
+     const Eigen::Vector3d& box_size, bool stop_at_unknown_voxel) const {
++  if (collision_sphere_radius_m_ > 0.0)
++    return getCapsuleStatus(start, end, collision_sphere_radius_m_,
++                            stop_at_unknown_voxel);
+   float voxel_size = sdf_layer_->voxel_size();
+   float voxel_size_inv = 1.0 / voxel_size;
+   const float distance_thres =
+@@ -891,4 +956,4 @@ void MapManagerVoxblox<SDFServerType, SDFVoxelType>::getScanStatusIterative(
+   }
+   gain_log =
+       std::make_tuple(num_unknown_voxels, num_free_voxels, num_occupied_voxels);
+-}
+\ No newline at end of file
++}
+diff --git a/planner_common/src/voxblox/voxblox_common_impl.cpp b/planner_common/src/voxblox/voxblox_common_impl.cpp
+index 0b0e096..5026df2 100644
+--- a/planner_common/src/voxblox/voxblox_common_impl.cpp
++++ b/planner_common/src/voxblox/voxblox_common_impl.cpp
+@@ -32,6 +32,17 @@ MapManagerVoxblox<SDFServerType, SDFVoxelType>::MapManagerVoxblox(
+                   "occupancy_distance_voxelsize_factor, using default of: %f",
+                   occupancy_distance_voxelsize_factor_);
+   }
++  nh_private.param("collision_sphere_radius_m", collision_sphere_radius_m_,
++                   0.0);
++  if (!std::isfinite(collision_sphere_radius_m_) ||
++      collision_sphere_radius_m_ < 0.0) {
++    ROS_ERROR("Invalid collision_sphere_radius_m; disabling experimental sphere check");
++    collision_sphere_radius_m_ = 0.0;
++  }
++  if (collision_sphere_radius_m_ > 0.0) {
++    ROS_WARN("Experimental conservative sphere/capsule map collision: radius %.3f m; unknown voxels block planning",
++             collision_sphere_radius_m_);
++  }
+ 
+   // Setup E/TsdfIntegratorBase::Config and object separately (also called in
+   // e/tsdf_server_ ctor)
+@@ -327,6 +338,56 @@ bool MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentFreeBox(
+   return true;
+ }
+ 
++template <typename SDFServerType, typename SDFVoxelType>
++bool MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentSurveyedFreeCapsule(
++    const Eigen::Vector3d& start, const Eigen::Vector3d& end,
++    double radius) {
++  if (!std::isfinite(radius) || radius <= 0.0)
++    return false;
++  const double voxel_size = sdf_layer_->voxel_size();
++  const double expanded_radius = radius + 0.5 * std::sqrt(3.0) * voxel_size;
++  const Eigen::Vector3d midpoint = 0.5 * (start + end);
++  const Eigen::Vector3d box_size =
++      (end - start).cwiseAbs() +
++      Eigen::Vector3d::Constant(2.0 * expanded_radius);
++  voxblox::HierarchicalIndexMap block_voxel_list;
++  voxblox::utils::getAndAllocateBoxAroundPoint(
++      midpoint.cast<voxblox::FloatingPoint>(), box_size, sdf_layer_,
++      &block_voxel_list);
++  const Eigen::Vector3d segment = end - start;
++  const double segment_sq = segment.squaredNorm();
++  const double occupied_distance =
++      std::min<double>(occupancy_distance_voxelsize_factor_, 0.25) *
++          voxel_size + 1e-6;
++  std::vector<SDFVoxelType*> unknown_voxels;
++  for (const auto& block_entry : block_voxel_list) {
++    typename voxblox::Block<SDFVoxelType>::Ptr block =
++        sdf_layer_->getBlockPtrByIndex(block_entry.first);
++    for (const voxblox::VoxelIndex& voxel_index : block_entry.second) {
++      if (!block->isValidVoxelIndex(voxel_index)) continue;
++      const Eigen::Vector3d center =
++          block->computeCoordinatesFromVoxelIndex(voxel_index).template cast<double>();
++      const double fraction = segment_sq > 1e-12
++          ? std::max(0.0, std::min(1.0,
++              (center - start).dot(segment) / segment_sq))
++          : 0.0;
++      if ((center - (start + fraction * segment)).squaredNorm() >
++          expanded_radius * expanded_radius) continue;
++      SDFVoxelType& voxel = block->getVoxelByVoxelIndex(voxel_index);
++      if (checkUnknownStatus(&voxel)) {
++        unknown_voxels.push_back(&voxel);
++      } else if (voxel.distance <= occupied_distance) {
++        ROS_ERROR("Surveyed launch capsule conflicts with a measured obstacle; no unknown voxels seeded");
++        return false;
++      }
++    }
++  }
++  for (SDFVoxelType* voxel : unknown_voxels) clearIfUnknown(*voxel);
++  ROS_WARN("Surveyed launch capsule seeded %zu unknown voxels; this is an explicit preflight prior, NOT lidar evidence",
++           unknown_voxels.size());
++  return true;
++}
++
+ template <typename SDFServerType, typename SDFVoxelType>
+ double MapManagerVoxblox<SDFServerType, SDFVoxelType>::getPointDistance(
+     const Eigen::Vector3d& point) const {
+diff --git a/planner_control_interface/include/planner_control_interface/planner_control_interface.h b/planner_control_interface/include/planner_control_interface/planner_control_interface.h
+index afe829c..6acb555 100644
+--- a/planner_control_interface/include/planner_control_interface/planner_control_interface.h
++++ b/planner_control_interface/include/planner_control_interface/planner_control_interface.h
+@@ -3,6 +3,7 @@
+ 
+ #include <eigen3/Eigen/Dense>
+ #include <geometry_msgs/PoseStamped.h>
++#include <geometry_msgs/PoseArray.h>
+ #include <geometry_msgs/PoseWithCovarianceStamped.h>
+ #include <interactive_markers/interactive_marker_server.h>
+ #include <interactive_markers/menu_handler.h>
+@@ -65,6 +66,7 @@ class PlannerControlInterface {
+ 
+  private:
+   ros::Publisher reference_pub_;
++  ros::Publisher diagnostic_raw_path_pub_;
+   ros::Publisher planner_status_pub_;
+   ros::Publisher stop_request_pub_;
+   ros::Subscriber odometry_sub_;
+diff --git a/planner_control_interface/src/planner_control_interface.cpp b/planner_control_interface/src/planner_control_interface.cpp
+index 3780b51..aefc307 100644
+--- a/planner_control_interface/src/planner_control_interface.cpp
++++ b/planner_control_interface/src/planner_control_interface.cpp
+@@ -13,6 +13,8 @@ PlannerControlInterface::PlannerControlInterface(
+     std::shared_ptr<PCIManager> pci_manager)
+     : nh_(nh), nh_private_(nh_private) {
+   reference_pub_ = nh_.advertise<visualization_msgs::Marker>("ref_pose", 5);
++  diagnostic_raw_path_pub_ = nh_.advertise<geometry_msgs::PoseArray>(
++      "/gbplanner/diagnostic_raw_path", 5);
+   planner_status_pub_ = nh_.advertise<std_msgs::Bool>("gbplanner_status", 5);
+   stop_request_pub_ = nh_.advertise<std_msgs::Bool>(
+       "planner_control_interface/stop_request", 5);
+@@ -743,6 +745,14 @@ void PlannerControlInterface::runPlanner(bool exe_path = false) {
+             v_current_ = pci_manager_->getVelocity(path_type);
+             // Publish the status
+             publishPlannerStatus(plan_srv.response, true);
++            // Read-only diagnostic before PCI reconnects/interpolates the
++            // planner path. No consumer in the flight-control chain.
++            geometry_msgs::PoseArray diagnostic_path;
++            diagnostic_path.header.stamp = ros::Time::now();
++            diagnostic_path.header.seq = plan_srv.request.header.seq;
++            diagnostic_path.header.frame_id = world_frame_id_;
++            diagnostic_path.poses = plan_srv.response.path;
++            diagnostic_raw_path_pub_.publish(diagnostic_path);
+             pci_manager_->executePath(plan_srv.response.path, path_to_be_exe,
+                                       path_type);
+             success = true;

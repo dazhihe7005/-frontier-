@@ -160,24 +160,13 @@ Gazebo MID360S PointCloud
 
 ```bash
 vcs import < dependencies.repos
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-direction-reference.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-short-path-gain.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-vertical-travel-penalty.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-global-frontier-audit.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-preserve-frontiers.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-global-frontier-utility.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-local-frontier-audit.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-capsule-experiment.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-raw-path-diagnostic.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-strict-final-path-experiment.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-rejection-diagnostic.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-map.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-surveyed-launch-rrg.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-visited-endpoint-soft-penalty.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-defer-global-for-novel-local.patch
-git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-deterministic-sampler-opt-in.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-isolated-cumulative.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
+
+累计补丁基于 `dependencies.repos` 固定的 GBPlanner 提交，包含原先逐个记录的
+所有隔离改动及精确 MID360S 收益射线；旧分项补丁保留供历史审计，**不要再与
+累计补丁叠加应用**。
 
 随后按当前工作区配置使用 `catkin build`。仓库不包含第三方 Git 工作树、
 编译产物、运行日志或 PX4 持久状态。
