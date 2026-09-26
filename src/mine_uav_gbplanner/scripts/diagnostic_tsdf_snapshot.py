@@ -17,7 +17,7 @@ class TsdfSnapshot:
     def __init__(self):
         self.target_time = float(rospy.get_param("~target_sim_time", 32.0))
         self.bounds = tuple(float(value) for value in rospy.get_param(
-            "~bounds", [-1.0, 10.0, -6.0, 2.0, -1.0, 5.0]))
+            "~bounds", [-3.0, 10.0, -6.0, 2.0, -1.0, 5.0]))
         self.planner_x_range = tuple(float(value) for value in rospy.get_param(
             "~planner_x_range", []))
         if self.planner_x_range and (len(self.planner_x_range) != 2 or

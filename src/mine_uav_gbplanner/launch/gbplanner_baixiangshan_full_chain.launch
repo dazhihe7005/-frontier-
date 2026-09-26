@@ -45,7 +45,7 @@
   <arg name="voxblox_use_freespace" default="true"/>
   <arg name="ray_snapshot_sim_time" default="32.0"/>
   <arg name="tsdf_snapshot_sim_time" default="32.0"/>
-  <arg name="tsdf_snapshot_bounds" default="[-1.0, 10.0, -6.0, 2.0, -1.0, 5.0]"/>
+  <arg name="tsdf_snapshot_bounds" default="[-3.0, 10.0, -6.0, 2.0, -1.0, 5.0]"/>
   <arg name="tsdf_snapshot_x_range" default="[]"/>
   <!-- Safety gate: current 1 m radius trials have only centimetres of
        clearance reserve and have not passed full-map acceptance. -->
