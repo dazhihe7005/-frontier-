@@ -4,6 +4,7 @@
 import importlib.util
 import math
 from pathlib import Path
+import threading
 import unittest
 
 
@@ -65,6 +66,39 @@ class VerticalHazardTest(unittest.TestCase):
         self.assertTrue(required(1.34, 1.0, 0.0, 0.0))
         self.assertFalse(required(1.50, 1.0, 0.0, 0.0))
         self.assertTrue(required(1.50, 1.0, -0.04, 0.0))
+
+    def test_descending_recovery_floor_abort_is_latched_early(self):
+        abort = MODULE.recovery_floor_abort_required
+        self.assertTrue(abort(True, -0.35, 1.55, 1.0, 0.60))
+        self.assertFalse(abort(True, -0.35, 1.70, 1.0, 0.60))
+        self.assertFalse(abort(False, -0.35, 1.30, 1.0, 0.60))
+        self.assertFalse(abort(True, +0.10, 1.30, 1.0, 0.60))
+        self.executor._lock = threading.Lock()
+        self.executor._recovery_floor_abort = True
+        self.executor._recovery_cb(MODULE.Bool(data=False))
+        self.assertTrue(self.executor._recovery_floor_abort)
+        self.assertTrue(MODULE.proactive_floor_escape_required(True, 0.80))
+        self.assertFalse(MODULE.proactive_floor_escape_required(True, 0.10))
+        self.assertFalse(MODULE.proactive_floor_escape_required(
+            True, float("inf")))
+
+    def test_floor_follow_raises_only_with_observed_roof_room(self):
+        target = MODULE.floor_follow_target_z
+        self.assertAlmostEqual(target(3.70, 3.80, 1.30, 1.70, 0.80), 4.20)
+        self.assertAlmostEqual(target(3.70, 3.80, 1.30, 1.70, 0.15), 3.95)
+        self.assertAlmostEqual(target(4.30, 3.80, 1.30, 1.70, 0.80), 4.30)
+        self.assertAlmostEqual(target(3.70, 3.80, 1.80, 1.70, 0.80), 3.70)
+        self.assertAlmostEqual(target(3.70, 4.20, 1.80, 1.70, 0.80), 4.10)
+        self.assertAlmostEqual(target(3.70, 4.20, 2.30, 1.70, 0.80), 3.70)
+        self.assertAlmostEqual(target(3.70, 3.80, 1.30, 1.70,
+                                      float("inf")), 3.70)
+
+    def test_no_hit_downward_range_cannot_be_treated_as_clear_floor(self):
+        valid = MODULE.valid_downward_range
+        self.assertTrue(valid(1.4, 0.1, 30.0))
+        self.assertFalse(valid(30.0, 0.1, 30.0))
+        self.assertFalse(valid(29.98, 0.1, 30.0))
+        self.assertFalse(valid(float("inf"), 0.1, 30.0))
 
     def test_new_floor_threat_reverses_old_roof_escape(self):
         direction = MODULE.vertical_escape_direction

@@ -141,6 +141,8 @@
     <param name="proximity_hold_margin" value="0.75"/>
     <param name="absolute_clearance_hold_margin" value="0.25"/>
     <param name="absolute_clearance_slowdown_margin" value="0.55"/>
+    <param name="recovery_floor_abort_margin" value="0.60"/>
+    <param name="floor_follow_clearance" value="1.70"/>
     <!-- Keep the early 1.30 m ceiling/floor brake. A 1.15 m trigger let PX4
          vertical inertia carry the aircraft inside the hard 1 m envelope. -->
     <param name="vertical_avoidance_margin" value="0.30"/>

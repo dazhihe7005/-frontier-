@@ -62,8 +62,8 @@ index 208c4c1..531b576 100644
 +                     planning_params_.short_path_gain_scale_length);
 +      }
 +
-+      if (candidate_length < 2.0 &&
-+          planning_params_.recent_viewpoint_penalty_radius > 0.0 &&
++      // Penalize repeated long blocked destinations as well as short loops.
++      if (planning_params_.recent_viewpoint_penalty_radius > 0.0 &&
 +          planning_params_.recent_viewpoint_penalty_weight > 0.0) {
 +        const Eigen::Vector3d endpoint = leaf_vertices[i]->state.head(3);
 +        double repeat_cost = 0.0;

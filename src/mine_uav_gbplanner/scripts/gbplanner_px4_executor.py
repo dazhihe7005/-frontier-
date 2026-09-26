@@ -66,6 +66,40 @@ def floor_guard_required(clearance, radius, intended_vz, measured_vz):
             measured_vz < -0.08)
 
 
+def recovery_floor_abort_required(recovery_active, intended_vz,
+                                  floor_clearance, radius, margin):
+    """Stop a descending reverse path before it can re-enter the floor band."""
+    return (recovery_active and intended_vz < -0.10 and
+            floor_clearance <= radius + margin)
+
+
+def proactive_floor_escape_required(recovery_floor_abort, upward_room):
+    """A stopped descending recovery may climb only if the roof permits it."""
+    return (recovery_floor_abort and math.isfinite(upward_room) and
+            upward_room >= 0.20)
+
+
+def floor_follow_target_z(planned_z, actual_z, floor_clearance,
+                          target_clearance, upward_room):
+    """Keep setpoint above the floor target, allowing descent on falling ground."""
+    if not all(math.isfinite(value) for value in
+               (planned_z, actual_z, floor_clearance, target_clearance)):
+        return planned_z
+    minimum_z = actual_z + target_clearance-floor_clearance
+    if minimum_z > actual_z:
+        if not math.isfinite(upward_room) or upward_room <= 0.0:
+            return planned_z
+        minimum_z = min(minimum_z, actual_z+upward_room)
+    return max(planned_z, minimum_z)
+
+
+def valid_downward_range(measured, minimum, maximum):
+    """A max-range return is no-hit, not evidence of free space below."""
+    return (math.isfinite(measured) and math.isfinite(minimum) and
+            math.isfinite(maximum) and
+            minimum <= measured < maximum-0.05)
+
+
 def vertical_escape_direction(floor_emergency, vertical_detected,
                               nearest_vertical_z, escape_pending,
                               previous_direction):
@@ -128,6 +162,9 @@ class GbplannerPx4Executor:
             self.absolute_clearance_hold_margin + 0.05,
             float(rospy.get_param(
                 "~absolute_clearance_slowdown_margin", 0.55)))
+        self.recovery_floor_abort_margin = max(
+            self.absolute_clearance_slowdown_margin,
+            float(rospy.get_param("~recovery_floor_abort_margin", 0.60)))
         self.frontier_guard_min_duration = max(
             1.0, float(rospy.get_param(
                 "~frontier_guard_min_duration", 4.0)))
@@ -153,6 +190,9 @@ class GbplannerPx4Executor:
         self.vertical_avoidance_margin = max(
             self.absolute_clearance_hold_margin, float(rospy.get_param(
                 "~vertical_avoidance_margin", 0.30)))
+        self.floor_follow_clearance = max(
+            self.safety_radius + self.vertical_avoidance_margin + 0.15,
+            float(rospy.get_param("~floor_follow_clearance", 1.70)))
         self.vertical_escape_distance = max(
             0.10, float(rospy.get_param(
                 "~vertical_escape_distance", 0.35)))
@@ -209,6 +249,7 @@ class GbplannerPx4Executor:
         self._last_command = None
         self._planned_velocity = (0.0, 0.0, 0.0)
         self._recovery_active = False
+        self._recovery_floor_abort = False
         self._proximity_blocked_since = rospy.Time(0)
         self._proximity_hold_pose = None
         self._vertical_escape_active = False
@@ -297,6 +338,9 @@ class GbplannerPx4Executor:
     def _recovery_cb(self, message):
         with self._lock:
             self._recovery_active = bool(message.data)
+            # Keep a floor-aborted reverse trajectory stopped even after the
+            # recovery node drops its active flag. Only a newly validated
+            # trajectory may clear the latch.
 
     def _odom_cb(self, message):
         with self._lock:
@@ -317,8 +361,12 @@ class GbplannerPx4Executor:
             self._state = message
 
     def _downward_range_cb(self, message):
-        if not (math.isfinite(message.range) and
-                message.min_range <= message.range <= message.max_range):
+        if not valid_downward_range(
+                message.range, message.min_range, message.max_range):
+            with self._lock:
+                self._floor_rx = rospy.Time(0)
+            rospy.logwarn_throttle(
+                2.0, "Downward range is invalid or no-hit; holding flight")
             return
         clearance = (float(message.range) +
                      self.downward_range_origin_below_body)
@@ -480,6 +528,7 @@ class GbplannerPx4Executor:
             self._last_progress_tick = self._trajectory_start
             self._accepted += 1
             self._proximity_blocked_since = rospy.Time(0)
+            self._recovery_floor_abort = False
         if abs(z_correction) > 0.05:
             rospy.logwarn("Trajectory Z re-anchored by %.3f m", z_correction)
         self._publish_blocked(False)
@@ -818,6 +867,7 @@ class GbplannerPx4Executor:
             local_velocity = self._local_velocity
             path_margin = self._path_margin
             recovery_active = self._recovery_active
+            recovery_floor_abort = self._recovery_floor_abort
             vertical_escape_active = self._vertical_escape_active
             escape_direction = self._escape_direction
             existing_hold_pose = self._proximity_hold_pose
@@ -854,10 +904,15 @@ class GbplannerPx4Executor:
         desired_now = self._apply_alignment(
             self._sample(trajectory, progress), alignment)
         actual = local_pose.pose.position
+        desired_tracking_z = desired_now[2]
+        if self.require_downward_range and floor_fresh:
+            desired_tracking_z = floor_follow_target_z(
+                desired_tracking_z, actual.z, floor_clearance,
+                self.floor_follow_clearance, upward_room)
         tracking_error = math.sqrt(
             (desired_now[0]-actual.x) ** 2 +
             (desired_now[1]-actual.y) ** 2 +
-            (desired_now[2]-actual.z) ** 2)
+            (desired_tracking_z-actual.z) ** 2)
         tracking_scale = self._tracking_scale(tracking_error)
         total_duration = trajectory.points[-1].time_from_start.to_sec()
         frontier_approach = (
@@ -884,6 +939,18 @@ class GbplannerPx4Executor:
                                if local_velocity is not None else 0.0)
                 floor_intended_vz = intended_vz
                 floor_measured_vz = measured_vz
+                if recovery_floor_abort_required(
+                        recovery_active, intended_vz, floor_clearance,
+                        self.safety_radius,
+                        self.recovery_floor_abort_margin):
+                    with self._lock:
+                        if not self._recovery_floor_abort:
+                            rospy.logwarn(
+                                "Aborting descending recovery near floor: "
+                                "clearance %.3f m, intended vz %+.3f m/s",
+                                floor_clearance, intended_vz)
+                        self._recovery_floor_abort = True
+                    recovery_floor_abort = True
                 if floor_guard_required(
                         floor_clearance, self.safety_radius,
                         intended_vz, measured_vz):
@@ -893,10 +960,18 @@ class GbplannerPx4Executor:
                         self.absolute_clearance_slowdown_margin)
                     proximity_scale = min(proximity_scale, floor_scale)
                     floor_limited = floor_scale < 0.999
+        if recovery_floor_abort:
+            # Latch until the recovery node aborts this old reverse path.
+            # Releasing at 1.5 m previously resumed a -0.35 m/s descent,
+            # creating repeated climb/descent cycles and a 0.953 m near miss.
+            proximity_scale = 0.0
+            floor_limited = True
         vertical_detected = self._is_vertical_hazard(
             vertical_clearance, nearest_vertical_z, proximity_fresh)
         floor_emergency = (self.require_downward_range and floor_fresh and
-                           floor_clearance <= self.safety_radius + 0.35)
+                           (floor_clearance <= self.safety_radius + 0.35 or
+                            proactive_floor_escape_required(
+                                recovery_floor_abort, upward_room)))
         vertical_release_clearance = (
             self.safety_radius + self.vertical_avoidance_margin + 0.10)
         escape_pending = (
@@ -1000,6 +1075,13 @@ class GbplannerPx4Executor:
         if proximity_stop:
             x, y, z = proximity_hold_pose
             velocity = (0.0, 0.0, 0.0)
+        elif self.require_downward_range and floor_fresh:
+            floor_follow_z = floor_follow_target_z(
+                z, actual.z, floor_clearance,
+                self.floor_follow_clearance, upward_room)
+            if floor_follow_z > z + 1.0e-6:
+                z = floor_follow_z
+                velocity = (velocity[0], velocity[1], max(0.0, velocity[2]))
         if math.hypot(x, y) > self.max_horizontal_radius or not (
                 self.min_height <= z <= self.max_height):
             self._publish_ready(False)
