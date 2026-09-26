@@ -165,6 +165,12 @@ class SitlTaskOperator:
         if not rospy.get_param("/use_sim_time", False):
             rospy.logerr_throttle(2.0, "Refusing SITL automation without /use_sim_time")
             return
+        # Once armed, never interrupt the OFFBOARD setpoint stream merely
+        # because a vision-status gate temporarily becomes false. PX4 handles
+        # estimator loss separately; dropping setpoints here can itself cause
+        # a mode change and an uncontrolled descent during pre-task takeoff.
+        if state.armed and self._origin is not None:
+            self._publish_takeoff_target(now)
         with self._lock:
             vision_streaming_since = self._vision_streaming_since
         if (vision_streaming_since.is_zero() or

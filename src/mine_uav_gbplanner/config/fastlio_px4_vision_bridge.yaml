@@ -14,6 +14,10 @@ max_input_jump: 2.0
 # does not cut external vision and trigger PX4 failsafe.  GBPlanner itself is
 # still limited to 0.7 m/s, and the independent 2 m jump guard remains active.
 max_input_speed: 3.5
+# Reject an isolated corrupt frame without poisoning the accepted odometry
+# anchor. Three consecutive rejected frames stop PX4 vision output; no stale
+# pose is repeatedly published as if it were new.
+max_consecutive_input_outliers: 3
 
 # Minimum covariance floors prevent the repeated 30 Hz pose from appearing
 # unrealistically perfect to EKF2.

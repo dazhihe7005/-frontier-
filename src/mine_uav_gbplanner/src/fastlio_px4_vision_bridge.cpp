@@ -81,6 +81,8 @@ class FastlioPx4VisionBridge {
     private_nh_.param("data_timeout", data_timeout_, 0.3);
     private_nh_.param("max_input_jump", max_input_jump_, 2.0);
     private_nh_.param("max_input_speed", max_input_speed_, 2.0);
+    private_nh_.param("max_consecutive_input_outliers",
+                      max_consecutive_input_outliers_, 3);
     private_nh_.param("position_stddev", position_stddev_, 0.05);
     private_nh_.param("orientation_stddev", orientation_stddev_, 0.10);
     private_nh_.param("zero_initial_xy", zero_initial_xy_, true);
@@ -105,6 +107,8 @@ class FastlioPx4VisionBridge {
     if (!finite(max_input_speed_) || max_input_speed_ <= 0.0) {
       max_input_speed_ = 2.0;
     }
+    max_consecutive_input_outliers_ =
+        std::max(2, max_consecutive_input_outliers_);
     position_stddev_ = std::max(0.01, position_stddev_);
     orientation_stddev_ = std::max(0.01, orientation_stddev_);
 
@@ -155,6 +159,7 @@ class FastlioPx4VisionBridge {
                        : 0.0;
     alignment_ready_ = true;
     jump_detected_ = false;
+    consecutive_input_outliers_ = 0;
     previous_input_stamp_ = ros::Time(0);
     last_published_input_stamp_ = ros::Time(0);
 
@@ -195,6 +200,7 @@ class FastlioPx4VisionBridge {
       alignment_ready_ = false;
       have_previous_input_ = false;
       jump_detected_ = false;
+      consecutive_input_outliers_ = 0;
       ROS_WARN("Fast-LIO odometry recovered after an outage; capturing a fresh "
                "alignment while PX4 is disarmed");
     }
@@ -219,13 +225,31 @@ class FastlioPx4VisionBridge {
       const bool speed_jump = dt >= 0.02 && dt <= 1.0 &&
                               distance / dt > max_input_speed_;
       if (absolute_jump || speed_jump) {
-        jump_detected_ = true;
-        publishStatus(speed_jump ? "INPUT_SPEED_EXCEEDED" : "INPUT_JUMP");
-        ROS_ERROR("Fast-LIO input rejected: displacement %.3f m in %.3f s "
-                  "(limit %.2f m, %.2f m/s); vision output stopped",
-                  distance, dt, max_input_jump_, max_input_speed_);
+        ++consecutive_input_outliers_;
+        if (consecutive_input_outliers_ >= max_consecutive_input_outliers_) {
+          jump_detected_ = true;
+          publishHealth(false);
+          publishStatus(speed_jump ? "INPUT_SPEED_EXCEEDED" : "INPUT_JUMP");
+          ROS_ERROR("Fast-LIO input rejected %d consecutive times: "
+                    "displacement %.3f m in %.3f s; vision output stopped",
+                    consecutive_input_outliers_, distance, dt);
+        } else {
+          // Keep STREAMING while the last accepted sample is still fresh.
+          // The SITL takeoff operator gates its OFFBOARD setpoint stream on
+          // this status; a transient diagnostic status would interrupt that
+          // stream even though the rejected pose never reached PX4.
+          ROS_WARN("Fast-LIO transient outlier rejected (%d/%d): "
+                   "displacement %.3f m in %.3f s; last valid pose retained",
+                   consecutive_input_outliers_, max_consecutive_input_outliers_,
+                   distance, dt);
+        }
+        // Never use a rejected sample as either the next comparison anchor or
+        // as the pose sent to PX4. A single corrupt frame must not poison the
+        // first genuine frame that follows it.
+        return;
       }
     }
+    consecutive_input_outliers_ = 0;
     previous_input_position_ = odometry->pose.pose.position;
     previous_input_stamp_ = odometry->header.stamp;
     have_previous_input_ = true;
@@ -294,6 +318,7 @@ class FastlioPx4VisionBridge {
           previous_input_stamp_ = ros::Time(0);
           last_published_input_stamp_ = ros::Time(0);
           jump_detected_ = false;
+          consecutive_input_outliers_ = 0;
         }
         publishStatus("ODOMETRY_TIMEOUT");
       } else if (!mavros_ok) {
@@ -358,6 +383,7 @@ class FastlioPx4VisionBridge {
     previous_input_stamp_ = ros::Time(0);
     last_published_input_stamp_ = ros::Time(0);
     jump_detected_ = false;
+    consecutive_input_outliers_ = 0;
     publishHealth(false);
     publishStatus("WAIT_ODOMETRY");
     response.success = true;
@@ -392,6 +418,8 @@ class FastlioPx4VisionBridge {
   double data_timeout_{0.3};
   double max_input_jump_{2.0};
   double max_input_speed_{2.0};
+  int max_consecutive_input_outliers_{3};
+  int consecutive_input_outliers_{0};
   double position_stddev_{0.05};
   double orientation_stddev_{0.10};
   double initial_yaw_{0.0};

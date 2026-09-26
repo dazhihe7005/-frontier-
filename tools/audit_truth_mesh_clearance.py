@@ -33,6 +33,8 @@ def parse_args():
     parser.add_argument("--x-max", type=float, default=math.inf)
     parser.add_argument("--time-min", type=float, default=-math.inf)
     parser.add_argument("--time-max", type=float, default=math.inf)
+    parser.add_argument("--armed-only", action="store_true",
+                        help="include all armed samples, including PX4 failsafe modes")
     args = parser.parse_args(argv)
     if (args.safety_radius <= 0 or args.nearest_cutoff <= args.safety_radius
             or args.x_min > args.x_max or args.time_min > args.time_max):
@@ -60,8 +62,9 @@ def main():
         for row in csv.DictReader(source):
             all_rows += 1
             run_ids.add(row.get("ros_run_id", ""))
-            if not all(row.get(field) == "1" for field in
-                       ("armed", "offboard", "exploration_started")):
+            required_fields = ("armed",) if args.armed_only else (
+                "armed", "offboard", "exploration_started")
+            if not all(row.get(field) == "1" for field in required_fields):
                 continue
             values = tuple(float(row[key]) for key in
                            ("sim_time", "x", "y", "z"))
@@ -80,7 +83,7 @@ def main():
                             quaternion.normalize()
                 selected.append((*values, quaternion))
     if not selected:
-        raise RuntimeError("no armed OFFBOARD exploration samples in trajectory")
+        raise RuntimeError("no trajectory samples matched the selected flight phase")
 
     minimum = math.inf
     worst = None
@@ -144,7 +147,9 @@ def main():
         "mesh_sha256": {name: file_sha256(path) for name, path in meshes.items()},
         "safety_radius_m": args.safety_radius,
         "all_truth_rows": all_rows,
-        "armed_offboard_exploration_samples": len(selected),
+        "sample_selection": "armed_any_mode" if args.armed_only else
+                            "armed_offboard_exploration",
+        "selected_samples": len(selected),
         "sampled_min_clearance_m": round(minimum, 5),
         "sampled_below_radius_count": below_radius,
         "per_mesh_min_clearance_m": {
@@ -160,6 +165,8 @@ def main():
         "sampled_radius_pass": below_radius == 0,
         "continuous_flight_proven": False,
     }
+    if not args.armed_only:
+        report["armed_offboard_exploration_samples"] = len(selected)
     formatted = json.dumps(report, sort_keys=True, indent=2)
     print(formatted, flush=True)
     if args.output:
