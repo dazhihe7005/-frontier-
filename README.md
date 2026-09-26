@@ -33,6 +33,8 @@ cd /home/nuc/gbplanner2_isolated_ws
 ./run_full_chain.bash gui:=false rviz:=false
 ```
 
+当前默认启用 1 m 球形碰撞检查和最终路径严格复核；因 MID360S 顶板/侧壁近距盲区，规划器可能在起点拒绝全部路径。这是尚未完成安全验收时的失败即停行为，不表示全图探索已成功。旧碰撞盒只可通过显式参数用于隔离对照，不能作为 1 m 安全配置。
+
 路口专项回归（地图仍为原始 1:1 尺度，只旋转场景让实地图中的交叉口位于
 标准起点前方）：
 
@@ -163,6 +165,10 @@ git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-global-fro
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-preserve-frontiers.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-global-frontier-utility.patch
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-local-frontier-audit.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-capsule-experiment.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-raw-path-diagnostic.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-strict-final-path-experiment.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-sphere-rejection-diagnostic.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 

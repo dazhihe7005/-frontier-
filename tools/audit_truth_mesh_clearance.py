@@ -67,7 +67,7 @@ def main():
                                        ("qw", "qx", "qy", "qz"))
                     if all(math.isfinite(value) for value in components):
                         quaternion = Quaternion(components)
-                        if quaternion.length < 1.0e-8:
+                        if quaternion.magnitude < 1.0e-8:
                             quaternion = None
                         else:
                             quaternion.normalize()

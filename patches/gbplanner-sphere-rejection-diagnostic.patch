@@ -1,0 +1,34 @@
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -578,4 +578,9 @@ void Rrg::expandGraph(std::shared_ptr<GraphManager> graph_manager,
+     if (MapManager::VoxelStatus::kFree == vs) {
+       admissible_edge = true;
++    } else if (graph_manager == local_graph_ && nearest_vertex->id == 0) {
++      ROS_WARN_THROTTLE(5.0,
++          "GBPLANNER_ROOT_EDGE_REJECTED status=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++          static_cast<int>(vs), start_pos.x(), start_pos.y(), start_pos.z(),
++          end_pos.x(), end_pos.y(), end_pos.z());
+     }
+   } else if (robot_params_.type == RobotType::kGroundRobot) {
+@@ -842,4 +847,9 @@ void Rrg::expandGraph(std::shared_ptr<GraphManager> graph_manager,
+     if (MapManager::VoxelStatus::kFree == vs) {
+       admissible_edge = true;
++    } else if (graph_manager == local_graph_ && nearest_vertex->id == 0) {
++      ROS_WARN_THROTTLE(5.0,
++          "GBPLANNER_ROOT_EDGE_REJECTED_VERTEX status=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++          static_cast<int>(vs), start_pos.x(), start_pos.y(), start_pos.z(),
++          end_pos.x(), end_pos.y(), end_pos.z());
+     }
+   } else if (robot_params_.type == RobotType::kGroundRobot) {
+@@ -1160,5 +1170,10 @@ Rrg::GraphStatus Rrg::buildGraph() {
+   } else {
+     visualization_->visualizeFailedEdges(stat_);
++    ROS_WARN_THROTTLE(5.0,
++        "GBPLANNER_GRAPH_EMPTY root=(%.2f,%.2f,%.2f) failed_vertices=%d failed_edges=%d loops=%d",
++        root_vertex_->state[0], root_vertex_->state[1],
++        root_vertex_->state[2], stat_->num_vertices_fail,
++        stat_->num_edges_fail, loop_count);
+     ROS_INFO_COND(global_verbosity >= Verbosity::DEBUG, "Number of failed samples: [%d] vertices and [%d] edges",
+              stat_->num_vertices_fail, stat_->num_edges_fail);
+     return Rrg::GraphStatus::ERR_NO_FEASIBLE_PATH;

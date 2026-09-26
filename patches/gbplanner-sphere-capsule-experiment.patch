@@ -1,0 +1,141 @@
+diff --git a/planner_common/include/planner_common/map_manager_voxblox_impl.h b/planner_common/include/planner_common/map_manager_voxblox_impl.h
+index 7eb37c6..0f71341 100644
+--- a/planner_common/include/planner_common/map_manager_voxblox_impl.h
++++ b/planner_common/include/planner_common/map_manager_voxblox_impl.h
+@@ -206,6 +206,9 @@ class MapManagerVoxblox : MapManager {
+   void setRobotRadius(double robot_radius) { robot_radius_ = robot_radius; }
+ 
+  private:
++  VoxelStatus getCapsuleStatus(const Eigen::Vector3d& start,
++                               const Eigen::Vector3d& end, double radius,
++                               bool stop_at_unknown_voxel) const;
+   VoxelStatus getBoxStatusInVoxels(
+       const voxblox::LongIndex& bounding_box_center,
+       const voxblox::AnyIndex& bounding_box_voxels,
+@@ -223,6 +226,9 @@ class MapManagerVoxblox : MapManager {
+   // multiplier of a single voxel size to consider as a distance metric for
+   // occupancy threshold
+   float occupancy_distance_voxelsize_factor_;
++  // Disabled by default; when enabled, all planner point/edge occupancy
++  // queries use a conservative spherical/capsule footprint instead of boxes.
++  double collision_sphere_radius_m_ = 0.0;
+ 
+   // Separate object to setup because tsdf_server_ has
+   // protected tsdf_integrator_, otherwise could use getConfig()
+diff --git a/planner_common/src/voxblox/voxblox_alt_impl.cpp b/planner_common/src/voxblox/voxblox_alt_impl.cpp
+index 78d8a55..e55785b 100644
+--- a/planner_common/src/voxblox/voxblox_alt_impl.cpp
++++ b/planner_common/src/voxblox/voxblox_alt_impl.cpp
+@@ -1,11 +1,73 @@
+ #include "planner_common/map_manager_voxblox_impl.h"
+ 
++// A voxel cube may intersect the requested spherical envelope even when its
++// centre does not. The half-diagonal is deliberately conservative; this is
++// an occupancy-map test, not a certificate against unseen real geometry.
++template <typename SDFServerType, typename SDFVoxelType>
++typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
++MapManagerVoxblox<SDFServerType, SDFVoxelType>::getCapsuleStatus(
++    const Eigen::Vector3d& start, const Eigen::Vector3d& end, double radius,
++    bool stop_at_unknown_voxel) const {
++  const double voxel_size = sdf_layer_->voxel_size();
++  const double voxel_size_inv = 1.0 / voxel_size;
++  const double expanded_radius = radius + 0.5 * std::sqrt(3.0) * voxel_size;
++  const double expanded_radius_sq = expanded_radius * expanded_radius;
++  // The legacy 1-voxel positive TSDF threshold plus the voxel half-diagonal
++  // margin would reject centres more than 1.3 m from a wall for a 1 m sphere.
++  // In this mode, treat the near-zero TSDF band as the surface; the voxel
++  // half-diagonal already accounts for where that surface lies in the cube.
++  const double occupancy_distance =
++      std::min<double>(occupancy_distance_voxelsize_factor_, 0.25) *
++          voxel_size + 1e-6;
++  const Eigen::Vector3d margin = Eigen::Vector3d::Constant(expanded_radius);
++  const Eigen::Vector3d lower = start.cwiseMin(end) - margin;
++  const Eigen::Vector3d upper = start.cwiseMax(end) + margin;
++  const voxblox::LongIndex first =
++      voxblox::getGridIndexFromPoint<voxblox::LongIndex>(
++          lower.cast<voxblox::FloatingPoint>(), voxel_size_inv);
++  const voxblox::LongIndex last =
++      voxblox::getGridIndexFromPoint<voxblox::LongIndex>(
++          upper.cast<voxblox::FloatingPoint>(), voxel_size_inv);
++  const Eigen::Vector3d segment = end - start;
++  const double segment_sq = segment.squaredNorm();
++  VoxelStatus status = VoxelStatus::kFree;
++  for (int64_t x = first.x(); x <= last.x(); ++x) {
++    for (int64_t y = first.y(); y <= last.y(); ++y) {
++      for (int64_t z = first.z(); z <= last.z(); ++z) {
++        const voxblox::LongIndex index(x, y, z);
++        const Eigen::Vector3d voxel_center =
++            voxblox::getCenterPointFromGridIndex(index, voxel_size)
++                .cast<double>();
++        const double fraction = segment_sq > 1e-12
++            ? std::max(0.0, std::min(1.0,
++                (voxel_center - start).dot(segment) / segment_sq))
++            : 0.0;
++        const Eigen::Vector3d nearest = start + fraction * segment;
++        if ((voxel_center - nearest).squaredNorm() > expanded_radius_sq)
++          continue;
++        const SDFVoxelType* voxel =
++            sdf_layer_->getVoxelPtrByGlobalIndex(index);
++        if (checkUnknownStatus(voxel)) {
++          if (stop_at_unknown_voxel) return VoxelStatus::kUnknown;
++          status = VoxelStatus::kUnknown;
++        } else if (voxel->distance <= occupancy_distance) {
++          return VoxelStatus::kOccupied;
++        }
++      }
++    }
++  }
++  return status;
++}
++
+ #if (COL_CHECK_METHOD == 0)
+ template <typename SDFServerType, typename SDFVoxelType>
+ typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
+ MapManagerVoxblox<SDFServerType, SDFVoxelType>::getBoxStatus(
+     const Eigen::Vector3d& center, const Eigen::Vector3d& size,
+     bool stop_at_unknown_voxel) const {
++  if (collision_sphere_radius_m_ > 0.0)
++    return getCapsuleStatus(center, center, collision_sphere_radius_m_,
++                            stop_at_unknown_voxel);
+   float voxel_size = sdf_layer_->voxel_size();
+   float voxel_size_inv = 1.0 / voxel_size;
+ 
+@@ -119,6 +181,9 @@ typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
+ MapManagerVoxblox<SDFServerType, SDFVoxelType>::getPathStatus(
+     const Eigen::Vector3d& start, const Eigen::Vector3d& end,
+     const Eigen::Vector3d& box_size, bool stop_at_unknown_voxel) const {
++  if (collision_sphere_radius_m_ > 0.0)
++    return getCapsuleStatus(start, end, collision_sphere_radius_m_,
++                            stop_at_unknown_voxel);
+   float voxel_size = sdf_layer_->voxel_size();
+   float voxel_size_inv = 1.0 / voxel_size;
+   const float distance_thres =
+@@ -891,4 +956,4 @@ void MapManagerVoxblox<SDFServerType, SDFVoxelType>::getScanStatusIterative(
+   }
+   gain_log =
+       std::make_tuple(num_unknown_voxels, num_free_voxels, num_occupied_voxels);
+-}
+\ No newline at end of file
++}
+diff --git a/planner_common/src/voxblox/voxblox_common_impl.cpp b/planner_common/src/voxblox/voxblox_common_impl.cpp
+index 0b0e096..fb5c34d 100644
+--- a/planner_common/src/voxblox/voxblox_common_impl.cpp
++++ b/planner_common/src/voxblox/voxblox_common_impl.cpp
+@@ -32,6 +32,17 @@ MapManagerVoxblox<SDFServerType, SDFVoxelType>::MapManagerVoxblox(
+                   "occupancy_distance_voxelsize_factor, using default of: %f",
+                   occupancy_distance_voxelsize_factor_);
+   }
++  nh_private.param("collision_sphere_radius_m", collision_sphere_radius_m_,
++                   0.0);
++  if (!std::isfinite(collision_sphere_radius_m_) ||
++      collision_sphere_radius_m_ < 0.0) {
++    ROS_ERROR("Invalid collision_sphere_radius_m; disabling experimental sphere check");
++    collision_sphere_radius_m_ = 0.0;
++  }
++  if (collision_sphere_radius_m_ > 0.0) {
++    ROS_WARN("Experimental conservative sphere/capsule map collision: radius %.3f m; unknown voxels block planning",
++             collision_sphere_radius_m_);
++  }
+ 
+   // Setup E/TsdfIntegratorBase::Config and object separately (also called in
+   // e/tsdf_server_ ctor)

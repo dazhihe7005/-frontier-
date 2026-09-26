@@ -21,6 +21,8 @@ catkin_install_python(PROGRAMS
   scripts/diagnostic_map_coverage.py
   scripts/diagnostic_truth_trajectory.py
   scripts/diagnostic_planned_trajectory.py
+  scripts/diagnostic_ray_snapshot.py
+  scripts/diagnostic_tsdf_snapshot.py
   scripts/gbplanner_mission_trigger.py
   scripts/gbplanner_px4_executor.py
   scripts/gbplanner_stall_recovery.py

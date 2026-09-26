@@ -77,7 +77,7 @@ def main():
                         args.y_min <= xyz[1] <= args.y_max and
                         args.time_min <= stamp <= args.time_max):
                     continue
-                plan_index = int(row["trajectory_index"])
+                plan_index = int(row.get("trajectory_index") or row["header_seq"])
             except (KeyError, TypeError, ValueError):
                 continue
             selected += 1
@@ -103,7 +103,7 @@ def main():
                     "sim_time": stamp, "trajectory_index": plan_index,
                     "header_seq": row["header_seq"],
                     "point_index": int(row["point_index"]),
-                    "point_time_s": float(row["point_time_s"]),
+                    "point_time_s": float(row.get("point_time_s") or 0.0),
                     "projected_xyz_m": xyz,
                     "nearest_mesh": min(distances, key=distances.get),
                     "clearance_m": round(clearance, 5),

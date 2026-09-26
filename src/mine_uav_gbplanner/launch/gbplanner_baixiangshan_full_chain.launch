@@ -9,6 +9,13 @@
   <arg name="frontier_percentage_threshold" default="0.04"/>
   <arg name="planner_trigger_lead_time" default="0.4"/>
   <arg name="planner_vertical_collision_extension" default="0.700"/>
+  <!-- Fail closed by default. The previous box mode missed a 1 m mesh
+       violation; explicitly pass radius:=0 only for isolated A/B diagnosis. -->
+  <arg name="planner_collision_sphere_radius" default="1.0"/>
+  <arg name="planner_strict_final_path_check" default="true"/>
+  <arg name="voxblox_use_freespace" default="true"/>
+  <arg name="ray_snapshot_sim_time" default="32.0"/>
+  <arg name="tsdf_snapshot_sim_time" default="32.0"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="world" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/worlds/baixianshan_gbplanner.world"/>
   <arg name="vehicle_sdf" default="/home/nuc/gbplanner2_isolated_ws/isolated_assets/models/iris_mid360/iris_mid360.sdf"/>
@@ -112,6 +119,10 @@
     <remap from="/pointcloud" to="/mine_uav/gbplanner/voxblox_points"/>
     <remap from="/freespace_pointcloud" to="/mine_uav/gbplanner/voxblox_freespace"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/gbplanner_mid360.yaml"/>
+    <!-- The 1 m sphere/capsule check deliberately stops on unknown roof voxels.
+         The legacy box is not certified for the requested 1 m radius. -->
+    <param name="collision_sphere_radius_m" value="$(arg planner_collision_sphere_radius)"/>
+    <param name="strict_final_path_check" value="$(arg planner_strict_final_path_check)"/>
     <!-- Experimental rectangular-box A/B: physical height 0.5 m plus
          extension 1.6 m gives a 1.05 m vertical half-box, but this is
          NOT equivalent to the required 1 m sphere. Keep the 0.7 m
@@ -121,6 +132,7 @@
     <param name="SensorParams/MID360S/frontier_percentage_threshold"
            value="$(arg frontier_percentage_threshold)"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/voxblox_mid360.yaml"/>
+    <param name="use_freespace_pointcloud" value="$(arg voxblox_use_freespace)"/>
   </node>
   <node pkg="pci_general" type="pci_general_ros_node"
         name="pci_general_ros_node" output="screen" required="true">
@@ -204,6 +216,16 @@
   <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
         type="diagnostic_planned_trajectory.py" name="diagnostic_planned_trajectory"
         output="screen"/>
+  <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
+        type="diagnostic_ray_snapshot.py" name="diagnostic_ray_snapshot"
+        output="screen">
+    <param name="target_sim_time" value="$(arg ray_snapshot_sim_time)"/>
+  </node>
+  <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
+        type="diagnostic_tsdf_snapshot.py" name="diagnostic_tsdf_snapshot"
+        output="screen">
+    <param name="target_sim_time" value="$(arg tsdf_snapshot_sim_time)"/>
+  </node>
 
   <!-- If local and global frontier selection both return empty, retreat one
        already executed collision-checked segment and replan.  This avoids an

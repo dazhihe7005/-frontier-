@@ -1,0 +1,69 @@
+diff --git a/gbplanner/include/gbplanner/rrg.h b/gbplanner/include/gbplanner/rrg.h
+index 747a6cd..9d60bdb 100644
+--- a/gbplanner/include/gbplanner/rrg.h
++++ b/gbplanner/include/gbplanner/rrg.h
+@@ -472,6 +472,7 @@ class Rrg {
+ 
+   bool homing_engaged_ = false;
+   bool landing_engaged_ = false;
++  bool strict_final_path_check_ = false;
+ 
+   //
+   bool add_frontiers_to_global_graph_;
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+index 208c4c1..e49ae6f 100644
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -30,6 +31,8 @@ Rrg::Rrg(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private,
+ }
+ 
+ void Rrg::initializeAttributes() {
++  nh_private_.param("strict_final_path_check", strict_final_path_check_,
++                    false);
+   visualization_ = new Visualization(nh_, nh_private_);
+ 
+   geofence_manager_.reset(new GeofenceManager());
+@@ -3784,10 +3907,13 @@ std::vector<geometry_msgs::Pose> Rrg::getBestPath(std::string tgt_frame,
+     Eigen::Vector3d p_start = p0 + robot_params_.center_offset - p_overshoot;
+     Eigen::Vector3d p_end =
+         p0 + robot_params_.center_offset + dir_vec + p_overshoot;
+-    if ((dir_vec.norm() > 0) &&
+-        (MapManager::VoxelStatus::kFree !=
+-         map_manager_->getPathStatus(p_start, p_end, robot_box_size_, true))) {
+-      ROS_INFO_COND(global_verbosity >= Verbosity::INFO, "Segment [%d] is not clear.", i);
++    if (dir_vec.norm() > 0 &&
++        MapManager::VoxelStatus::kFree !=
++            map_manager_->getPathStatus(p_start, p_end, robot_box_size_, true)) {
++      ROS_WARN("GBPLANNER_RAW_SEGMENT_NOT_FREE index=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++               i, p_start.x(), p_start.y(), p_start.z(),
++               p_end.x(), p_end.y(), p_end.z());
++      if (strict_final_path_check_) return empty_path;
+     }
+ 
+     tf::Quaternion quat;
+@@ -3846,6 +3972,25 @@ std::vector<geometry_msgs::Pose> Rrg::getBestPath(std::string tgt_frame,
+     ret = interp_path;
+   }
+ 
++  if (strict_final_path_check_) {
++    for (size_t i = 1; i < ret.size(); ++i) {
++      const Eigen::Vector3d start(
++          ret[i - 1].position.x, ret[i - 1].position.y,
++          ret[i - 1].position.z);
++      const Eigen::Vector3d end(
++          ret[i].position.x, ret[i].position.y, ret[i].position.z);
++      const MapManager::VoxelStatus status = map_manager_->getPathStatus(
++          start + robot_params_.center_offset,
++          end + robot_params_.center_offset, robot_box_size_, true);
++      if (status != MapManager::VoxelStatus::kFree) {
++        ROS_WARN("GBPLANNER_FINAL_PATH_REJECTED segment=%zu status=%d start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f)",
++                 i, static_cast<int>(status), start.x(), start.y(), start.z(),
++                 end.x(), end.y(), end.z());
++        return empty_path;
++      }
++    }
++  }
++
+   visualization_->visualizeRefPath(ret);
+ 
+   return ret;
