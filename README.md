@@ -188,13 +188,14 @@ Gazebo MID360S PointCloud
 ```bash
 vcs import < dependencies.repos
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-isolated-cumulative.patch
+git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-candidate-ranking-diagnostic.patch
 git -C src/mapping/voxblox apply ../../../patches/voxblox-integration-lag-diagnostic.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 
 累计补丁基于 `dependencies.repos` 固定的 GBPlanner 提交，包含原先逐个记录的
-所有隔离改动及精确 MID360S 收益射线；旧分项补丁保留供历史审计，**不要再与
-累计补丁叠加应用**。
+所有隔离改动及精确 MID360S 收益射线；随后单独应用默认关闭的候选排名诊断补丁。
+其他旧分项补丁保留供历史审计，**不要再与累计补丁叠加应用**。
 
 随后按当前工作区配置使用 `catkin build`。仓库不包含第三方 Git 工作树、
 编译产物、运行日志或 PX4 持久状态。

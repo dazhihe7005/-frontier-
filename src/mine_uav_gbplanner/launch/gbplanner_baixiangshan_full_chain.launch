@@ -42,6 +42,7 @@
        violation; explicitly pass radius:=0 only for isolated A/B diagnosis. -->
   <arg name="planner_collision_sphere_radius" default="1.0"/>
   <arg name="planner_strict_final_path_check" default="true"/>
+  <arg name="diagnostic_candidate_ranking" default="false"/>
   <!-- Read-only planner voxel rejection audit; opt in for diagnostics. -->
   <arg name="diagnostic_collision_voxel" default="false"/>
   <arg name="diagnostic_integration_lag" default="false"/>
@@ -187,6 +188,7 @@
     <!-- The 1 m sphere/capsule check deliberately stops on unknown roof voxels.
          The legacy box is not certified for the requested 1 m radius. -->
     <param name="collision_sphere_radius_m" value="$(arg planner_collision_sphere_radius)"/>
+    <param name="diagnostic_candidate_ranking" value="$(arg diagnostic_candidate_ranking)"/>
     <param name="diagnostic_collision_voxel" value="$(arg diagnostic_collision_voxel)"/>
     <param name="diagnostic_integration_lag" value="$(arg diagnostic_integration_lag)"/>
     <param name="PlanningParams/edge_length_max" value="$(arg planner_edge_length_max)"/>

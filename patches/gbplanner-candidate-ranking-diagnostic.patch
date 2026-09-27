@@ -1,0 +1,69 @@
+diff --git a/gbplanner/include/gbplanner/rrg.h b/gbplanner/include/gbplanner/rrg.h
+--- a/gbplanner/include/gbplanner/rrg.h
++++ b/gbplanner/include/gbplanner/rrg.h
+@@ -475,6 +475,7 @@ class Rrg {
+   bool homing_engaged_ = false;
+   bool landing_engaged_ = false;
+   bool strict_final_path_check_ = false;
++  bool diagnostic_candidate_ranking_ = false;
+   double surveyed_launch_backtrack_m_ = 0.0;
+   bool surveyed_launch_seed_attempted_ = false;
+ 
+diff --git a/gbplanner/src/rrg.cpp b/gbplanner/src/rrg.cpp
+--- a/gbplanner/src/rrg.cpp
++++ b/gbplanner/src/rrg.cpp
+@@ -32,4 +32,6 @@ void Rrg::initializeAttributes() {
+   nh_private_.param("strict_final_path_check", strict_final_path_check_,
+                     false);
++  nh_private_.param("diagnostic_candidate_ranking",
++                    diagnostic_candidate_ranking_, false);
+   nh_private_.param("surveyed_launch_backtrack_m",
+                     surveyed_launch_backtrack_m_, 0.0);
+@@ -1499,4 +1501,5 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+   bool frontier_exists = false;
+   std::vector<int> negative_edge_leafs;
+   std::vector<Eigen::Vector3d> inadmissible_negative_edges;
++  std::vector<std::pair<double, int>> ranked_candidate_scores;
+   for (int i = 0; i < num_leaf_vertices; ++i) {
+@@ -1627,6 +1630,10 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+         }
+       }
+ 
++      if (diagnostic_candidate_ranking_ && path_gain > 0.0) {
++        ranked_candidate_scores.emplace_back(path_gain, id);
++      }
++
+       if (path_gain > best_gain) {
+         best_gain = path_gain;
+         best_path_id = id;
+@@ -1638,5 +1645,30 @@ Rrg::GraphStatus Rrg::evaluateGraph() {
+     }
+   }
+ 
++  if (diagnostic_candidate_ranking_) {
++    std::sort(ranked_candidate_scores.begin(), ranked_candidate_scores.end(),
++              [](const std::pair<double, int>& a,
++                 const std::pair<double, int>& b) { return a.first > b.first; });
++    const size_t rank_count = std::min<size_t>(5, ranked_candidate_scores.size());
++    for (size_t rank = 0; rank < rank_count; ++rank) {
++      const int id = ranked_candidate_scores[rank].second;
++      Vertex* candidate = local_graph_->getVertex(id);
++      StateVec* nearest_visited = nullptr;
++      double visit_distance = -1.0;
++      if (robot_state_hist_->getNearestState(&candidate->state,
++                                             &nearest_visited) &&
++          nearest_visited != nullptr) {
++        visit_distance =
++            (candidate->state.head(3) - nearest_visited->head(3)).norm();
++      }
++      ROS_WARN("LOCAL_CANDIDATE_RANK rank=%zu id=%d score=%.1f goal=(%.2f,%.2f,%.2f) path=%.2f unknown=%d frontier=%d visited_distance=%.2f",
++               rank, id, ranked_candidate_scores[rank].first,
++               candidate->state[0], candidate->state[1], candidate->state[2],
++               local_graph_->getShortestDistance(id, local_graph_rep_),
++               candidate->vol_gain.num_unknown_voxels,
++               candidate->vol_gain.is_frontier, visit_distance);
++    }
++  }
++
+   if (planner_trigger_count_ <= 20) {
+     ROS_WARN("STARTUP_CANDIDATES trigger=%d leaves=%d over2m=%d longest=%.2f selected=%.2f score=%.3f",
