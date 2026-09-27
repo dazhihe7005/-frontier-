@@ -99,6 +99,11 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
     run_id = truth.get("ros_run_id")
     home_xy = math.dist(first["position"][:2], last["position"][:2])
     home_z = abs(first["position"][2]-last["position"][2])
+    sampled_min_clearance = number(mesh, "sampled_min_clearance_m")
+    fastlio_error = number(chain, "max_fastlio_vs_truth_relative_error_m")
+    px4_error = number(chain, "max_fastlio_px4_vs_truth_relative_error_m")
+    sampled_margin = (sampled_min_clearance-1.0
+                      if sampled_min_clearance is not None else None)
     checks = {
         "same_ros_launch_run": isinstance(run_id, str) and bool(run_id) and
             chain.get("ros_run_id") == run_id and
@@ -155,6 +160,16 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
             mesh["max_sample_gap_s"] <= 0.2 and
             number(mesh, "piecewise_linear_clearance_lower_bound_m") is not None and
             mesh["piecewise_linear_clearance_lower_bound_m"] >= 1.0,
+        # These are relative-to-launch offline truth diagnostics, not onboard
+        # confidence estimates. A flight cannot pass the *precheck* when the
+        # largest observed localization discrepancy already exceeds its
+        # smallest sampled mesh clearance reserve.
+        "localization_error_within_sampled_clearance_margin":
+            sampled_margin is not None and sampled_margin >= 0.0 and
+            fastlio_error is not None and fastlio_error >= 0.0 and
+            px4_error is not None and px4_error >= 0.0 and
+            fastlio_error <= sampled_margin and
+            px4_error <= sampled_margin,
         "returned_and_disarmed_near_home": flight_start is not None and
             last["time"]-flight_end["time"] >= 1.0 and
             not last["armed"] and home_xy <= 2.0 and home_z <= 0.5,
@@ -171,6 +186,9 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
             "reference_3d_visible_cells": coverage_3d.get("visible_cells"),
             "reference_3d_total_cells": coverage_3d.get("reference_cells"),
             "sampled_min_mesh_clearance_m": mesh.get("sampled_min_clearance_m"),
+            "sampled_mesh_clearance_margin_m": sampled_margin,
+            "max_fastlio_relative_error_m": fastlio_error,
+            "max_px4_relative_error_m": px4_error,
             "mesh_samples_below_1m": mesh.get("sampled_below_radius_count"),
             "truth_exploration_samples": truth["exploration_rows"],
             "max_flight_sample_gap_s": truth["max_flight_sample_gap_s"],

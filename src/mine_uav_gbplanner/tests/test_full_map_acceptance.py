@@ -30,6 +30,8 @@ class AcceptanceTests(unittest.TestCase):
             "checks": {"observation_complete": True},
             "ros_run_id": "trial-one",
             "observation_start_s": 0.5, "observation_end_s": 3.0,
+            "max_fastlio_vs_truth_relative_error_m": 0.05,
+            "max_fastlio_px4_vs_truth_relative_error_m": 0.06,
         }
         self.coverage = {
             "kind": "diagnostic_only_lidar_visibility_proxy",
@@ -73,6 +75,15 @@ class AcceptanceTests(unittest.TestCase):
         self.mesh["sampled_min_clearance_m"] = 0.9957
         self.mesh["sampled_below_radius_count"] = 1
         self.assertFalse(self.evaluate()["checks"]["sampled_mesh_radius_with_margin"])
+
+    def test_localization_error_cannot_exceed_sampled_margin(self):
+        self.chain["max_fastlio_vs_truth_relative_error_m"] = 0.31
+        self.assertFalse(self.evaluate()["checks"][
+            "localization_error_within_sampled_clearance_margin"])
+        self.chain["max_fastlio_vs_truth_relative_error_m"] = 0.05
+        self.chain.pop("max_fastlio_px4_vs_truth_relative_error_m")
+        self.assertFalse(self.evaluate()["checks"][
+            "localization_error_within_sampled_clearance_margin"])
 
     def test_cross_run_mesh_fails(self):
         self.mesh["trajectory_file"] = "/tmp/different_flight.csv"
