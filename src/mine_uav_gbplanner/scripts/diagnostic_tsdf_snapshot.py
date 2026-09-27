@@ -15,7 +15,15 @@ from sensor_msgs.msg import PointCloud2
 
 class TsdfSnapshot:
     def __init__(self):
-        self.target_time = float(rospy.get_param("~target_sim_time", 32.0))
+        single_target = float(rospy.get_param("~target_sim_time", 32.0))
+        configured_targets = rospy.get_param("~target_sim_times", [])
+        self.target_times = sorted(set(float(value) for value in
+                                       (configured_targets or [single_target])))
+        if not self.target_times or any(
+                not math.isfinite(value) or value < 0.0
+                for value in self.target_times):
+            raise ValueError("target_sim_times must be finite nonnegative times")
+        self.next_target = 0
         self.bounds = tuple(float(value) for value in rospy.get_param(
             "~bounds", [-3.0, 10.0, -6.0, 2.0, -1.0, 5.0]))
         self.planner_x_range = tuple(float(value) for value in rospy.get_param(
@@ -30,7 +38,6 @@ class TsdfSnapshot:
             "tsdf_snapshot_{}_{}.csv".format(
                 datetime.now().strftime("%Y%m%d_%H%M%S_%f"), os.getpid()))
         self.output = Path(rospy.get_param("~output_file", str(default)))
-        self.done = False
         if self.planner_x_range:
             rospy.Subscriber("/mine_uav/gbplanner/planner_odometry", Odometry,
                              self._odom_cb, queue_size=10)
@@ -43,7 +50,8 @@ class TsdfSnapshot:
 
     def _cloud_cb(self, message):
         now = rospy.Time.now().to_sec()
-        if self.done or now < self.target_time:
+        if (self.next_target >= len(self.target_times) or
+                now < self.target_times[self.next_target]):
             return
         if self.planner_x_range and (
                 self.planner_x is None or
@@ -53,12 +61,16 @@ class TsdfSnapshot:
         if not {"x", "y", "z", "intensity"}.issubset(
                 {field.name for field in message.fields}):
             rospy.logerr("TSDF snapshot lacks x/y/z/intensity fields")
-            self.done = True
+            self.next_target = len(self.target_times)
             return
         low_x, high_x, low_y, high_y, low_z, high_z = self.bounds
-        self.output.parent.mkdir(parents=True, exist_ok=True)
+        target_time = self.target_times[self.next_target]
+        output = (self.output if len(self.target_times) == 1 else
+                  self.output.with_name("{}_target_{:.3f}{}".format(
+                      self.output.stem, target_time, self.output.suffix)))
+        output.parent.mkdir(parents=True, exist_ok=True)
         count = occupied = 0
-        with self.output.open("w", encoding="utf-8", newline="") as target:
+        with output.open("w", encoding="utf-8", newline="") as target:
             writer = csv.writer(target)
             writer.writerow(("sim_time", "frame_id", "x", "y", "z",
                              "tsdf_distance_m", "ros_run_id"))
@@ -76,9 +88,9 @@ class TsdfSnapshot:
                                  self.run_id))
                 count += 1
                 occupied += distance <= 0.2
-        self.done = True
-        rospy.logwarn("Read-only local TSDF snapshot: %d voxels, %d <=0.2 m at %.3f s, planner_x=%s -> %s",
-                      count, occupied, now, self.planner_x, self.output)
+        self.next_target += 1
+        rospy.logwarn("Read-only local TSDF snapshot: target %.3f s, %d voxels, %d <=0.2 m at %.3f s, planner_x=%s -> %s",
+                      target_time, count, occupied, now, self.planner_x, output)
 
 
 if __name__ == "__main__":

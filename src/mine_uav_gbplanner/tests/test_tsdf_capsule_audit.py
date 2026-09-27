@@ -51,6 +51,16 @@ class TsdfCapsuleAuditTests(unittest.TestCase):
                                      2.0*math.pi*i/72.0)
                              for i in range(72)))
 
+    def test_observed_near_wall_surface_is_blind_for_full_yaw_sweep(self):
+        # Independent mesh nearest point from the 120.184 s facility near
+        # miss in run b3db8548. The actual Mid-360S -7..+52 deg aperture
+        # cannot reveal it merely by yawing the aircraft in place.
+        body = (-4.48287, -1.36765, 1.43406)
+        surface = (-4.43517, -2.21845, 0.80644)
+        self.assertFalse(any(MODULE.mid360_visible_from_body(
+            surface, body, 2.0*math.pi*i/720.0)
+            for i in range(720)))
+
 
 if __name__ == "__main__":
     unittest.main()

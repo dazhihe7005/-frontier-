@@ -48,6 +48,8 @@
   <arg name="voxblox_use_freespace" default="true"/>
   <arg name="ray_snapshot_sim_time" default="32.0"/>
   <arg name="tsdf_snapshot_sim_time" default="32.0"/>
+  <!-- Optional same-run sequence for read-only TSDF erosion diagnosis. -->
+  <arg name="tsdf_snapshot_sim_times" default="[]"/>
   <arg name="tsdf_snapshot_bounds" default="[-3.0, 10.0, -6.0, 2.0, -1.0, 5.0]"/>
   <arg name="tsdf_snapshot_x_range" default="[]"/>
   <!-- Safety gate: current 1 m radius trials have only centimetres of
@@ -297,6 +299,7 @@
         type="diagnostic_tsdf_snapshot.py" name="diagnostic_tsdf_snapshot"
         output="screen">
     <param name="target_sim_time" value="$(arg tsdf_snapshot_sim_time)"/>
+    <rosparam param="target_sim_times" subst_value="true">$(arg tsdf_snapshot_sim_times)</rosparam>
     <rosparam param="bounds" subst_value="true">$(arg tsdf_snapshot_bounds)</rosparam>
     <rosparam param="planner_x_range" subst_value="true">$(arg tsdf_snapshot_x_range)</rosparam>
   </node>
