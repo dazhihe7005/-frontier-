@@ -54,7 +54,7 @@ def main():
     no_return_mesh_conflicts = selected_free_mesh_conflicts = 0
     selected_free_conflicts_by_mesh = {name: 0 for name in MESH_NAMES}
     selected_free_conflict_examples = []
-    sim_time = truth_age = None
+    sim_time = truth_age = capture_delay = pose_bracket = None
     target = Vector(args.target) if args.target else None
     with args.snapshot.open("r", encoding="utf-8", newline="") as source:
         for row in csv.DictReader(source):
@@ -76,6 +76,10 @@ def main():
             selected_free_rays += int(selected_free)
             sim_time = float(row["sim_time"])
             truth_age = float(row["truth_age_s"])
+            if row.get("capture_sim_time"):
+                capture_delay = float(row["capture_sim_time"])-sim_time
+            if row.get("truth_pose_bracket_s"):
+                pose_bracket = float(row["truth_pose_bracket_s"])
             best_distance = math.inf
             best_name = None
             best_point = None
@@ -142,7 +146,14 @@ def main():
         "snapshot_file": str(args.snapshot),
         "ros_run_id": next(iter(run_ids)) if len(run_ids) == 1 else None,
         "sim_time_s": sim_time,
-        "truth_pose_age_s": truth_age,
+        "pose_time_alignment_method": (
+            "interpolated_at_scan_stamp" if pose_bracket is not None
+            else "legacy_latest_pose_at_capture"),
+        "truth_pose_age_s": truth_age if pose_bracket is None else None,
+        "truth_pose_max_interpolation_gap_s": (
+            truth_age if pose_bracket is not None else None),
+        "scan_capture_delay_s": capture_delay,
+        "truth_pose_bracket_s": pose_bracket,
         "rays": total,
         "rays_with_expected_mesh_hit": expected_hits,
         "gazebo_missed_nearer_mesh_rays": misses,
