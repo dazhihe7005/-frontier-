@@ -47,6 +47,9 @@ def main():
     total = misses = spurious = expected_hits = 0
     run_ids = set()
     per_mesh_miss = {name: 0 for name in MESH_NAMES}
+    incidence_counts = {name: {"front_hit": 0, "front_miss": 0,
+                               "back_hit": 0, "back_miss": 0}
+                        for name in MESH_NAMES}
     target_rays = target_detected = 0
     target_examples = []
     worst_misses = []
@@ -56,6 +59,11 @@ def main():
     selected_free_conflict_examples = []
     sim_time = truth_age = capture_delay = pose_bracket = None
     target = Vector(args.target) if args.target else None
+    def nearest_range(ray_origin, ray_direction):
+        distances = [bvh.ray_cast(ray_origin, ray_direction, 30.0)[3]
+                     for bvh in bvhs.values()]
+        return min((d for d in distances if d is not None),
+                   default=None)
     with args.snapshot.open("r", encoding="utf-8", newline="") as source:
         for row in csv.DictReader(source):
             run_ids.add(row.get("ros_run_id", ""))
@@ -96,6 +104,9 @@ def main():
                 continue
             expected_hits += 1
             difference = measured-best_distance
+            incidence = "front" if best_normal.dot(direction) < 0 else "back"
+            incidence_counts[best_name][incidence + (
+                "_miss" if difference > args.range_tolerance else "_hit")] += 1
             if (no_return and
                     best_distance + args.range_tolerance <
                     args.freespace_cutoff):
@@ -122,6 +133,8 @@ def main():
                            "expected_range_m": round(best_distance, 3),
                            "gazebo_range_m": round(measured, 3),
                            "miss_distance_m": round(difference, 3),
+                           "face_normal_dot_ray": round(
+                               best_normal.dot(direction), 4),
                            "expected_hit_xyz_m": [round(v, 3) for v in best_point]}
                 worst_misses.append(example)
                 worst_misses.sort(key=lambda item: item["miss_distance_m"],
@@ -134,11 +147,32 @@ def main():
                 if abs(difference) <= args.range_tolerance:
                     target_detected += 1
                 if len(target_examples) < 10:
+                    # ModelStates is callback-stamped, not simulator-stamped.
+                    # Check whether a few centimetres of pose displacement
+                    # could flip the expected near-surface return.
+                    pose_sensitivity = {}
+                    for shift_m in (0.01, 0.03, 0.05):
+                        ranges = []
+                        for axis in range(3):
+                            for sign in (-1, 1):
+                                offset = Vector((0.0, 0.0, 0.0))
+                                offset[axis] = sign*shift_m
+                                ranges.append(nearest_range(
+                                    origin+offset, direction))
+                        pose_sensitivity[str(shift_m)] = {
+                            "min_expected_range_m": round(min(ranges), 3)
+                            if all(r is not None for r in ranges) else None,
+                            "max_expected_range_m": round(max(ranges), 3)
+                            if all(r is not None for r in ranges) else None,
+                        }
                     target_examples.append({
                         "ray_index": int(row["ray_index"]),
                         "expected_mesh": best_name,
                         "expected_range_m": round(best_distance, 3),
                         "gazebo_range_m": round(measured, 3),
+                        "face_normal_dot_ray": round(
+                            best_normal.dot(direction), 4),
+                        "axis_pose_shift_sensitivity_m": pose_sensitivity,
                         "expected_hit_xyz_m": [round(v, 3) for v in best_point],
                     })
     report = {
@@ -159,6 +193,7 @@ def main():
         "gazebo_missed_nearer_mesh_rays": misses,
         "gazebo_shorter_than_mesh_rays": spurious,
         "misses_by_nearest_mesh": per_mesh_miss,
+        "incidence_counts_by_nearest_mesh": incidence_counts,
         "worst_misses": worst_misses,
         "adapter_freespace_cutoff_m": args.freespace_cutoff,
         "adapter_freespace_stride": args.freespace_stride,
