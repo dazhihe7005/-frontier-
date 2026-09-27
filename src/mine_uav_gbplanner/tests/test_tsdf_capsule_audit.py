@@ -20,17 +20,18 @@ class TsdfCapsuleAuditTests(unittest.TestCase):
         self.assertAlmostEqual(distance((2.0, 0.0, 0.0),
                                         (0, 0, 0), (1, 0, 0)), 1.0)
 
-    def test_known_occupied_is_separate_from_unknown(self):
+    def test_known_occupied_is_separate_from_unpublished(self):
         row = {"x": "0.1", "y": "0.1", "z": "0.1",
                "tsdf_distance_m": "0.01", "sim_time": "5.0",
                "frame_id": "camera_init", "ros_run_id": "test"}
         report = MODULE.analyze([row], (0, 0, 0), (0.2, 0, 0),
                                 0.2, 0.2, 0.05)
         self.assertGreater(report["counts"]["known_occupied"], 0)
-        self.assertGreater(report["counts"]["unknown_in_csv"], 0)
+        self.assertGreater(report["counts"]["not_in_visualization"], 0)
+        self.assertFalse(report["missing_visualization_row_proves_planner_unknown"])
         self.assertFalse(report["planner_decision_reproduced_exactly"])
 
-    def test_outside_snapshot_is_not_called_unknown(self):
+    def test_outside_snapshot_is_not_called_unpublished(self):
         row = {"x": "0.1", "y": "0.1", "z": "0.1",
                "tsdf_distance_m": "0.2", "sim_time": "5.0",
                "frame_id": "camera_init", "ros_run_id": "test"}
@@ -38,7 +39,7 @@ class TsdfCapsuleAuditTests(unittest.TestCase):
                                 0.2, 0.2, 0.05,
                                 (0.0, 0.2, 0.0, 0.2, 0.0, 0.2))
         self.assertGreater(report["counts"]["outside_snapshot"], 0)
-        self.assertEqual(report["counts"]["unknown_in_csv"], 0)
+        self.assertEqual(report["counts"]["not_in_visualization"], 0)
 
     def test_tilted_mid360_fov_changes_with_yaw(self):
         visible = MODULE.mid360_visible_from_body

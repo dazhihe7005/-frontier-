@@ -42,10 +42,17 @@
        violation; explicitly pass radius:=0 only for isolated A/B diagnosis. -->
   <arg name="planner_collision_sphere_radius" default="1.0"/>
   <arg name="planner_strict_final_path_check" default="true"/>
+  <!-- Read-only planner voxel rejection audit; opt in for diagnostics. -->
+  <arg name="diagnostic_collision_voxel" default="false"/>
+  <arg name="diagnostic_integration_lag" default="false"/>
+  <arg name="diagnostic_input_voxel" default="[]"/>
   <!-- Opt-in only after independent preflight survey of this 1 m capsule.
        It inserts a launch-area prior and is NOT MID360 evidence. -->
   <arg name="surveyed_launch_backtrack_m" default="0.0"/>
   <arg name="voxblox_use_freespace" default="true"/>
+  <!-- Opt-in A/B: merged integrates bundled rays without fast-mode early
+       termination; compare map fidelity and CPU before changing default. -->
+  <arg name="voxblox_integrator_method" default="fast"/>
   <arg name="ray_snapshot_sim_time" default="32.0"/>
   <arg name="tsdf_snapshot_sim_time" default="32.0"/>
   <!-- Optional same-run sequence for read-only TSDF erosion diagnosis. -->
@@ -162,6 +169,7 @@
     <param name="sensor_frame" value="gbplanner_mid360"/>
     <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
     <param name="sensor_pitch" value="0.436332313"/>
+    <rosparam param="diagnostic_voxel_center" subst_value="true">$(arg diagnostic_input_voxel)</rosparam>
     <param name="self_filter_radius" value="0.65"/>
     <param name="self_filter_z_min" value="-0.32"/>
     <param name="self_filter_z_max" value="0.35"/>
@@ -179,6 +187,8 @@
     <!-- The 1 m sphere/capsule check deliberately stops on unknown roof voxels.
          The legacy box is not certified for the requested 1 m radius. -->
     <param name="collision_sphere_radius_m" value="$(arg planner_collision_sphere_radius)"/>
+    <param name="diagnostic_collision_voxel" value="$(arg diagnostic_collision_voxel)"/>
+    <param name="diagnostic_integration_lag" value="$(arg diagnostic_integration_lag)"/>
     <param name="PlanningParams/edge_length_max" value="$(arg planner_edge_length_max)"/>
     <param name="PlanningParams/nearest_range" value="$(arg planner_edge_length_max)"/>
     <param name="PlanningParams/nearest_range_max" value="$(arg planner_edge_length_max)"/>
@@ -201,6 +211,7 @@
     <param name="SensorParams/MID360S/frontier_percentage_threshold"
            value="$(arg frontier_percentage_threshold)"/>
     <rosparam command="load" file="$(find mine_uav_gbplanner)/config/voxblox_mid360.yaml"/>
+    <param name="method" value="$(arg voxblox_integrator_method)"/>
     <param name="use_freespace_pointcloud" value="$(arg voxblox_use_freespace)"/>
   </node>
   <node pkg="pci_general" type="pci_general_ros_node"

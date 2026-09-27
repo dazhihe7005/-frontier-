@@ -1,0 +1,40 @@
+diff --git a/voxblox_ros/include/voxblox_ros/tsdf_server.h b/voxblox_ros/include/voxblox_ros/tsdf_server.h
+index 12c6b1d..82f634a 100644
+--- a/voxblox_ros/include/voxblox_ros/tsdf_server.h
++++ b/voxblox_ros/include/voxblox_ros/tsdf_server.h
+@@ -185,6 +185,8 @@ class TsdfServer {
+ 
+   /// If the system should subscribe to a pointcloud giving points in freespace
+   bool use_freespace_pointcloud_;
++  /// Opt-in read-only timing audit; does not alter pointcloud integration.
++  bool diagnostic_integration_lag_ = false;
+ 
+   /**
+    * Mesh output settings. Mesh is only written to file if mesh_filename_ is
+diff --git a/voxblox_ros/src/tsdf_server.cc b/voxblox_ros/src/tsdf_server.cc
+index c3fe342..a126b2a 100644
+--- a/voxblox_ros/src/tsdf_server.cc
++++ b/voxblox_ros/src/tsdf_server.cc
+@@ -56,6 +56,8 @@ TsdfServer::TsdfServer(const ros::NodeHandle& nh,
+ 
+   nh_private_.param("pointcloud_queue_size", pointcloud_queue_size_,
+                     pointcloud_queue_size_);
++  nh_private_.param("diagnostic_integration_lag", diagnostic_integration_lag_,
++                    false);
+   pointcloud_sub_ = nh_.subscribe("pointcloud", pointcloud_queue_size_,
+                                   &TsdfServer::insertPointcloud, this);
+ 
+@@ -309,6 +311,13 @@ void TsdfServer::processPointCloudMessageAndInsert(
+   ros::WallTime start = ros::WallTime::now();
+   integratePointcloud(T_G_C_refined, points_C, colors, is_freespace_pointcloud);
+   ros::WallTime end = ros::WallTime::now();
++  if (diagnostic_integration_lag_) {
++    ROS_WARN_THROTTLE(1.0,
++        "VOXBLOX_INTEGRATION_LAG scan_stamp=%.3f finish_sim=%.3f lag_sim_s=%.3f integrate_wall_s=%.3f points=%zu freespace=%d",
++        pointcloud_msg->header.stamp.toSec(), ros::Time::now().toSec(),
++        (ros::Time::now() - pointcloud_msg->header.stamp).toSec(),
++        (end - start).toSec(), points_C.size(), is_freespace_pointcloud);
++  }
+   if (verbose_) {
+     ROS_INFO("Finished integrating in %f seconds, have %lu blocks.",
+              (end - start).toSec(),

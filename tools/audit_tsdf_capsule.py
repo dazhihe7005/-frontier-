@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Read-only reconstruction of the GBPlanner sphere/capsule TSDF decision.
 
-The CSV is one timestamped snapshot, not necessarily the planner's exact map
-at its decision time. Missing rows are unknown only inside the recorded CSV
-bounds. This tool never publishes navigation or control data.
+The CSV is one timestamped visualization snapshot, not necessarily the
+planner's exact map at its decision time. Visualization publishes only TSDF
+voxels with weight >1e-3, while the planner calls a voxel unknown only below
+1e-6. A missing row is therefore NOT proof that the planner sees unknown.
+This tool never publishes navigation or control data.
 """
 
 import argparse
@@ -81,10 +83,10 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
     first = tuple(math.floor(v/voxel_size) for v in lower)
     last = tuple(math.floor(v/voxel_size) for v in upper)
     counts = {"known_free": 0, "known_occupied": 0,
-              "unknown_in_csv": 0, "outside_snapshot": 0}
+              "not_in_visualization": 0, "outside_snapshot": 0}
     examples = {}
-    unknown_by_z_index = {}
-    unknown_examples = []
+    unpublished_by_z_index = {}
+    unpublished_examples = []
     outside_fov_examples = []
     fov_counts = {"visible_at_yaw_zero": 0, "visible_during_yaw_sweep": 0,
                   "outside_yaw_sweep_fov": 0,
@@ -106,7 +108,7 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
                             for i in range(3)):
                         kind = "outside_snapshot"
                     else:
-                        kind = "unknown_in_csv"
+                        kind = "not_in_visualization"
                 elif tsdf <= occupied_distance+1e-6:
                     kind = "known_occupied"
                     minimum_occupied_center_distance = min(
@@ -114,11 +116,11 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
                 else:
                     kind = "known_free"
                 counts[kind] += 1
-                if kind == "unknown_in_csv":
-                    unknown_by_z_index[str(iz)] = (
-                        unknown_by_z_index.get(str(iz), 0) + 1)
-                    if len(unknown_examples) < 20:
-                        unknown_examples.append({
+                if kind == "not_in_visualization":
+                    unpublished_by_z_index[str(iz)] = (
+                        unpublished_by_z_index.get(str(iz), 0) + 1)
+                    if len(unpublished_examples) < 20:
+                        unpublished_examples.append({
                             "center_m": center,
                             "center_to_capsule_axis_m": round(center_distance, 5),
                         })
@@ -158,12 +160,15 @@ def analyze(rows, start, end, voxel_size, radius, occupied_distance,
         "expanded_center_test_radius_m": round(expanded, 5),
         "occupancy_tsdf_threshold_m": occupied_distance,
         "counts": counts, "first_examples_in_cpp_scan_order": examples,
-        "unknown_by_z_index": unknown_by_z_index,
-        "unknown_examples": unknown_examples,
-        "mid360_fov_only_unknown_counts": (
+        "unpublished_by_z_index": unpublished_by_z_index,
+        "unpublished_examples": unpublished_examples,
+        "mid360_fov_only_unpublished_counts": (
             fov_counts if mid360_yaw_sweep else None),
-        "mid360_outside_fov_examples": (
+        "mid360_unpublished_outside_fov_examples": (
             outside_fov_examples if mid360_yaw_sweep else None),
+        "visualization_min_weight_exclusive": 1e-3,
+        "planner_unknown_weight_below": 1e-6,
+        "missing_visualization_row_proves_planner_unknown": False,
         "min_known_occupied_center_to_axis_m": (
             round(minimum_occupied_center_distance, 5)
             if math.isfinite(minimum_occupied_center_distance) else None),

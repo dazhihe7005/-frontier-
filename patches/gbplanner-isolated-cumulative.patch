@@ -613,7 +613,7 @@ index bc331b0..999fb67 100644
 \ No newline at end of file
 +cs_export(LIBRARIES)
 diff --git a/planner_common/include/planner_common/map_manager_voxblox_impl.h b/planner_common/include/planner_common/map_manager_voxblox_impl.h
-index 7eb37c6..1c02d6b 100644
+index 7eb37c6..f198117 100644
 --- a/planner_common/include/planner_common/map_manager_voxblox_impl.h
 +++ b/planner_common/include/planner_common/map_manager_voxblox_impl.h
 @@ -152,6 +152,11 @@ class MapManagerVoxblox : MapManager {
@@ -638,13 +638,15 @@ index 7eb37c6..1c02d6b 100644
    VoxelStatus getBoxStatusInVoxels(
        const voxblox::LongIndex& bounding_box_center,
        const voxblox::AnyIndex& bounding_box_voxels,
-@@ -223,6 +231,9 @@ class MapManagerVoxblox : MapManager {
+@@ -223,6 +231,11 @@ class MapManagerVoxblox : MapManager {
    // multiplier of a single voxel size to consider as a distance metric for
    // occupancy threshold
    float occupancy_distance_voxelsize_factor_;
 +  // Disabled by default; when enabled, all planner point/edge occupancy
 +  // queries use a conservative spherical/capsule footprint instead of boxes.
 +  double collision_sphere_radius_m_ = 0.0;
++  // Opt-in, read-only logging of the first voxel that rejects a capsule.
++  bool diagnostic_collision_voxel_ = false;
  
    // Separate object to setup because tsdf_server_ has
    // protected tsdf_integrator_, otherwise could use getConfig()
@@ -1029,12 +1031,22 @@ index 3353a6e..b2917fc 100644
 \ No newline at end of file
 +}
 diff --git a/planner_common/src/voxblox/voxblox_alt_impl.cpp b/planner_common/src/voxblox/voxblox_alt_impl.cpp
-index 78d8a55..de964ed 100644
+index 78d8a55..9a09854 100644
 --- a/planner_common/src/voxblox/voxblox_alt_impl.cpp
 +++ b/planner_common/src/voxblox/voxblox_alt_impl.cpp
-@@ -1,11 +1,73 @@
+@@ -1,11 +1,97 @@
  #include "planner_common/map_manager_voxblox_impl.h"
  
++namespace {
++inline double diagnosticVoxelWeight(const voxblox::TsdfVoxel* voxel) {
++  return voxel ? voxel->weight : -1.0;
++}
++
++inline double diagnosticVoxelWeight(const voxblox::EsdfVoxel*) {
++  return -1.0;
++}
++}  // namespace
++
 +// A voxel cube may intersect the requested spherical envelope even when its
 +// centre does not. The half-diagonal is deliberately conservative; this is
 +// an occupancy-map test, not a certificate against unseen real geometry.
@@ -1083,9 +1095,23 @@ index 78d8a55..de964ed 100644
 +        const SDFVoxelType* voxel =
 +            sdf_layer_->getVoxelPtrByGlobalIndex(index);
 +        if (checkUnknownStatus(voxel)) {
++          if (diagnostic_collision_voxel_) {
++            ROS_WARN_THROTTLE(1.0,
++                "CAPSULE_VOXEL_REJECT_UNKNOWN start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) center=(%.2f,%.2f,%.2f) allocated=%d weight=%.9g",
++                start.x(), start.y(), start.z(), end.x(), end.y(), end.z(),
++                voxel_center.x(), voxel_center.y(), voxel_center.z(),
++                voxel != nullptr, diagnosticVoxelWeight(voxel));
++          }
 +          if (stop_at_unknown_voxel) return VoxelStatus::kUnknown;
 +          status = VoxelStatus::kUnknown;
 +        } else if (voxel->distance <= occupancy_distance) {
++          if (diagnostic_collision_voxel_) {
++            ROS_WARN_THROTTLE(1.0,
++                "CAPSULE_VOXEL_REJECT_OCCUPIED start=(%.2f,%.2f,%.2f) end=(%.2f,%.2f,%.2f) center=(%.2f,%.2f,%.2f) tsdf=%.5f",
++                start.x(), start.y(), start.z(), end.x(), end.y(), end.z(),
++                voxel_center.x(), voxel_center.y(), voxel_center.z(),
++                voxel->distance);
++          }
 +          return VoxelStatus::kOccupied;
 +        }
 +      }
@@ -1106,7 +1132,7 @@ index 78d8a55..de964ed 100644
    float voxel_size = sdf_layer_->voxel_size();
    float voxel_size_inv = 1.0 / voxel_size;
  
-@@ -119,6 +181,9 @@ typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
+@@ -119,6 +205,9 @@ typename MapManagerVoxblox<SDFServerType, SDFVoxelType>::VoxelStatus
  MapManagerVoxblox<SDFServerType, SDFVoxelType>::getPathStatus(
      const Eigen::Vector3d& start, const Eigen::Vector3d& end,
      const Eigen::Vector3d& box_size, bool stop_at_unknown_voxel) const {
@@ -1116,7 +1142,7 @@ index 78d8a55..de964ed 100644
    float voxel_size = sdf_layer_->voxel_size();
    float voxel_size_inv = 1.0 / voxel_size;
    const float distance_thres =
-@@ -891,4 +956,4 @@ void MapManagerVoxblox<SDFServerType, SDFVoxelType>::getScanStatusIterative(
+@@ -891,4 +980,4 @@ void MapManagerVoxblox<SDFServerType, SDFVoxelType>::getScanStatusIterative(
    }
    gain_log =
        std::make_tuple(num_unknown_voxels, num_free_voxels, num_occupied_voxels);
@@ -1124,15 +1150,17 @@ index 78d8a55..de964ed 100644
 \ No newline at end of file
 +}
 diff --git a/planner_common/src/voxblox/voxblox_common_impl.cpp b/planner_common/src/voxblox/voxblox_common_impl.cpp
-index 0b0e096..5026df2 100644
+index 0b0e096..3946820 100644
 --- a/planner_common/src/voxblox/voxblox_common_impl.cpp
 +++ b/planner_common/src/voxblox/voxblox_common_impl.cpp
-@@ -32,6 +32,17 @@ MapManagerVoxblox<SDFServerType, SDFVoxelType>::MapManagerVoxblox(
+@@ -32,6 +32,19 @@ MapManagerVoxblox<SDFServerType, SDFVoxelType>::MapManagerVoxblox(
                    "occupancy_distance_voxelsize_factor, using default of: %f",
                    occupancy_distance_voxelsize_factor_);
    }
 +  nh_private.param("collision_sphere_radius_m", collision_sphere_radius_m_,
 +                   0.0);
++  nh_private.param("diagnostic_collision_voxel", diagnostic_collision_voxel_,
++                   false);
 +  if (!std::isfinite(collision_sphere_radius_m_) ||
 +      collision_sphere_radius_m_ < 0.0) {
 +    ROS_ERROR("Invalid collision_sphere_radius_m; disabling experimental sphere check");
@@ -1145,7 +1173,7 @@ index 0b0e096..5026df2 100644
  
    // Setup E/TsdfIntegratorBase::Config and object separately (also called in
    // e/tsdf_server_ ctor)
-@@ -327,6 +338,56 @@ bool MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentFreeBox(
+@@ -327,6 +340,56 @@ bool MapManagerVoxblox<SDFServerType, SDFVoxelType>::augmentFreeBox(
    return true;
  }
  

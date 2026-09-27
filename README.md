@@ -51,6 +51,13 @@ cd /home/nuc/gbplanner2_isolated_ws
 历史快照反馈给 GBPlanner。未设置时仍只在 `tsdf_snapshot_sim_time`
 指定的单一时刻采样。
 
+`voxblox_integrator_method:=merged` 是默认关闭的建图 A/B：起点
+短测更早生成前向路径，118.9 秒局部飞行的真实网格采样最低净空
+1.22028 m，但三维仅覆盖 2385/8460，未返航，也没有跨架次
+验收。**不能据此启用自动起飞或宣称全图安全**。默认仍为 `fast`；
+`diagnostic_collision_voxel`、`diagnostic_integration_lag` 和
+`diagnostic_input_voxel` 仅用于只读根因日志。
+
 路口专项回归（地图仍为原始 1:1 尺度，只旋转场景让实地图中的交叉口位于
 标准起点前方）：
 
@@ -181,6 +188,7 @@ Gazebo MID360S PointCloud
 ```bash
 vcs import < dependencies.repos
 git -C src/exploration/gbplanner_ros apply ../../../patches/gbplanner-isolated-cumulative.patch
+git -C src/mapping/voxblox apply ../../../patches/voxblox-integration-lag-diagnostic.patch
 git -C src/misc/eigen_checks apply ../../../patches/eigen-checks-disable-tests.patch
 ```
 

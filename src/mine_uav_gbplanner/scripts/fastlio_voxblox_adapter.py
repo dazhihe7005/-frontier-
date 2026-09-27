@@ -37,6 +37,23 @@ def rotate(q, p):
             pz+w*tz+x*ty-y*tx)
 
 
+def segment_intersects_voxel(start, end, center, half_size):
+    """Diagnostic-only exact axis-aligned voxel cube segment intersection."""
+    first, last = 0.0, 1.0
+    for axis in range(3):
+        step = end[axis]-start[axis]
+        low, high = center[axis]-half_size, center[axis]+half_size
+        if abs(step) < 1e-12:
+            if not low <= start[axis] <= high:
+                return False
+            continue
+        near, far = (low-start[axis])/step, (high-start[axis])/step
+        first, last = max(first, min(near, far)), min(last, max(near, far))
+        if first > last:
+            return False
+    return True
+
+
 class FastlioVoxbloxAdapter:
     def __init__(self):
         self.world_frame = rospy.get_param("~world_frame", "camera_init")
@@ -54,6 +71,12 @@ class FastlioVoxbloxAdapter:
         self.self_z_max = float(rospy.get_param("~self_filter_z_max", 0.25))
         self.sync_queue = max(5, int(rospy.get_param("~sync_queue", 30)))
         self.sync_slop = max(0.001, float(rospy.get_param("~sync_slop", 0.025)))
+        diagnostic_center = rospy.get_param("~diagnostic_voxel_center", [])
+        self.diagnostic_voxel_center = (
+            tuple(float(v) for v in diagnostic_center)
+            if len(diagnostic_center) == 3 else None)
+        self.diagnostic_voxel_half_size = float(rospy.get_param(
+            "~diagnostic_voxel_half_size", 0.1))
         self._tf = tf2_ros.TransformBroadcaster()
         self._obstacle_pub = rospy.Publisher(
             "/mine_uav/gbplanner/voxblox_points", PointCloud2, queue_size=2)
@@ -96,8 +119,12 @@ class FastlioVoxbloxAdapter:
         (transform.transform.rotation.x, transform.transform.rotation.y,
          transform.transform.rotation.z, transform.transform.rotation.w) = sensor_q_world
         self._tf.sendTransform(transform)
+        sensor_origin = (transform.transform.translation.x,
+                         transform.transform.translation.y,
+                         transform.transform.translation.z)
 
         obstacles, freespace = [], []
+        diagnostic_raw_hits = diagnostic_obstacle_hits = diagnostic_free_hits = 0
         min_sq, max_sq = self.min_range**2, self.max_range**2
         for index, point in enumerate(message.points):
             p = (float(point.x), float(point.y), float(point.z))
@@ -106,10 +133,19 @@ class FastlioVoxbloxAdapter:
             range_sq = sum(v*v for v in p)
             if range_sq < min_sq:
                 continue
+            diagnostic_hit = False
+            if self.diagnostic_voxel_center is not None:
+                rotated = rotate(sensor_q_world, p)
+                endpoint = tuple(sensor_origin[i]+rotated[i] for i in range(3))
+                diagnostic_hit = segment_intersects_voxel(
+                    sensor_origin, endpoint, self.diagnostic_voxel_center,
+                    self.diagnostic_voxel_half_size)
+                diagnostic_raw_hits += int(diagnostic_hit)
             if range_sq >= max_sq:
                 if index % self.free_stride == 0:
                     scale = self.max_range / math.sqrt(range_sq)
                     freespace.append(tuple(v*scale for v in p))
+                    diagnostic_free_hits += int(diagnostic_hit)
                 continue
             body_point_rotated = rotate(self.sensor_q, p)
             body_point = tuple(self.sensor_offset[i]+body_point_rotated[i]
@@ -118,6 +154,7 @@ class FastlioVoxbloxAdapter:
                     self.self_z_min <= body_point[2] <= self.self_z_max):
                 continue
             obstacles.append(p)
+            diagnostic_obstacle_hits += int(diagnostic_hit)
         header = message.header
         header.frame_id = self.sensor_frame
         if obstacles:
@@ -127,6 +164,13 @@ class FastlioVoxbloxAdapter:
         rospy.loginfo_throttle(
             5.0, "Voxblox synchronized input: %d obstacles, %d free rays, dt=%+.4f s",
             len(obstacles), len(freespace), stamp_delta)
+        if self.diagnostic_voxel_center is not None:
+            rospy.logwarn_throttle(
+                1.0,
+                "VOXBLOX_INPUT_VOXEL stamp=%.3f center=%s raw_hits=%d obstacle_hits=%d free_hits=%d",
+                message.header.stamp.to_sec(), self.diagnostic_voxel_center,
+                diagnostic_raw_hits, diagnostic_obstacle_hits,
+                diagnostic_free_hits)
 
 
 if __name__ == "__main__":
