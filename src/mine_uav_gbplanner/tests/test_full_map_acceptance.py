@@ -21,7 +21,8 @@ class AcceptanceTests(unittest.TestCase):
             "sim_time,x,y,z,armed,offboard,exploration_started,ros_run_id\n"
             "0.0,0,0,0,0,0,0,trial-one\n"
             "1.0,0,0,2,1,1,1,trial-one\n"
-            "2.0,5,0,2,1,1,1,trial-one\n"
+            "1.1,5,0,2,1,1,1,trial-one\n"
+            "1.2,0,0,2,1,1,1,trial-one\n"
             "3.0,0,0,0,0,0,1,trial-one\n", encoding="utf-8")
         self.truth = MODULE.read_truth(self.truth_path)
         self.chain = {
@@ -49,7 +50,7 @@ class AcceptanceTests(unittest.TestCase):
             "kind": "diagnostic_only_truth_to_collision_mesh_distance",
             "trajectory_file": str(self.truth_path),
             "ros_run_id": "trial-one",
-            "all_truth_rows": 4, "armed_offboard_exploration_samples": 2,
+            "all_truth_rows": 5, "armed_offboard_exploration_samples": 3,
             "mesh_sha256": {name: "sha" for name in
                             ("ground", "infrastructure", "rock", "roof")},
             "safety_radius_m": 1.0, "sampled_min_clearance_m": 1.3,
@@ -82,7 +83,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertFalse(self.evaluate()["checks"]["same_ros_launch_run"])
 
     def test_partial_chain_or_coverage_fails(self):
-        self.chain["observation_end_s"] = 1.5
+        self.chain["observation_end_s"] = 0.9
         self.coverage["visible_cells"] = 99
         result = self.evaluate()
         self.assertFalse(result["checks"]["chain_observed_whole_exploration"])
@@ -111,6 +112,30 @@ class AcceptanceTests(unittest.TestCase):
             "3.0,5,0,2,1,1,1,trial-one\n", encoding="utf-8")
         self.truth = MODULE.read_truth(self.truth_path)
         self.assertFalse(self.evaluate()["checks"]["returned_and_disarmed_near_home"])
+
+    def test_mid_flight_offboard_drop_fails_even_if_recovered(self):
+        self.truth_path.write_text(
+            "sim_time,x,y,z,armed,offboard,exploration_started,ros_run_id\n"
+            "0.0,0,0,0,0,0,0,trial-one\n"
+            "1.0,0,0,2,1,1,1,trial-one\n"
+            "1.05,1,0,2,1,0,1,trial-one\n"
+            "1.1,5,0,2,1,1,1,trial-one\n"
+            "1.2,0,0,2,1,1,1,trial-one\n"
+            "3.0,0,0,0,0,0,1,trial-one\n", encoding="utf-8")
+        self.truth = MODULE.read_truth(self.truth_path)
+        self.mesh["all_truth_rows"] = 6
+        self.assertFalse(self.evaluate()["checks"]["flight_control_and_truth_continuity"])
+
+    def test_unobserved_flight_gap_fails(self):
+        self.truth_path.write_text(
+            "sim_time,x,y,z,armed,offboard,exploration_started,ros_run_id\n"
+            "0.0,0,0,0,0,0,0,trial-one\n"
+            "1.0,0,0,2,1,1,1,trial-one\n"
+            "1.4,5,0,2,1,1,1,trial-one\n"
+            "1.5,0,0,2,1,1,1,trial-one\n"
+            "3.0,0,0,0,0,0,1,trial-one\n", encoding="utf-8")
+        self.truth = MODULE.read_truth(self.truth_path)
+        self.assertFalse(self.evaluate()["checks"]["flight_control_and_truth_continuity"])
 
 
 if __name__ == "__main__":

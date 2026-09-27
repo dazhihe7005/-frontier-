@@ -18,6 +18,7 @@ def read_truth(path):
     first = last = first_exploration = last_exploration = None
     rows = exploration_rows = 0
     run_ids = set()
+    samples = []
     with path.open("r", encoding="utf-8", newline="") as source:
         for row in csv.DictReader(source):
             rows += 1
@@ -35,6 +36,7 @@ def read_truth(path):
             if first is None:
                 first = sample
             last = sample
+            samples.append(sample)
             if sample["armed"] and sample["offboard"] and sample["exploration"]:
                 exploration_rows += 1
                 if first_exploration is None:
@@ -42,11 +44,34 @@ def read_truth(path):
                 last_exploration = sample
     if not rows:
         raise ValueError("empty truth trajectory")
+    active_indices = [index for index, sample in enumerate(samples)
+                      if sample["armed"] and sample["offboard"] and
+                      sample["exploration"]]
+    flight_samples = (samples[active_indices[0]:active_indices[-1]+1]
+                      if active_indices else [])
+    max_flight_gap = max((current["time"]-prior["time"]
+                          for prior, current in zip(flight_samples,
+                                                    flight_samples[1:])),
+                         default=None)
+    flight_distance = sum(math.dist(prior["position"], current["position"])
+                          for prior, current in zip(flight_samples,
+                                                    flight_samples[1:]))
+    flight_duration = (flight_samples[-1]["time"]-flight_samples[0]["time"]
+                       if flight_samples else None)
     return {"rows": rows, "exploration_rows": exploration_rows,
             "ros_run_id": next(iter(run_ids)) if len(run_ids) == 1 else None,
             "first": first, "last": last,
             "first_exploration": first_exploration,
-            "last_exploration": last_exploration}
+            "last_exploration": last_exploration,
+            "flight_control_uninterrupted": bool(flight_samples) and all(
+                sample["armed"] and sample["offboard"] and
+                sample["exploration"] for sample in flight_samples),
+            "max_flight_sample_gap_s": max_flight_gap,
+            "flight_distance_m": flight_distance,
+            "flight_duration_s": flight_duration,
+            "effective_flight_speed_mps": (
+                flight_distance/flight_duration
+                if flight_duration is not None and flight_duration > 0 else None)}
 
 
 def number(data, key):
@@ -86,6 +111,10 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
             start is not None and end is not None and
             start <= flight_start["time"]+0.2 and
             end >= flight_end["time"]-0.2,
+        "flight_control_and_truth_continuity":
+            truth["flight_control_uninterrupted"] and
+            number(truth, "max_flight_sample_gap_s") is not None and
+            truth["max_flight_sample_gap_s"] <= 0.2,
         "coverage_reference_all_visible": coverage.get("kind") ==
             "diagnostic_only_lidar_visibility_proxy" and
             isinstance(coverage.get("reference_cells"), int) and
@@ -144,6 +173,11 @@ def evaluate(chain, coverage, mesh, truth, truth_path):
             "sampled_min_mesh_clearance_m": mesh.get("sampled_min_clearance_m"),
             "mesh_samples_below_1m": mesh.get("sampled_below_radius_count"),
             "truth_exploration_samples": truth["exploration_rows"],
+            "max_flight_sample_gap_s": truth["max_flight_sample_gap_s"],
+            "exploration_duration_s": truth["flight_duration_s"],
+            "exploration_distance_m": round(truth["flight_distance_m"], 3),
+            "effective_exploration_speed_mps": number(
+                truth, "effective_flight_speed_mps"),
             "home_xy_error_m": round(home_xy, 3),
             "home_z_error_m": round(home_z, 3),
             "mean_moving_speed_mps": chain.get("mean_moving_speed_mps"),

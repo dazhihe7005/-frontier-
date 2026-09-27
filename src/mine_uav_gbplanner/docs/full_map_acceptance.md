@@ -86,6 +86,19 @@ python3 tools/check_full_map_acceptance.py \
 
 预检要求同一 ROS 启动架次的完整链路观察、参考格全部可见、碰撞网格逐样本及采样点间直线下界守住 1 m、额外留出 0.15 m 样本裕量，以及最终返回起点附近并解除武装。0.15 m 只是初步验收缓冲，不代表已经覆盖定位或执行误差。`automatic_precheck_passed` 即使为真，也**不是**连续三维安全或所有可达空间探索完毕的证明；最终仍需审查 2-D 参考的漏项、真实传感器盲区和连续轨迹。当前试验显然不能通过该预检。
 
+单架次预检还会拒绝探索首末有效飞行样本之间任一次 ARM/OFFBOARD/探索状态丢失，以及超过 0.2 s 的真值轨迹采样空档。只在起飞前运行默认短时 `validate_full_chain.py` 不够：其报告必须覆盖整段探索，且 `_observe_full_duration:=true`、`_duration` 足以包含实际架次；预检会核对报告起止时间与真值轨迹。
+
+重复性和效率由 `tools/check_full_map_campaign.py` 另行失败即不通过地核对。每次 `--run` 按顺序提供同一架次的链路、覆盖、碰撞网格、真值轨迹四份文件，至少输入两次独立 ROS 架次；两次必须使用相同碰撞网格 SHA-256 与二维/三维可达参考格数，且每次单架次预检都通过。`--max-exploration-s` 和 `--min-effective-speed-mps` 必须由验收者明确给出；后者是整段探索飞行距离除以整段时间，**包含原地悬停、补扫和停滞**，不以“仅移动时平均速度”掩盖等待。示例中的数值只是命令占位示范，不代表当前机型已能安全达到：
+
+```bash
+python3 tools/check_full_map_campaign.py \
+  --run chain_A.json coverage_A.json mesh_A.json truth_A.csv \
+  --run chain_B.json coverage_B.json mesh_B.json truth_B.csv \
+  --max-exploration-s 1200 --min-effective-speed-mps 0.6
+```
+
+不同 ROS run ID 和记录首帧未解锁只能提供“独立记录”的证据，不能独自证明仿真环境每次都严格冷启动；原始启动日志仍需归档和复核。重复预检同样不证明连续三维安全或真机传感器视场完整。
+
 仿真中 `time_budget_limit=3600` 秒只是避免 900 秒提前返航；真实两电池的容量、压降、续航及安全返航阈值尚未通过实测验证，不能据此推断真机能单架次完成。
 
 当前 `go_home_if_fully_explored=false` 是刻意保留的：已有多次在未到地图尽头时局部/全局 frontier 被清空的证据，若直接启用“无 frontier 即返航”，会把错误的空候选当作完成。`auto_homing_enable=true` 目前仅提供预算不足时或显式服务请求的返航路径，不提供可靠的“全图已探明”信号。安全缺口、frontier 漏选、原生完成判据和实际返航均尚未通过端到端验证；不能用 3600 s 超时返航代替全图完成。
