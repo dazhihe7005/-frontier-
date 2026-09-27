@@ -41,6 +41,13 @@ class RaySnapshotPoseAlignmentTest(unittest.TestCase):
         result = module.interpolate_pose(poses, 10.05, 0.15)
         self.assertAlmostEqual(abs(result[1][3]), 1.0)
 
+    def test_optional_world_x_gate(self):
+        self.assertTrue(module.allowed_world_x(30.0, ()))
+        self.assertFalse(module.allowed_world_x(29.9, (30.0, 36.0)))
+        self.assertTrue(module.allowed_world_x(30.0, (30.0, 36.0)))
+        self.assertTrue(module.allowed_world_x(36.0, (30.0, 36.0)))
+        self.assertFalse(module.allowed_world_x(36.1, (30.0, 36.0)))
+
 
 if __name__ == "__main__":
     unittest.main()

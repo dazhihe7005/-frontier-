@@ -55,6 +55,7 @@
        termination; compare map fidelity and CPU before changing default. -->
   <arg name="voxblox_integrator_method" default="fast"/>
   <arg name="ray_snapshot_sim_time" default="32.0"/>
+  <arg name="ray_snapshot_world_x_range" default="[]"/>
   <arg name="tsdf_snapshot_sim_time" default="32.0"/>
   <!-- Optional same-run sequence for read-only TSDF erosion diagnosis. -->
   <arg name="tsdf_snapshot_sim_times" default="[]"/>
@@ -307,6 +308,7 @@
         type="diagnostic_ray_snapshot.py" name="diagnostic_ray_snapshot"
         output="screen">
     <param name="target_sim_time" value="$(arg ray_snapshot_sim_time)"/>
+    <rosparam param="world_x_range" subst_value="true">$(arg ray_snapshot_world_x_range)</rosparam>
   </node>
   <node if="$(arg coverage_audit)" pkg="mine_uav_gbplanner"
         type="diagnostic_tsdf_snapshot.py" name="diagnostic_tsdf_snapshot"

@@ -58,6 +58,13 @@ cd /home/nuc/gbplanner2_isolated_ws
 `diagnostic_collision_voxel`、`diagnostic_integration_lag` 和
 `diagnostic_input_voxel` 仅用于只读根因日志。
 
+只读原始射线快照可按真实世界 X 区间触发，例如在隔离对照运行中设置
+`ray_snapshot_sim_time:=0 ray_snapshot_world_x_range:='[30.0,36.0]'`；
+它只决定何时保存一帧点云，不改变定位、地图或控制。Voxblox 快照可
+同时设置 `tsdf_snapshot_sim_time:=0`、`tsdf_snapshot_x_range` 和
+`tsdf_snapshot_bounds`，按规划坐标位置捕获同一危险区间。两者的
+坐标系不同，离线比较时必须使用同一架次的近时刻姿态锚点。
+
 路口专项回归（地图仍为原始 1:1 尺度，只旋转场景让实地图中的交叉口位于
 标准起点前方）：
 

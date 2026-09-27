@@ -54,9 +54,21 @@ def interpolate_pose(poses, stamp, max_gap):
     return None
 
 
+def allowed_world_x(body_x, world_x_range):
+    """Optional spatial capture gate; no truth is published or fed to control."""
+    return not world_x_range or world_x_range[0] <= body_x <= world_x_range[1]
+
+
 class RaySnapshot:
     def __init__(self):
         self.target_time = float(rospy.get_param("~target_sim_time", 32.0))
+        self.world_x_range = tuple(float(value) for value in rospy.get_param(
+            "~world_x_range", []))
+        if self.world_x_range and (len(self.world_x_range) != 2 or
+                                   not all(math.isfinite(value)
+                                           for value in self.world_x_range) or
+                                   self.world_x_range[0] > self.world_x_range[1]):
+            raise ValueError("world_x_range must be [minimum, maximum]")
         self.max_pose_age = float(rospy.get_param("~max_pose_age", 0.15))
         self.offset = tuple(float(value) for value in rospy.get_param(
             "~sensor_offset", [0.1315, 0.0, 0.223]))
@@ -98,6 +110,8 @@ class RaySnapshot:
         if pose is None:
             return
         body, body_q, bracket_width, pose_gap = pose
+        if not allowed_world_x(body[0], self.world_x_range):
+            return
         sensor_offset = rotate(body_q, self.offset)
         origin = tuple(body[i]+sensor_offset[i] for i in range(3))
         self.output.parent.mkdir(parents=True, exist_ok=True)
