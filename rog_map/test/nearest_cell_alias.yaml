@@ -1,0 +1,20 @@
+rog_map:
+  resolution: 0.1
+  inflation_resolution: 0.2
+  inflation_step: 1
+  unk_inflation_en: false
+  map_size: [4.0, 4.0, 4.0]
+  fix_map_origin: [0.0, 0.0, 0.0]
+  virtual_ground_height: -10.0
+  virtual_ceil_height: 10.0
+  map_sliding:
+    enable: false
+    threshold: 0.3
+  ros_callback:
+    enable: false
+  visualization:
+    enable: false
+  raycasting:
+    enable: false
+    ray_range: [0.3, 3.0]
+    local_update_box: [3.0, 3.0, 3.0]
