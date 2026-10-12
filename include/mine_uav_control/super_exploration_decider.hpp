@@ -23,6 +23,9 @@
 #include <std_srvs/SetBool.h>
 #include <std_srvs/Trigger.h>
 #include <visualization_msgs/MarkerArray.h>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
 
 namespace mine_uav_control {
 
@@ -104,10 +107,12 @@ class SuperExplorationDecider {
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
   void freeRayCallback(const Cloud::ConstPtr& cloud);
+  void superOccupiedCallback(const Cloud::ConstPtr& cloud);
   void decisionTimerCallback(const ros::TimerEvent& event);
   void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
   void rejectedGoalCallback(const std_msgs::UInt64::ConstPtr& msg);
+  void acceptedGoalCallback(const std_msgs::UInt64::ConstPtr& msg);
   void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
   bool enableCallback(std_srvs::SetBool::Request& request,
                       std_srvs::SetBool::Response& response);
@@ -131,6 +136,8 @@ class SuperExplorationDecider {
   void carveTraversedVehicleEnvelope(const geometry_msgs::Point& position);
   void markFree(const VoxelKey& key);
   void markOccupied(const VoxelKey& key);
+  bool transitionClear(const VoxelKey& from, const VoxelKey& to) const;
+  void protectTraversedCenterline(const geometry_msgs::Point& position);
   VoxelKey positionToKey(double x, double y, double z) const;
   geometry_msgs::Point keyToPoint(const VoxelKey& key) const;
   bool isOccupied(const VoxelKey& key) const;
@@ -139,10 +146,13 @@ class SuperExplorationDecider {
   VoxelSet reachableFreeVoxels() const;
   std::vector<FrontierCandidate> findFrontiers(VoxelSet& reachable) const;
   bool isNearCoveredGoal(const geometry_msgs::Point& point) const;
+  bool isNearFailedGoal(const geometry_msgs::Point& point) const;
+  void rememberFailedGoal(const geometry_msgs::Point& point);
   bool selectAndPublishFrontier(
       const std::vector<FrontierCandidate>& candidates,
       const VoxelSet& reachable);
-  bool publishForwardLookaheadGoal(const VoxelSet& reachable);
+  bool publishForwardLookaheadGoal(const VoxelSet& reachable,
+                                   bool require_successor = false);
   bool publishLateralDetourGoal(
       const VoxelSet& reachable,
       const std::vector<FrontierCandidate>& candidates);
@@ -163,7 +173,15 @@ class SuperExplorationDecider {
                    bool continuous_handover = false);
   void cancelActiveGoal(const std::string& reason,
                         bool unconditional = false);
-  void beginReturnHome(const std::string& reason);
+  void beginReturnHome(const std::string& reason,
+                       bool prefer_outbound_breadcrumbs = false);
+  bool publishFreshReturnGoal(const std::string& reason,
+                              bool require_successor = false);
+  bool returnSegmentClear(const geometry_msgs::Point& from,
+                          const geometry_msgs::Point& to,
+                          double extra_clearance = 0.0,
+                          bool require_known_start = true) const;
+  double outboundSeparation(const geometry_msgs::Point& point) const;
   void publishStatus(const std::string& state,
                      const std::string& detail = std::string());
   void publishVisualization(const std::vector<FrontierCandidate>& candidates);
@@ -178,9 +196,11 @@ class SuperExplorationDecider {
 
   ros::Subscriber return_request_subscriber_;
   ros::Subscriber rejected_goal_subscriber_;
+  ros::Subscriber accepted_goal_subscriber_;
   ros::Subscriber mission_enable_subscriber_;
   ros::Subscriber battery_subscriber_;
   ros::Subscriber free_ray_subscriber_;
+  ros::Subscriber super_occupied_subscriber_;
   ros::Publisher goal_publisher_;
   ros::Publisher status_publisher_;
   ros::Publisher finished_publisher_;
@@ -193,20 +213,36 @@ class SuperExplorationDecider {
   ros::Timer decision_timer_;
 
   std::unordered_map<VoxelKey, uint8_t, VoxelKeyHash> voxels_;
+  std::unordered_map<VoxelKey, int16_t, VoxelKeyHash> occupancy_evidence_;
+  VoxelSet last_scan_hits_;
+  ros::Time last_scan_stamp_;
   std::vector<geometry_msgs::Point> covered_goals_;
+  std::vector<geometry_msgs::Point> failed_goals_;
   std::vector<geometry_msgs::PoseStamped> outbound_breadcrumbs_;
   std::vector<geometry_msgs::PoseStamped> return_waypoints_;
+  pcl::PointCloud<pcl::PointXYZ>::Ptr super_occupied_points_{
+      new pcl::PointCloud<pcl::PointXYZ>};
+  pcl::KdTreeFLANN<pcl::PointXYZ> super_occupied_tree_;
+  ros::Time super_occupied_stamp_;
+  geometry_msgs::Point rejected_return_point_;
+  ros::Time rejected_return_point_stamp_;
   std::size_t return_waypoint_index_{0};
+  int home_arrival_streak_{0};
+  geometry_msgs::Point last_centerline_position_;
+  bool have_last_centerline_position_{false};
 
   geometry_msgs::PoseStamped current_pose_;
   geometry_msgs::PoseStamped home_pose_;
   geometry_msgs::PoseStamped current_goal_;
   uint64_t next_goal_id_{1};
   uint64_t active_goal_id_{0};
+  uint64_t accepted_goal_id_{0};
   double active_goal_initial_distance_{0.0};
   ros::Time last_sync_time_;
   ros::Time first_data_time_;
   ros::Time last_frontier_time_;
+  ros::Time last_motion_progress_time_;
+  geometry_msgs::Point last_motion_progress_position_;
   ros::Time goal_sent_time_;
   ros::Time rejected_goal_retry_after_;
   ros::Time last_actionable_frontier_time_;
@@ -241,6 +277,9 @@ class SuperExplorationDecider {
   bool return_requested_{false};
   bool have_battery_{false};
   double battery_percentage_{-1.0};
+  double battery_voltage_{-1.0};
+  bool low_voltage_return_requested_{false};
+  bool prefer_outbound_breadcrumbs_{false};
   int reached_goal_count_{0};
   int three_wall_complete_streak_{0};
   int map_closure_complete_streak_{0};
@@ -291,11 +330,23 @@ class SuperExplorationDecider {
   double min_observation_height_above_home_{0.0};
   double max_observation_height_above_home_{0.3};
   double data_timeout_{1.0};
+  double active_goal_data_grace_{2.0};
   double decision_rate_{2.0};
   double sync_slop_{0.08};
   double battery_return_threshold_{0.20};
+  double battery_return_voltage_{21.6};
   double return_home_height_offset_{0.0};
+  double return_max_height_above_home_{0.3};
+  double return_home_arrival_radius_{0.0};
   double return_breadcrumb_spacing_{4.0};
+  double return_segment_length_{3.0};
+  double return_goal_handover_distance_{2.0};
+  double return_map_timeout_{2.0};
+  double return_clearance_margin_{0.15};
+  double return_super_radius_{1.0};
+  double min_forward_super_clearance_{0.0};
+  double min_clearance_return_progress_{0.0};
+  std::string super_occupied_topic_{"/fsm_node/rog_map/occ"};
   double distance_weight_{0.35};
   double information_weight_{1.0};
   double heading_priority_weight_{4.0};
@@ -356,6 +407,15 @@ class SuperExplorationDecider {
   int max_dead_end_heading_reversals_{0};
   int max_reachable_voxels_{150000};
   int max_frontier_candidates_{500};
+  int occupied_hit_increment_{2};
+  int free_ray_decrement_{1};
+  int occupied_confirm_threshold_{4};
+  int free_confirm_threshold_{0};
+  int occupancy_evidence_min_{-6};
+  int occupancy_evidence_max_{8};
+  bool protect_traversed_centerline_{true};
+  double traversed_centerline_radius_{0.35};
+  double traversed_centerline_step_{0.25};
   bool raycast_enable_{true};
   bool carve_traversed_vehicle_envelope_{false};
   std::string free_ray_topic_;

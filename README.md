@@ -4,6 +4,14 @@
 发送轨迹 setpoint；QGC 负责 PX4 的连接、模式、解锁、降落和安全监控。串口上运行
 的是 MAVLink，不是向 CH340 直接发送 ASCII 字符。
 
+## 仓库组成
+
+- `main`：NUC 上的任务调度、frontier 决策、返航、避障、PX4 指令桥、仿真与测试。
+- `nuc-super-planner-20261012`：与本版本配套的 SUPER/ROG-Map 核心路径规划源码快照。
+
+两部分需要配套使用；SUPER 分支是本机已验证版本，不等同于未修改的上游
+`hku-mars/SUPER`。
+
 ## 启动真实 PX4 链路
 
 当前真机链路使用 CH340 转接 PX4 TELEM2。先确认稳定设备名存在：
@@ -54,6 +62,10 @@ CH340 串口，QGC 通过 NUC 转发的 UDP MAVLink 链路连接，或暂时关�
 CH340/MAVROS链路的波特率。QGC、MAVROS或串口终端同一时间只能有一个进程占用该串口。
 
 ## 任务一真实闭环
+
+白象山 SITL 当前修复和证据见[返航根因与闭环复测](docs/baixiangshan_return_fix_2026-10-01.md)。返航使用当前地图生成偏离去程的安全短段，航向角速度限值、SUPER 目标提交确认、下视测距无回波过滤和 ROG-Map 速度估计已接入。run59 飞到世界 X≈41 m（较 X≈−7 m 起点前进约 48 m）后返航并进入已上锁的 `AUTO.LOITER`，但 Gazebo 真值到家误差仍为 2.10 m、返程真实速度峰值 1.94 m/s；`model_complete` 未确认。尚未达到“全程平滑可靠完成”验收；全巷道自动降落需要独立入口定位或可靠回环约束。
+
+续查修正了上坡巷道可达性误用起点巡航高度层的问题，并增加 `analyze_task1_sitl_bag.py --profile baixiangshan` 真值验收。当前沙箱禁止本地 ROS socket，新高度范围修复仅完成编译和独立单测，尚无新的完整飞行复测；run59 的验收仍为 `FAIL`。
 
 ### 代码职责边界
 
@@ -625,7 +637,7 @@ roslaunch mine_uav_control goaf_algorithm_sim.launch rviz:=false
 ```bash
 source /opt/ros/noetic/setup.bash
 source /home/nuc/super_ws/devel/setup.bash
-export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:$ROS_PACKAGE_PATH
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic:$ROS_PACKAGE_PATH
 source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
   /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
 roslaunch mine_uav_control mission_scheduler_sitl.launch
@@ -711,3 +723,23 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 2026-09-21 最新任务二代码通过隔离 **500 m PX4/Gazebo nominal SITL**：任务层深度只使用侧面光流积分代理，下视测距仅 0.3–8 m；5 m 开始限加速度刹车，最低 Range 3.646 m，命令加速度不超过 0.5 m/s²，完整返航后进入 AUTO.LOITER。该结果不代表真实 500 m 飞行已安全，尤其积分漂移仍不可由任务状态机自行观测。详见[500 m 光流深度验收报告](docs/task2_500m_opticalflow_acceptance_2026-09-21.md)。
 
 故障注入器为显式 opt-in；其参数权限改成仅在注入瞬间短暂开启，已验证触发前后 `SYS_FAILURE_EN=0`。若仿真异常退出，下一次启动前仍需检查并复位该 SITL 参数；不要在真机使用故障注入启动项。
+
+### 白象山闭环工作区
+
+白象山 launch 使用 `frontier-upload` 中的 frontier 和指令桥，以及 `super_ws` 中的 SUPER。`super_ws/src/mine_uav_control` 是另一个旧副本，单独加载该工作区会运行旧 frontier 节点。先编译两个工作区，再按顺序叠加环境：
+
+```bash
+cd /home/nuc/super_ws && catkin_make --pkg super_planner -j2
+cd /home/nuc/frontier_runtime_ws && catkin_make --pkg mine_uav_control -j2
+source /opt/ros/noetic/setup.bash
+source /home/nuc/fastlio2_ws/devel/setup.bash --extend
+source /home/nuc/super_ws/devel/setup.bash --extend
+source /home/nuc/frontier_runtime_ws/devel/setup.bash --extend
+source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
+  /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
+export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:$ROS_PACKAGE_PATH
+roslaunch mine_uav_control task1_baixiangshan_px4_sitl.launch gui:=false rviz:=false
+```
+
+在有本地 TCP 权限与图形桌面的普通终端，可直接运行
+`bash /home/nuc/frontier-upload/scripts/start_baixiangshan_sitl.sh` 打开 Gazebo 和 RViz；脚本使用独立的 ROS/Gazebo 端口，仿真会自动解锁并起飞。

@@ -18,11 +18,13 @@ TOPICS = [
     "/mavros/local_position/velocity_local",
     "/mavros/state",
     "/mine_uav/exploration/finished",
+    "/mine_uav/exploration/model_complete",
     "/mine_uav/exploration/model_coverage",
     "/mine_uav/exploration/status",
     "/mine_uav/task1/command_status",
     "/Odometry",
     "/planning/pos_cmd",
+    "/gazebo/model_states",
     "/rosout_agg",
 ]
 
@@ -96,6 +98,30 @@ def rate(stamps):
     return (len(stamps) - 1) / (stamps[-1] - stamps[0])
 
 
+def truth_return_error(positions, start_time, finish_time):
+    """Horizontal home error from independent Gazebo poses, if recorded."""
+    if not positions or start_time is None or finish_time is None:
+        return None
+    stamps = [item[0] for item in positions]
+    start_index = bisect.bisect_left(stamps, start_time)
+    finish_index = bisect.bisect_left(stamps, finish_time)
+    if start_index >= len(positions) or finish_index >= len(positions):
+        return None
+    start = positions[start_index]
+    finish = positions[finish_index]
+    if (abs(start[0] - start_time) > 0.2 or
+            abs(finish[0] - finish_time) > 0.2):
+        return None
+    return math.hypot(finish[1] - start[1], finish[2] - start[2])
+
+
+def actual_speed_for_acceptance(report):
+    """Prefer independent physical speed over the estimator being audited."""
+    if report["gazebo_truth_available"]:
+        return report["truth_speed_max"]
+    return report["speed_max"]
+
+
 def longest_below(samples, threshold):
     longest = 0.0
     start = None
@@ -167,8 +193,9 @@ def parse_arguments():
     parser.add_argument("bag", help="task-one rosbag path")
     parser.add_argument("--json-output", help="optional JSON report path")
     parser.add_argument(
-        "--profile", choices=("legacy_fast", "lab_1m"), default="legacy_fast",
-        help="lab_1m evaluates moving phases at the configured 1 m/s ceiling",
+        "--profile", choices=("legacy_fast", "lab_1m", "goaf_1m", "baixiangshan"),
+        default="legacy_fast",
+        help="baixiangshan requires Gazebo truth and completed modeling",
     )
     parser.add_argument("--min-median-speed", type=float)
     parser.add_argument("--max-low-speed-duration", type=float)
@@ -176,11 +203,16 @@ def parse_arguments():
     parser.add_argument("--max-mission-altitude", type=float,
                         help="maximum local-frame z during task-one mission")
     parser.add_argument("--max-return-error", type=float, default=1.0)
+    parser.add_argument("--max-truth-return-error", type=float, default=1.0,
+                        help="maximum actual Gazebo horizontal home error when truth is recorded")
+    parser.add_argument("--require-gazebo-truth", action="store_true",
+                        help="fail if Gazebo vehicle poses are absent from the bag")
     parser.add_argument("--max-planned-speed", type=float, default=2.05)
     parser.add_argument("--max-planned-acceleration", type=float, default=1.60)
-    parser.add_argument("--max-actual-speed", type=float, default=3.0)
+    parser.add_argument("--max-actual-speed", type=float,
+                        help="horizontal/3D speed limit; Gazebo truth takes precedence in SITL")
     parser.add_argument("--min-odom-rate", type=float, default=5.0)
-    parser.add_argument("--min-path-length", type=float, default=45.0)
+    parser.add_argument("--min-path-length", type=float)
     parser.add_argument("--max-offboard-duration", type=float)
     parser.add_argument(
         "--max-super-failures",
@@ -192,6 +224,8 @@ def parse_arguments():
     defaults = {
         "legacy_fast": (1.5, 1.0, 90.0),
         "lab_1m": (0.7, 1.5, 180.0),
+        "goaf_1m": (0.7, 1.5, 180.0),
+        "baixiangshan": (0.35, 3.0, 350.0),
     }
     median_speed, low_duration, offboard_duration = defaults[arguments.profile]
     if arguments.min_median_speed is None:
@@ -200,7 +234,13 @@ def parse_arguments():
         arguments.max_low_speed_duration = low_duration
     if arguments.max_offboard_duration is None:
         arguments.max_offboard_duration = offboard_duration
-    if arguments.max_mission_altitude is None and arguments.profile == "lab_1m":
+    if arguments.min_path_length is None:
+        arguments.min_path_length = 35.0 if arguments.profile == "goaf_1m" else 45.0
+    if arguments.max_actual_speed is None:
+        arguments.max_actual_speed = 1.2 if arguments.profile in ("goaf_1m", "baixiangshan") else 3.0
+    if arguments.profile in ("goaf_1m", "baixiangshan"):
+        arguments.require_gazebo_truth = True
+    if arguments.max_mission_altitude is None and arguments.profile in ("lab_1m", "goaf_1m"):
         arguments.max_mission_altitude = 1.8
     return arguments
 
@@ -213,6 +253,8 @@ def analyze(path):
     clock_mapper = ClockMapper(clock_samples)
 
     poses = []
+    gazebo_positions = []
+    gazebo_speeds = []
     velocities = []
     planned_speeds = []
     planned_accelerations = []
@@ -228,7 +270,10 @@ def analyze(path):
     lifecycle_command_count = 0
     rosout_message_count = 0
     finished_true = False
+    model_complete = False
+    finished_time = None
     last_state = None
+    last_gazebo_stamp = float("-inf")
 
     with rosbag.Bag(path) as bag:
         for topic, message, bag_stamp in bag.read_messages(topics=TOPICS):
@@ -276,6 +321,22 @@ def analyze(path):
                 coverage.append((stamp, message.data))
             elif topic == "/mine_uav/exploration/finished":
                 finished_true = finished_true or bool(message.data)
+                if message.data and finished_time is None:
+                    finished_time = stamp
+            elif topic == "/mine_uav/exploration/model_complete":
+                model_complete = bool(message.data)
+            elif topic == "/gazebo/model_states":
+                if stamp - last_gazebo_stamp >= 0.05:
+                    vehicle_index = next(
+                        (index for index, name in enumerate(message.name)
+                         if name.startswith("iris")), None)
+                    if vehicle_index is not None:
+                        point = message.pose[vehicle_index].position
+                        gazebo_positions.append((stamp, point.x, point.y))
+                        linear = message.twist[vehicle_index].linear
+                        gazebo_speeds.append((
+                            stamp, vector_norm(linear.x, linear.y, linear.z)))
+                        last_gazebo_stamp = stamp
             elif topic == "/mine_uav/task1/command_status":
                 if any(marker in message.data for marker in FAULT_MARKERS):
                     entry = (stamp, message.data)
@@ -298,23 +359,36 @@ def analyze(path):
         (stamp for stamp, mode, _armed in state_changes if mode == "OFFBOARD"),
         None,
     )
-    loiter_after_offboard = None
-    if offboard_start is not None:
-        loiter_after_offboard = next(
-            (
-                stamp
-                for stamp, mode, _armed in state_changes
-                if stamp > offboard_start and mode == "AUTO.LOITER"
-            ),
-            None,
-        )
+    offboard_exit = next(
+        (stamp for stamp, mode, _armed in state_changes
+         if offboard_start is not None and stamp > offboard_start
+         and mode != "OFFBOARD"), None)
+    loiter_after_offboard = next(
+        (stamp for stamp, mode, _armed in state_changes
+         if offboard_start is not None and stamp > offboard_start
+         and mode == "AUTO.LOITER"), None)
     complete_time = next(
         (stamp for stamp, text in statuses if text.startswith("COMPLETE")), None
     )
-    active_end = loiter_after_offboard or complete_time
+    land_after_complete = next(
+        (stamp for stamp, mode, _armed in state_changes
+         if complete_time is not None and stamp >= complete_time
+         and mode == "AUTO.LAND"), None)
+    disarmed_after_land = next(
+        (stamp for stamp, _mode, armed in state_changes
+         if land_after_complete is not None and stamp > land_after_complete
+         and not armed), None)
+    # Stop flight-motion statistics at task completion or OFFBOARD exit.
+    # PX4 may stay powered for several seconds during AUTO.LAND, then briefly
+    # report OFFBOARD and AUTO.LOITER after disarming.
+    motion_ends = [stamp for stamp in (complete_time, offboard_exit)
+                   if stamp is not None]
+    active_end = min(motion_ends) if motion_ends else None
 
     active_poses = []
     active_velocities = []
+    steady_start = None
+    steady_end = None
     if offboard_start is not None and active_end is not None:
         active_poses = [
             sample for sample in poses if offboard_start <= sample[0] <= active_end
@@ -336,6 +410,8 @@ def analyze(path):
         )
 
     return_error = None
+    actual_return_error = truth_return_error(
+        gazebo_positions, offboard_start, finished_time)
     cross_track_max = None
     if active_poses:
         home_x, home_y = active_poses[0][1], active_poses[0][2]
@@ -358,6 +434,15 @@ def analyze(path):
                 for sample in active_poses
             )
 
+    # Some scenario bags omit MAVROS velocity. Gazebo twist is an independent
+    # physical check and must never be replaced by a commanded speed.
+    truth_active_velocities = [
+        sample for sample in gazebo_speeds
+        if steady_start is not None and steady_start <= sample[0] <= steady_end
+    ]
+    if not active_velocities and truth_active_velocities:
+        active_velocities = truth_active_velocities
+        velocities = gazebo_speeds
     speed_values = [value for _stamp, value in active_velocities]
     first_goal_time = goals[0][0] if goals else None
     mission_heights = [
@@ -382,6 +467,11 @@ def analyze(path):
         if return_start_time is not None and complete_time is not None
         and return_start_time + 2.0 <= sample[0] <= complete_time - 2.0
     ]
+    truth_return_velocities = [
+        value for stamp, value in gazebo_speeds
+        if return_start_time is not None and complete_time is not None
+        and return_start_time <= stamp <= complete_time
+    ]
     planned_speed_values = [value for _stamp, value in planned_speeds]
     planned_acceleration_values = [value for _stamp, value in planned_accelerations]
     final_coverage = coverage[-1][1] if coverage else ""
@@ -392,14 +482,18 @@ def analyze(path):
         "time_basis": "gazebo_clock" if clock_mapper.available else "bag_receipt",
         "entered_offboard": offboard_start is not None,
         "offboard_start": offboard_start,
-        "offboard_end": active_end,
+        "offboard_end": offboard_exit,
+        "mission_motion_end": active_end,
         "offboard_duration": (
-            active_end - offboard_start
-            if offboard_start is not None and active_end is not None
+            offboard_exit - offboard_start
+            if offboard_start is not None and offboard_exit is not None
             else None
         ),
         "entered_auto_loiter_after_offboard": loiter_after_offboard is not None,
+        "entered_auto_land_after_completion": land_after_complete is not None,
+        "disarmed_after_land": disarmed_after_land is not None,
         "mission_complete": complete_time is not None and finished_true,
+        "model_complete": model_complete,
         "complete_time": complete_time,
         "map_closure_ready": "map_closure=ready" in final_coverage,
         "three_wall_ready": "three_wall=ready" in final_coverage,
@@ -410,6 +504,12 @@ def analyze(path):
         "goal_lifecycle": lifecycle,
         "path_length": path_length,
         "return_horizontal_error": return_error,
+        "truth_return_horizontal_error": actual_return_error,
+        "gazebo_truth_available": bool(gazebo_positions),
+        "truth_speed_max": max(
+            (value for _stamp, value in truth_active_velocities), default=None),
+        "truth_return_speed_max": max(truth_return_velocities)
+        if truth_return_velocities else None,
         "cross_track_max": cross_track_max,
         "mission_altitude_max": max(mission_heights) if mission_heights else None,
         "mission_altitude_min": min(mission_heights) if mission_heights else None,
@@ -452,7 +552,8 @@ def analyze(path):
 
 
 def evaluate(report, arguments):
-    if arguments.profile == "lab_1m":
+    actual_speed = actual_speed_for_acceptance(report)
+    if arguments.profile in ("lab_1m", "goaf_1m"):
         phase_speeds = (
             report["exploration_speed_median"],
             report["return_speed_median"],
@@ -468,13 +569,15 @@ def evaluate(report, arguments):
         moving_speed_median = report["speed_median"]
         unexpected_low_speed = report["longest_speed_below_0_2"]
     report["profile"] = arguments.profile
+    expected_terminal_mode = (
+        report["entered_auto_land_after_completion"]
+        if arguments.profile == "goaf_1m"
+        else report["entered_auto_loiter_after_offboard"]
+    )
     checks = {
         "entered_offboard": report["entered_offboard"],
         "mission_complete": report["mission_complete"],
         "map_closure_ready": report["map_closure_ready"],
-        "entered_auto_loiter_after_offboard": report[
-            "entered_auto_loiter_after_offboard"
-        ],
         "no_command_faults": not report["command_faults"],
         "at_least_three_goals": report["goal_count"] >= 3,
         "goal_lifecycle_recorded": report["goal_lifecycle_available"],
@@ -489,8 +592,8 @@ def evaluate(report, arguments):
         "median_cruise_speed": moving_speed_median is not None
         and moving_speed_median >= arguments.min_median_speed,
         "low_speed_duration": unexpected_low_speed <= arguments.max_low_speed_duration,
-        "actual_speed_limit": report["speed_max"] is not None
-        and report["speed_max"] <= arguments.max_actual_speed,
+        "actual_speed_limit": actual_speed is not None
+        and actual_speed <= arguments.max_actual_speed,
         "odometry_rate": report["odom_rate"] is not None
         and report["odom_rate"] >= arguments.min_odom_rate,
         "planned_speed_limit": report["planned_speed_max"] is not None
@@ -501,6 +604,21 @@ def evaluate(report, arguments):
         "offboard_duration": report["offboard_duration"] is not None
         and report["offboard_duration"] <= arguments.max_offboard_duration,
     }
+    terminal_check_name = (
+        "entered_auto_land_after_completion" if arguments.profile == "goaf_1m"
+        else "entered_auto_loiter_after_offboard"
+    )
+    checks[terminal_check_name] = expected_terminal_mode
+    if report["gazebo_truth_available"] or arguments.require_gazebo_truth:
+        checks["truth_return_horizontal_error"] = (
+            report["truth_return_horizontal_error"] is not None and
+            report["truth_return_horizontal_error"] <=
+            arguments.max_truth_return_error)
+    if arguments.profile in ("goaf_1m", "baixiangshan"):
+        checks["model_complete"] = report["model_complete"]
+    if arguments.profile == "goaf_1m":
+        checks["three_wall_coverage"] = report["three_wall_ready"]
+        checks["disarmed_after_land"] = report["disarmed_after_land"]
     if arguments.max_mission_altitude is not None:
         checks["mission_altitude_limit"] = (
             report["mission_altitude_max"] is not None
@@ -528,36 +646,42 @@ def format_value(value, suffix=""):
 def print_summary(report):
     print(f"TASK1_SITL_ACCEPTANCE [{report['profile']}]: {report['verdict']}")
     print(
-        "completion: offboard=%s complete=%s map_closure=%s auto_loiter=%s"
+        "completion: offboard=%s complete=%s model_complete=%s map_closure=%s auto_loiter=%s auto_land=%s disarmed=%s"
         % (
             report["entered_offboard"],
             report["mission_complete"],
+            report["model_complete"],
             report["map_closure_ready"],
             report["entered_auto_loiter_after_offboard"],
+            report["entered_auto_land_after_completion"],
+            report["disarmed_after_land"],
         )
     )
     print(
-        "motion: duration=%s path=%s return_error=%s cross_track=%s "
+        "motion: duration=%s path=%s return_error=%s truth_return_error=%s cross_track=%s "
         "mission_z_max=%s"
         % (
             format_value(report["offboard_duration"], "s"),
             format_value(report["path_length"], "m"),
             format_value(report["return_horizontal_error"], "m"),
+            format_value(report["truth_return_horizontal_error"], "m"),
             format_value(report["cross_track_max"], "m"),
             format_value(report["mission_altitude_max"], "m"),
         )
     )
     print(
-        "speed: mean=%s median=%s p90=%s max=%s low<0.2_longest=%s"
+        "speed: mean=%s median=%s p90=%s max=%s truth_max=%s truth_return_max=%s low<0.2_longest=%s"
         % (
             format_value(report["speed_mean"], "m/s"),
             format_value(report["speed_median"], "m/s"),
             format_value(report["speed_p90"], "m/s"),
             format_value(report["speed_max"], "m/s"),
+            format_value(report["truth_speed_max"], "m/s"),
+            format_value(report["truth_return_speed_max"], "m/s"),
             format_value(report["longest_speed_below_0_2"], "s"),
         )
     )
-    if report["profile"] == "lab_1m":
+    if report["profile"] in ("lab_1m", "goaf_1m"):
         print(
             "moving_phases: exploration_median=%s return_median=%s "
             "exploration_low<0.2=%s return_low<0.2=%s"

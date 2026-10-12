@@ -125,3 +125,12 @@ param set-default EKF2_GPS_CTRL 0
 # The Task 2 depth estimate remains side optical-flow integration.
 param set-default EKF2_HGT_REF 0
 param set-default EKF2_BARO_CTRL 1
+# The task-one SITL model has a downward ray sent through MAVROS. Conditional
+# range aid never engages along this uneven tunnel floor; allow it as a
+# secondary height observation while baro remains the vertical datum.
+param set-default EKF2_RNG_CTRL 2
+# The Gazebo barometer differs from world truth by about 0.07 m RMS in the
+# tunnel run. The inherited 3.5 m noise value gave a 12.56 m^2 innovation
+# variance, allowing over 1 m of vertical inertial drift during a return hold.
+# This is a SITL sensor setting; the real FCU snapshot is unchanged.
+param set-default EKF2_BARO_NOISE 0.2

@@ -93,6 +93,7 @@ class GazeboMid360FastlioAdapter:
 
         self._lock = threading.Lock()
         self._latest_odom = None
+        self._odom_history = deque(maxlen=3)
         self._latest_px4_pose = None
         self._armed = False
         self._height_alignment = None
@@ -151,6 +152,7 @@ class GazeboMid360FastlioAdapter:
     def _odom_callback(self, message):
         with self._lock:
             self._latest_odom = message
+            self._odom_history.append(message)
 
     def _px4_pose_callback(self, message):
         with self._lock:
@@ -331,6 +333,7 @@ class GazeboMid360FastlioAdapter:
     def _cloud_callback(self, cloud):
         with self._lock:
             odom = self._latest_odom
+            odom_history = list(self._odom_history)
             px4_pose = self._latest_px4_pose
             armed = self._armed
             link_history = list(self._link_history)
@@ -347,6 +350,32 @@ class GazeboMid360FastlioAdapter:
             return
 
         planner_odom = copy.deepcopy(odom)
+        # The Gazebo ray cloud is sampled after the most recently received
+        # Fast-LIO pose. Placing current rays at that older pose writes a
+        # travel-direction-dependent wall offset into the map; the offset
+        # reverses on the return and can fill a previously free corridor.
+        # Predict only the short measured timestamp gap, with a velocity cap
+        # so a single LIO jump cannot be projected across the scene.
+        cloud_pose_gap = (cloud.header.stamp - odom.header.stamp).to_sec()
+        if 0.0 < cloud_pose_gap <= 0.4 and len(odom_history) >= 2:
+            previous, latest = odom_history[-2:]
+            sample_dt = (latest.header.stamp - previous.header.stamp).to_sec()
+            if 0.03 <= sample_dt <= 0.3:
+                a = previous.pose.pose.position
+                b = latest.pose.pose.position
+                velocity = [
+                    (b.x - a.x) / sample_dt,
+                    (b.y - a.y) / sample_dt,
+                    (b.z - a.z) / sample_dt,
+                ]
+                speed = math.sqrt(sum(value * value for value in velocity))
+                if speed > 2.0:
+                    velocity = [value * (2.0 / speed) for value in velocity]
+                p = planner_odom.pose.pose.position
+                p.x += velocity[0] * cloud_pose_gap
+                p.y += velocity[1] * cloud_pose_gap
+                p.z += velocity[2] * cloud_pose_gap
+        planner_odom.header.stamp = cloud.header.stamp
         if self.px4_pose_topic:
             if px4_pose is None:
                 rospy.logwarn_throttle(2.0, "MID360 cloud waiting for PX4 height")
@@ -504,9 +533,8 @@ class GazeboMid360FastlioAdapter:
 
         header = cloud.header
         # The registered cloud and pose form one synthetic Fast-LIO2 sample.
-        # Give them the same timestamp so the downstream ApproximateTime
-        # synchronizer cannot lose pairs when a dense scan takes noticeable
-        # CPU time to transform.
+        # Give both the acquisition timestamp after predicting the pose to
+        # that time; the downstream synchronizer then receives a real pair.
         header.stamp = planner_odom.header.stamp
         header.frame_id = self.world_frame
         if rospy.is_shutdown():

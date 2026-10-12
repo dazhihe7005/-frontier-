@@ -7,7 +7,30 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
-from analyze_task1_sitl_bag import analyze_goal_lifecycle_events
+from analyze_task1_sitl_bag import (
+    actual_speed_for_acceptance, analyze_goal_lifecycle_events,
+    truth_return_error,
+)
+
+
+class TruthReturnAnalysisTest(unittest.TestCase):
+    def test_physical_speed_overrides_underestimated_fcu_speed(self):
+        report = {"gazebo_truth_available": True,
+                  "truth_speed_max": 1.94, "speed_max": 0.81}
+        self.assertEqual(actual_speed_for_acceptance(report), 1.94)
+        report["truth_speed_max"] = None
+        self.assertIsNone(actual_speed_for_acceptance(report))
+
+    def test_detects_pose_drift_hidden_by_local_home_estimate(self):
+        positions = [(10.0, -7.0, 0.5), (148.0, -6.2, 0.5),
+                     (249.0, -14.6, -0.4)]
+        self.assertAlmostEqual(truth_return_error(positions, 10.0, 148.0), 0.8)
+        self.assertGreater(truth_return_error(positions, 10.0, 249.0), 7.0)
+
+    def test_missing_or_stale_truth_cannot_pass(self):
+        self.assertIsNone(truth_return_error([], 10.0, 20.0))
+        self.assertIsNone(truth_return_error([(10.0, 0.0, 0.0),
+                                              (19.0, 0.0, 0.0)], 10.0, 20.0))
 
 
 class GoalLifecycleAnalysisTest(unittest.TestCase):

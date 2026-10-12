@@ -20,7 +20,7 @@
          barometric height reference is allowed to converge independently of
          FAST-LIO (external vision remains XY-only). The generic operator
          waits for a stable ground Z, then commands a relative 1.5 m climb. -->
-    <arg name="vision_stable_duration" value="10.0"/>
+    <arg name="vision_stable_duration" value="3.0"/>
     <arg name="world" value="$(find mine_uav_control)/worlds/baixianshan_tunnel_sitl.world"/>
     <!-- Blender's collision-ray audit selected source (-10.5, 10.5, 0.6851)
          as the flattest clear main-passage patch (0.534 deg). At the original
@@ -28,7 +28,7 @@
          contact offset for the spawn model origin. -->
     <arg name="spawn_x" value="-7.0"/>
     <arg name="spawn_y" value="0.5"/>
-    <arg name="spawn_z" value="-0.0334"/>
+    <arg name="spawn_z" value="0.0512"/>
     <!-- Start already aligned with one direction of the main drift. A
          180-degree in-place yaw after takeoff adds no mission value and can
          make lidar odometry fragile in a long, self-similar passage. -->
@@ -49,7 +49,7 @@
     <!-- Gazebo collision proves the actually traversed aircraft envelope is
          free; clear stale binary-map hits caused by LIO/voxel jitter along
          that swept route. This remains disabled in real/task-generic use. -->
-    <arg name="carve_traversed_vehicle_envelope" value="true"/>
+    <arg name="carve_traversed_vehicle_envelope" value="false"/>
     <arg name="max_exploration_radius" value="180.0"/>
     <arg name="decider_max_map_radius" value="220.0"/>
     <arg name="frontier_search_radius" value="22.0"/>
@@ -66,6 +66,9 @@
     <!-- Remote map frontiers choose the branch; short verified segments keep
          the vehicle from drawing a large arc at launch and intersections. -->
     <arg name="max_frontier_goal_distance" value="4.0"/>
+    <!-- Shorter elevation steps keep the optimized path inside the narrow
+         floor-to-ceiling clearance band of the rising drift. -->
+    <arg name="forward_lookahead_distance" value="2.5"/>
     <arg name="max_frontier_goal_vertical_step" value="0.35"/>
     <!-- Reject remote frontier clusters that are not part of the current
          vehicle-clear drift; SUPER still performs local obstacle avoidance. -->
@@ -73,12 +76,19 @@
     <arg name="map_closure_min_progress" value="80.0"/>
     <arg name="use_map_closure_completion" value="true"/>
     <arg name="require_three_wall_completion" value="false"/>
-    <arg name="no_frontier_timeout" value="90.0"/>
+    <!-- Once the vehicle has stopped progressing at a closed, already
+         surveyed boundary, wait long enough for map closure (4 s) but avoid
+         a half-minute stationary gap before the verified return. -->
+    <arg name="no_frontier_timeout" value="8.0"/>
+    <arg name="return_map_timeout" value="8.0"/>
+    <arg name="return_home_arrival_radius" value="0.75"/>
+    <arg name="min_forward_super_clearance" value="1.10"/>
+    <arg name="min_clearance_return_progress" value="12.0"/>
     <arg name="max_outbound_backtrack" value="180.0"/>
     <!-- If the surveyed drift is physically blocked, backtrack once through
          known-free space and continue from the other side of the launch
          point. Repeated ping-pong reversals are deliberately forbidden. -->
-    <arg name="max_dead_end_heading_reversals" value="1"/>
+    <arg name="max_dead_end_heading_reversals" value="0"/>
     <arg name="dead_end_reversal_delay" value="4.0"/>
     <arg name="min_observation_height_above_home" value="0.0"/>
     <arg name="max_observation_height_above_home" value="7.0"/>
@@ -88,4 +98,5 @@
     <arg name="bridge_max_height" value="8.0"/>
     <arg name="bridge_height_clamp_tolerance" value="0.50"/>
   </include>
+
 </launch>

@@ -1,3 +1,4 @@
+#include "mine_uav_control/motion_continuity.hpp"
 #include <cmath>
 #include <string>
 
@@ -86,6 +87,11 @@ class Task1PerceptionGate {
     if (!open()) {
       return;
     }
+    if (!mine_uav_control::sourceStampFresh(ros::Time::now().toSec(),
+            cloud->header.stamp.toSec(), 1.0)) {
+      publishStatus("STALE_OR_FUTURE_CLOUD");
+      return;
+    }
     if (!expected_frame_.empty() && cloud->header.frame_id != expected_frame_) {
       ROS_ERROR_THROTTLE(
           1.0, "Task-one perception gate rejected cloud frame '%s', expected '%s'",
@@ -98,6 +104,11 @@ class Task1PerceptionGate {
 
   void odomCallback(const nav_msgs::Odometry::ConstPtr& odom) {
     if (!open()) {
+      return;
+    }
+    if (!mine_uav_control::sourceStampFresh(ros::Time::now().toSec(),
+            odom->header.stamp.toSec(), 1.0)) {
+      publishStatus("STALE_OR_FUTURE_ODOM");
       return;
     }
     if (!expected_frame_.empty() && odom->header.frame_id != expected_frame_) {

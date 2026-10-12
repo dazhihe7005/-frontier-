@@ -7,16 +7,26 @@ command_timeout: 0.25
 local_pose_timeout: 0.5
 output_rate: 50.0
 
-# Hard validation guards. SUPER's nominal trajectory limit is 1.0 m/s.  Keep
-# a 10% validation tolerance so harmless optimizer/sample discretization does
-# not latch automatic control off; this value is a fault threshold, not the
-# requested flight speed.
-max_speed: 1.1
-max_acceleration: 2.0
+# Hard validation guards. SUPER's nominal trajectory limit is 1.0 m/s.  The
+# bridge allows 0.2 m/s for optimizer sampling and inherited tracking speed;
+# this is a fault threshold, not the requested flight speed.
+max_speed: 1.2
+max_acceleration: 1.25
 max_horizontal_radius: 40.0
 min_height: -0.5
 max_height: 1.8
 height_clamp_tolerance: 0.25
+
+# Continuity guard: reject discontinuous planner output before it can reach PX4.
+max_yaw_rate: 0.75
+max_position_rate: 1.10
+max_velocity_slew: 1.75
+max_acceleration_slew: 6.0
+continuity_reset_gap: 0.30
+continuity_nominal_dt: 0.01
+reacquire_blend_duration: 3.5
+max_initial_command_distance: 0.65
+max_initial_yaw_error: 0.70
 exploration_status_topic: "/mine_uav/exploration/status"
 use_acceleration: true
 
@@ -29,6 +39,7 @@ prestream_duration: 1.0
 mode_request_interval: 1.0
 offboard_mode: OFFBOARD
 fallback_mode: POSCTL
+return_recovery_timeout: 12.0
 
 # The SetBool service remains as an optional software inhibit. RC operation does
 # not require a service call when this default is true.

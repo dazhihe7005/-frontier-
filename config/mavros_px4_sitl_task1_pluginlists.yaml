@@ -1,0 +1,10 @@
+# Task 1 SITL sends its independent downward range through MAVROS. Keep the
+# standard PX4 plugin exclusions except distance_sensor, which must be active.
+plugin_blacklist:
+  - safety_area
+  - image_pub
+  - vibration
+  - rangefinder
+  - wheel_odometry
+
+plugin_whitelist: []

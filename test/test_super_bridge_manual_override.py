@@ -23,8 +23,11 @@ class ManualOverrideTest(unittest.TestCase):
         self._pose_z = 1.5
         self._command_z = 1.5
         self._exploration_status = "EXPLORING"
+        self._returning = False
+        self._trajectory_id = 0
         self._setpoints = []
         self._requests = []
+        self._return_requests = []
         self._status = ""
         self._stop = threading.Event()
         self._service = rospy.Service("/mavros/set_mode", SetMode, self._set_mode)
@@ -51,6 +54,13 @@ class ManualOverrideTest(unittest.TestCase):
         self._exploration_pub = rospy.Publisher(
             "/mine_uav/exploration/status", String, queue_size=1, latch=True
         )
+        self._returning_pub = rospy.Publisher(
+            "/mine_uav/exploration/returning", Bool, queue_size=1, latch=True
+        )
+        self._return_request_sub = rospy.Subscriber(
+            "/mine_uav/exploration/return_home", Bool,
+            self._return_request_callback
+        )
         self._status_sub = rospy.Subscriber(
             "/mine_uav/task1/command_status", String, self._status_callback
         )
@@ -67,6 +77,7 @@ class ManualOverrideTest(unittest.TestCase):
         self._stop.set()
         self._worker.join(timeout=2)
         self._status_sub.unregister()
+        self._return_request_sub.unregister()
         self._setpoint_sub.unregister()
         self._service.shutdown("test complete")
 
@@ -78,6 +89,10 @@ class ManualOverrideTest(unittest.TestCase):
     def _status_callback(self, message):
         with self._lock:
             self._status = message.data
+
+    def _return_request_callback(self, message):
+        with self._lock:
+            self._return_requests.append(message.data)
 
     def _setpoint_callback(self, message):
         with self._lock:
@@ -93,6 +108,8 @@ class ManualOverrideTest(unittest.TestCase):
                 pose_z = self._pose_z
                 command_z = self._command_z
                 exploration_status = self._exploration_status
+                returning = self._returning
+                trajectory_id = self._trajectory_id
             stamp = rospy.Time.now()
             state = State()
             state.header.stamp = stamp
@@ -111,6 +128,7 @@ class ManualOverrideTest(unittest.TestCase):
             command.header.frame_id = "camera_init"
             command.position.z = command_z
             command.trajectory_flag = PositionCommand.TRAJECTORY_STATUS_READY
+            command.trajectory_id = trajectory_id
             self._command_pub.publish(command)
             alignment = TransformStamped()
             alignment.header.stamp = stamp
@@ -121,6 +139,7 @@ class ManualOverrideTest(unittest.TestCase):
             self._auto_pub.publish(Bool(data=auto))
             self._vision_pub.publish(Bool(data=True))
             self._exploration_pub.publish(String(data=exploration_status))
+            self._returning_pub.publish(Bool(data=returning))
             self._stop.wait(0.033)
 
     def _wait_for(self, predicate, timeout=5):
@@ -158,13 +177,15 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             held = list(self._setpoints[-8:])
         self.assertTrue(all(abs(z - 1.5) < 0.01 for z, _ in held), held)
+        # Resume from the SAME terminal reference. Discontinuous restarts are
+        # rejected by the separate motion-continuity regression suite.
         with self._lock:
             self._exploration_status = "EXPLORING"
-            self._command_z = 1.6
+            self._command_z = 1.5
         self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
         self.assertTrue(self._wait_for(
             lambda: bool(self._setpoints) and
-            abs(self._setpoints[-1][0] - 1.6) < 0.01
+            abs(self._setpoints[-1][0] - 1.5) < 0.01
         ))
         with self._lock:
             self._mode = "POSCTL"
@@ -200,6 +221,29 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self.assertEqual(self._requests.count("OFFBOARD"),
                              requests_at_alignment_change)
+
+    def test_command_fault_returns_before_route_timeout_fallback(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self._command_z = 2.2
+        self.assertTrue(self._wait_for(lambda: True in self._return_requests))
+        with self._lock:
+            self.assertNotIn("POSCTL", self._requests)
+            self._returning = True
+            self._trajectory_id = 1
+            self._command_z = 1.5
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self.assertNotIn("POSCTL", self._requests)
+            self._exploration_status = "RETURN_ROUTE_WAIT"
+        self.assertTrue(self._wait_for(lambda: "POSCTL" in self._requests,
+                                       timeout=5.0))
 
 
 if __name__ == "__main__":

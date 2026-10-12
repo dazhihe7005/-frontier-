@@ -1,0 +1,128 @@
+<launch>
+  <!-- Isolated end-to-end validation of the temporary five-metre test. -->
+  <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="allow_auto_arm" default="true"/>
+  <arg name="auto_enable_delay" default="6.0"/>
+  <arg name="takeoff_height" default="1.5"/>
+  <arg name="world"
+       default="$(find mine_uav_control)/worlds/five_meter_avoidance.world"/>
+  <arg name="vehicle_sdf"
+       default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
+  <arg name="super_config_path"
+       default="$(find mine_uav_control)/config/super_task1.yaml"/>
+  <arg name="fastlio_config"
+       default="$(find mine_uav_control)/config/fastlio_gazebo_mid360.yaml"/>
+
+  <env name="GAZEBO_MODEL_PATH"
+       value="$(find mine_uav_control)/models:$(optenv GAZEBO_MODEL_PATH)"/>
+
+  <include file="$(find mine_uav_control)/launch/mavros_posix_sitl_task1.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="interactive" value="false"/>
+    <arg name="vehicle" value="iris_xy_vision"/>
+    <arg name="sdf" value="$(arg vehicle_sdf)"/>
+    <arg name="world" value="$(arg world)"/>
+    <arg name="x" value="0.0"/>
+    <arg name="y" value="0.0"/>
+    <arg name="z" value="0.11"/>
+    <arg name="Y" value="0.0"/>
+    <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
+  </include>
+
+  <node pkg="mine_uav_control" type="task1_sitl_downward_range_filter.py"
+        name="task1_sitl_downward_range_filter" output="log" required="true">
+    <param name="max_valid_range" value="5.0"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="pointcloud1_to_pointcloud2"
+        name="mid360_pointcloud_converter" output="screen" required="true">
+    <param name="input_topic" value="/mine_uav/sitl/mid360/points"/>
+    <param name="output_topic" value="/mine_uav/sitl/mid360/points2"/>
+    <param name="min_range" value="0.20"/>
+    <param name="max_range" value="30.0"/>
+    <param name="max_range_epsilon" value="0.05"/>
+  </node>
+
+  <rosparam command="load" file="$(arg fastlio_config)"/>
+  <param name="feature_extract_enable" type="bool" value="false"/>
+  <param name="point_filter_num" type="int" value="2"/>
+  <param name="max_iteration" type="int" value="3"/>
+  <param name="filter_size_surf" type="double" value="0.15"/>
+  <param name="filter_size_map" type="double" value="0.20"/>
+  <param name="cube_side_length" type="double" value="100"/>
+  <param name="runtime_pos_log_enable" type="bool" value="false"/>
+  <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
+        output="screen" required="true"/>
+
+  <node pkg="mine_uav_control" type="fastlio_px4_vision_bridge"
+        name="fastlio_px4_vision_bridge" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
+        name="five_meter_planner_cloud_adapter" output="screen" required="true">
+    <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
+    <param name="odom_topic" value="/Odometry"/>
+    <param name="output_topic" value="/mine_uav/sitl/planner_cloud_registered"/>
+    <param name="px4_pose_topic" value="/mavros/local_position/pose"/>
+    <param name="output_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
+    <param name="max_height_age" value="0.5"/>
+    <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
+    <param name="world_frame" value="camera_init"/>
+    <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
+    <rosparam param="sensor_rpy">[0.0, 0.436332313, 0.0]</rosparam>
+    <param name="self_filter_enable" value="true"/>
+    <param name="self_filter_xy_radius" value="0.65"/>
+    <param name="self_filter_z_min" value="-0.65"/>
+    <param name="self_filter_z_max" value="0.25"/>
+    <param name="min_range" value="0.30"/>
+    <param name="max_range" value="29.5"/>
+    <param name="voxel_size" value="0.15"/>
+    <param name="max_global_points" value="100000"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="sitl_task_operator.py"
+        name="five_meter_sitl_operator" output="screen" required="true">
+    <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
+    <param name="takeoff_height" value="$(arg takeoff_height)"/>
+    <param name="takeoff_hover_duration" value="1.0"/>
+    <param name="vision_status_topic" value="/mine_uav/task1/vision_status"/>
+    <param name="vision_stable_duration" value="3.0"/>
+    <param name="auto_enable_delay" value="$(arg auto_enable_delay)"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="task1_perception_gate"
+        name="five_meter_perception_gate" output="screen" required="true">
+    <param name="input_cloud_topic"
+           value="/mine_uav/sitl/planner_cloud_registered"/>
+    <param name="input_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
+  </node>
+
+  <node pkg="mine_uav_control" type="five_meter_avoidance_test"
+        name="five_meter_avoidance_test" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/five_meter_avoidance_test.yaml"/>
+    <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
+  </node>
+
+  <node pkg="super_planner" type="fsm_node" name="fsm_node"
+        output="screen" required="true">
+    <param name="config_path" value="$(arg super_config_path)"/>
+  </node>
+
+  <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
+    <arg name="fallback_mode" value="AUTO.LAND"/>
+    <arg name="max_speed" value="1.2"/>
+    <arg name="max_horizontal_radius" value="10.0"/>
+    <arg name="min_height" value="-0.5"/>
+    <arg name="max_height" value="2.0"/>
+    <arg name="height_clamp_tolerance" value="0.25"/>
+  </include>
+
+  <group if="$(arg rviz)">
+    <node pkg="rviz" type="rviz" name="five_meter_rviz"
+          args="-d $(find mine_uav_control)/rviz/task1_mid360.rviz" output="log"/>
+  </group>
+</launch>

@@ -1,0 +1,25 @@
+[Unit]
+Description=Mine UAV five-metre avoidance test and flight recorder
+Documentation=file:/home/nuc/frontier-upload/docs/five_meter_avoidance_test_2026-10-11.md
+Wants=network-online.target
+After=network-online.target NetworkManager-wait-online.service
+
+[Service]
+Type=simple
+User=nuc
+Group=nuc
+SupplementaryGroups=dialout
+WorkingDirectory=/home/nuc/frontier-upload
+ExecStart=/home/nuc/frontier-upload/scripts/start_five_meter_avoidance_real.sh
+# Never recreate the control/planning graph automatically after an in-flight
+# process failure.  A failed run requires an operator-reviewed restart.
+Restart=no
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mine-uav-five-meter
+
+[Install]
+WantedBy=multi-user.target

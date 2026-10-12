@@ -18,6 +18,7 @@ find_package(catkin REQUIRED COMPONENTS
   super_planner
   visualization_msgs
 )
+find_package(PCL REQUIRED COMPONENTS kdtree)
 
 add_message_files(FILES ShaftDepthEstimate.msg)
 generate_messages(DEPENDENCIES std_msgs)
@@ -35,6 +36,7 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
 )
 
 add_library(arc_trajectory
@@ -71,7 +73,8 @@ add_library(super_exploration_decider_lib
   src/super_exploration_decider.cpp
 )
 add_dependencies(super_exploration_decider_lib ${catkin_EXPORTED_TARGETS})
-target_link_libraries(super_exploration_decider_lib ${catkin_LIBRARIES})
+target_link_libraries(super_exploration_decider_lib ${catkin_LIBRARIES}
+                      ${PCL_LIBRARIES})
 
 add_executable(super_exploration_decider
   src/super_exploration_decider_node.cpp
@@ -89,6 +92,12 @@ add_executable(mission_scheduler
 )
 target_link_libraries(mission_scheduler ${catkin_LIBRARIES})
 
+add_executable(five_meter_avoidance_test
+  src/five_meter_avoidance_test.cpp
+)
+add_dependencies(five_meter_avoidance_test ${catkin_EXPORTED_TARGETS})
+target_link_libraries(five_meter_avoidance_test ${catkin_LIBRARIES})
+
 add_executable(shaft_mission_node
   src/shaft_mission_node.cpp
 )
@@ -98,6 +107,10 @@ add_dependencies(shaft_mission_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
+  catkin_add_gtest(test_motion_continuity test/test_motion_continuity.cpp)
+  if(TARGET test_motion_continuity)
+    target_link_libraries(test_motion_continuity ${GTEST_MAIN_LIBRARIES})
+  endif()
   add_rostest(test/super_bridge_manual_override.test)
   add_rostest(test/shaft_mission_ros.test)
   add_rostest(test/mission_scheduler_edges.test)
@@ -106,6 +119,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sitl_shaft_vision_truth.py)
   catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
   catkin_add_nosetests(test/test_sitl_shaft_optical_flow_depth.py)
+  catkin_add_nosetests(test/test_task1_sitl_downward_range_filter.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp
@@ -134,6 +148,18 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_anisotropic_clearance)
     target_link_libraries(test_anisotropic_clearance ${GTEST_MAIN_LIBRARIES})
   endif()
+  catkin_add_gtest(test_observation_height_band
+    test/test_observation_height_band.cpp
+  )
+  if(TARGET test_observation_height_band)
+    target_link_libraries(test_observation_height_band ${GTEST_MAIN_LIBRARIES})
+  endif()
+  catkin_add_gtest(test_five_meter_avoidance_logic
+    test/test_five_meter_avoidance_logic.cpp
+  )
+  if(TARGET test_five_meter_avoidance_logic)
+    target_link_libraries(test_five_meter_avoidance_logic ${GTEST_MAIN_LIBRARIES})
+  endif()
   catkin_add_gtest(test_outbound_goal_contract
     test/test_outbound_goal_contract.cpp
   )
@@ -151,7 +177,8 @@ install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
                 pointcloud1_to_pointcloud2
                 super_px4_command_bridge
                 super_exploration_decider_lib super_exploration_decider
-                task1_perception_gate mission_scheduler shaft_mission_node
+                task1_perception_gate mission_scheduler
+                five_meter_avoidance_test shaft_mission_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -162,6 +189,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
 )
 
 catkin_install_python(PROGRAMS
+  scripts/task1_sitl_downward_range_filter.py
   scripts/task1_real_time_guard.py
   scripts/analyze_task1_height_contract.py
   scripts/analyze_task1_sitl_bag.py
@@ -172,6 +200,7 @@ catkin_install_python(PROGRAMS
   scripts/sitl_localization_adapter.py
   scripts/sitl_shaft_rviz_frames.py
   scripts/sitl_task_operator.py
+  scripts/sitl_baixiangshan_launch_stand.py
   scripts/sitl_shaft_sensor_adapter.py
   scripts/sitl_shaft_optical_flow_depth.py
   scripts/sitl_shaft_vision_truth.py

@@ -1,8 +1,10 @@
 #include "mine_uav_control/super_exploration_decider.hpp"
 #include "mine_uav_control/anisotropic_clearance.hpp"
 #include "mine_uav_control/outbound_goal_contract.hpp"
+#include "mine_uav_control/observation_height_band.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -22,6 +24,7 @@ namespace {
 
 constexpr uint8_t kFree = 1;
 constexpr uint8_t kOccupied = 2;
+constexpr uint8_t kPendingOccupied = 3;
 
 double squaredDistance(const geometry_msgs::Point& a,
                        const geometry_msgs::Point& b) {
@@ -94,6 +97,9 @@ SuperExplorationDecider::SuperExplorationDecider(
   rejected_goal_subscriber_ = nh_.subscribe(
       "/mine_uav/super/rejected_goal_id", 10,
       &SuperExplorationDecider::rejectedGoalCallback, this);
+  accepted_goal_subscriber_ = nh_.subscribe(
+      "/mine_uav/super/accepted_goal_id", 10,
+      &SuperExplorationDecider::acceptedGoalCallback, this);
   mission_enable_subscriber_ = nh_.subscribe(
       mission_enable_topic_, 1,
       &SuperExplorationDecider::missionEnableCallback, this);
@@ -104,6 +110,9 @@ SuperExplorationDecider::SuperExplorationDecider(
     free_ray_subscriber_ = nh_.subscribe(
         free_ray_topic_, 1, &SuperExplorationDecider::freeRayCallback, this);
   }
+  super_occupied_subscriber_ = nh_.subscribe(
+      super_occupied_topic_, 1,
+      &SuperExplorationDecider::superOccupiedCallback, this);
   enable_service_ = private_nh_.advertiseService(
       "enable", &SuperExplorationDecider::enableCallback, this);
   reset_service_ = private_nh_.advertiseService(
@@ -194,14 +203,48 @@ bool SuperExplorationDecider::loadParameters() {
                     max_observation_height_above_home_,
                     max_observation_height_above_home_);
   private_nh_.param("data_timeout", data_timeout_, data_timeout_);
+  private_nh_.param("active_goal_data_grace", active_goal_data_grace_,
+                    active_goal_data_grace_);
   private_nh_.param("decision_rate", decision_rate_, decision_rate_);
   private_nh_.param("sync_slop", sync_slop_, sync_slop_);
   private_nh_.param("battery_return_threshold", battery_return_threshold_,
                     battery_return_threshold_);
+  private_nh_.param("battery_return_voltage", battery_return_voltage_,
+                    battery_return_voltage_);
   private_nh_.param("return_home_height_offset", return_home_height_offset_,
                     return_home_height_offset_);
+  private_nh_.param("return_max_height_above_home",
+                    return_max_height_above_home_,
+                    max_observation_height_above_home_);
+  private_nh_.param("return_home_arrival_radius",
+                    return_home_arrival_radius_, return_home_arrival_radius_);
   private_nh_.param("return_breadcrumb_spacing", return_breadcrumb_spacing_,
                     return_breadcrumb_spacing_);
+  private_nh_.param("super_occupied_topic", super_occupied_topic_,
+                    super_occupied_topic_);
+  private_nh_.param("return_segment_length", return_segment_length_,
+                    return_segment_length_);
+  private_nh_.param("return_goal_handover_distance",
+                    return_goal_handover_distance_,
+                    return_goal_handover_distance_);
+  private_nh_.param("return_map_timeout", return_map_timeout_,
+                    return_map_timeout_);
+  private_nh_.param("return_clearance_margin", return_clearance_margin_,
+                    return_clearance_margin_);
+  private_nh_.param("return_super_radius", return_super_radius_,
+                    return_super_radius_);
+  private_nh_.param("min_forward_super_clearance",
+                    min_forward_super_clearance_,
+                    min_forward_super_clearance_);
+  private_nh_.param("min_clearance_return_progress",
+                    min_clearance_return_progress_,
+                    min_clearance_return_progress_);
+  return_segment_length_ = std::max(1.0, return_segment_length_);
+  return_goal_handover_distance_ = std::max(
+      goal_reached_distance_, return_goal_handover_distance_);
+  return_map_timeout_ = std::max(0.5, return_map_timeout_);
+  return_clearance_margin_ = std::max(0.0, return_clearance_margin_);
+  return_super_radius_ = std::max(0.0, return_super_radius_);
   private_nh_.param("distance_weight", distance_weight_, distance_weight_);
   private_nh_.param("information_weight", information_weight_,
                     information_weight_);
@@ -349,19 +392,51 @@ bool SuperExplorationDecider::loadParameters() {
                     max_reachable_voxels_);
   private_nh_.param("max_frontier_candidates", max_frontier_candidates_,
                     max_frontier_candidates_);
+  private_nh_.param("occupied_hit_increment", occupied_hit_increment_,
+                    occupied_hit_increment_);
+  private_nh_.param("free_ray_decrement", free_ray_decrement_,
+                    free_ray_decrement_);
+  private_nh_.param("occupied_confirm_threshold", occupied_confirm_threshold_,
+                    occupied_confirm_threshold_);
+  private_nh_.param("free_confirm_threshold", free_confirm_threshold_,
+                    free_confirm_threshold_);
+  private_nh_.param("occupancy_evidence_min", occupancy_evidence_min_,
+                    occupancy_evidence_min_);
+  private_nh_.param("occupancy_evidence_max", occupancy_evidence_max_,
+                    occupancy_evidence_max_);
+  private_nh_.param("protect_traversed_centerline", protect_traversed_centerline_,
+                    protect_traversed_centerline_);
+  private_nh_.param("traversed_centerline_radius", traversed_centerline_radius_,
+                    traversed_centerline_radius_);
+  private_nh_.param("traversed_centerline_step", traversed_centerline_step_,
+                    traversed_centerline_step_);
 
+  if (occupied_hit_increment_ <= 0 || free_ray_decrement_ <= 0 ||
+      occupied_confirm_threshold_ <= free_confirm_threshold_ ||
+      occupancy_evidence_min_ > free_confirm_threshold_ ||
+      occupancy_evidence_max_ < occupied_confirm_threshold_) {
+    throw std::invalid_argument("invalid occupancy evidence thresholds");
+  }
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(mission_heading_offset_) ||
       !std::isfinite(max_outbound_backtrack_) || max_outbound_backtrack_ < 0.0 ||
       !std::isfinite(vertical_vehicle_radius_) ||
       (vertical_vehicle_radius_ != -1.0 && vertical_vehicle_radius_ <= 0.0) ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
+      !std::isfinite(data_timeout_) || data_timeout_ <= 0.0 ||
+      !std::isfinite(active_goal_data_grace_) ||
+      active_goal_data_grace_ < 0.0 ||
       !std::isfinite(max_exploration_radius_from_home_) ||
       max_exploration_radius_from_home_ <= 0.0 ||
       !std::isfinite(mission_heading_offset_) ||
       !std::isfinite(absolute_mission_heading_yaw_) ||
       !std::isfinite(return_home_height_offset_) ||
       return_home_height_offset_ < 0.0 ||
+      !std::isfinite(return_max_height_above_home_) ||
+      return_max_height_above_home_ < return_home_height_offset_ ||
+      return_max_height_above_home_ > max_observation_height_above_home_ ||
+      !std::isfinite(return_home_arrival_radius_) ||
+      return_home_arrival_radius_ < 0.0 ||
       !std::isfinite(return_breadcrumb_spacing_) ||
       return_breadcrumb_spacing_ < 1.0 ||
       !std::isfinite(heading_priority_weight_) ||
@@ -497,6 +572,12 @@ void SuperExplorationDecider::synchronizedCallback(
   current_pose_.pose = odom->pose.pose;
   last_sync_time_ = ros::Time::now();
   have_data_ = true;
+  if (last_motion_progress_time_.isZero() ||
+      squaredDistance(current_pose_.pose.position,
+                      last_motion_progress_position_) >= 0.25) {
+    last_motion_progress_position_ = current_pose_.pose.position;
+    last_motion_progress_time_ = last_sync_time_;
+  }
   if (first_data_time_.isZero()) {
     first_data_time_ = last_sync_time_;
   }
@@ -523,6 +604,9 @@ void SuperExplorationDecider::synchronizedCallback(
              mission_heading_yaw_ * 180.0 / M_PI);
   }
   updateMap(*cloud, current_pose_);
+  if (protect_traversed_centerline_) {
+    protectTraversedCenterline(current_pose_.pose.position);
+  }
   if (carve_traversed_vehicle_envelope_) {
     carveTraversedVehicleEnvelope(current_pose_.pose.position);
   }
@@ -561,26 +645,49 @@ geometry_msgs::Point SuperExplorationDecider::keyToPoint(
 }
 
 void SuperExplorationDecider::markFree(const VoxelKey& key) {
-  auto it = voxels_.find(key);
-  if (it == voxels_.end()) {
-    voxels_.emplace(key, kFree);
-  } else if (it->second != kOccupied) {
-    it->second = kFree;
-  }
+  int16_t& evidence = occupancy_evidence_[key];
+  evidence = std::max(occupancy_evidence_min_, evidence - free_ray_decrement_);
+  if (evidence <= free_confirm_threshold_) voxels_[key] = kFree;
 }
 
 void SuperExplorationDecider::markOccupied(const VoxelKey& key) {
-  voxels_[key] = kOccupied;
+  int16_t& evidence = occupancy_evidence_[key];
+  // A new return immediately blocks navigation; "not yet confirmed" is NOT free.
+  evidence = std::min(occupancy_evidence_max_, std::max(0, int(evidence)) + occupied_hit_increment_);
+  voxels_[key] = evidence >= occupied_confirm_threshold_ ? kOccupied : kPendingOccupied;
 }
 
 bool SuperExplorationDecider::isOccupied(const VoxelKey& key) const {
   const auto it = voxels_.find(key);
-  return it != voxels_.end() && it->second == kOccupied;
+  return it != voxels_.end() &&
+      (it->second == kOccupied || it->second == kPendingOccupied);
 }
 
 bool SuperExplorationDecider::isKnownFree(const VoxelKey& key) const {
   const auto it = voxels_.find(key);
   return it != voxels_.end() && it->second == kFree;
+}
+
+void SuperExplorationDecider::superOccupiedCallback(const Cloud::ConstPtr& cloud) {
+  if (cloud->header.frame_id != world_frame_ || cloud->header.stamp.isZero()) {
+    return;
+  }
+  pcl::PointCloud<pcl::PointXYZ>::Ptr points(new pcl::PointCloud<pcl::PointXYZ>);
+  try {
+    pcl::fromROSMsg(*cloud, *points);
+  } catch (const std::exception& error) {
+    ROS_WARN_THROTTLE(2.0, "Cannot read SUPER occupied map: %s", error.what());
+    return;
+  }
+  points->points.erase(std::remove_if(points->points.begin(), points->points.end(),
+      [](const pcl::PointXYZ& p) {
+        return !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z);
+      }), points->points.end());
+  points->width = points->points.size();
+  points->height = 1;
+  super_occupied_points_ = points;
+  if (!points->empty()) super_occupied_tree_.setInputCloud(points);
+  super_occupied_stamp_ = cloud->header.stamp;
 }
 
 void SuperExplorationDecider::freeRayCallback(const Cloud::ConstPtr& cloud) {
@@ -600,26 +707,24 @@ void SuperExplorationDecider::freeRayCallback(const Cloud::ConstPtr& cloud) {
                       error.what());
     return;
   }
-  const geometry_msgs::Point& origin = current_pose_.pose.position;
-  for (const auto& point : endpoints) {
-    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-        !std::isfinite(point.z)) continue;
-    const double dx = point.x - origin.x;
-    const double dy = point.y - origin.y;
-    const double dz = point.z - origin.z;
-    const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (distance < voxel_resolution_ ||
-        distance > raycast_max_range_ + voxel_resolution_) continue;
-    const int steps = static_cast<int>(std::ceil(distance / voxel_resolution_));
-    for (int step = 1; step <= steps; ++step) {
-      const double ratio = static_cast<double>(step) / steps;
-      const VoxelKey key = positionToKey(origin.x + ratio * dx,
-                                         origin.y + ratio * dy,
-                                         origin.z + ratio * dz);
-      if (isOccupied(key)) break;
-      markFree(key);
+  const geometry_msgs::Point& origin=current_pose_.pose.position;
+  VoxelSet misses;
+  for (const auto& point:endpoints) {
+    if (!std::isfinite(point.x)||!std::isfinite(point.y)||!std::isfinite(point.z)) continue;
+    const double dx=point.x-origin.x,dy=point.y-origin.y,dz=point.z-origin.z;
+    const double distance=std::sqrt(dx*dx+dy*dy+dz*dz);
+    if (distance<voxel_resolution_||distance>raycast_max_range_+voxel_resolution_) continue;
+    const int steps=static_cast<int>(std::ceil(distance/(voxel_resolution_*0.5)));
+    for(int k=1;k<=steps;++k) {
+      const double r=double(k)/steps;
+      const VoxelKey key=positionToKey(origin.x+r*dx,origin.y+r*dy,origin.z+r*dz);
+      if (last_scan_hits_.count(key) &&
+          std::abs((cloud->header.stamp-last_scan_stamp_).toSec()) <= sync_slop_+0.15) break;
+      if (isOccupied(key)) break; // unbounded/no-return rays cannot disprove walls
+      misses.insert(key);
     }
   }
+  for(const auto& key:misses) markFree(key);
 }
 
 SuperExplorationDecider::VoxelSet
@@ -629,17 +734,47 @@ SuperExplorationDecider::reachableFreeVoxels() const {
     return reachable;
   }
 
+  // A candidate on the edge of the connected component is tested from many
+  // neighbouring cells. The one-metre clearance test scans hundreds of
+  // voxels, so repeat calls dominated the 2 Hz decision timer and delayed
+  // the next forward goal after SUPER had already stopped at its endpoint.
+  std::unordered_map<VoxelKey, bool, VoxelKeyHash> clearance_cache;
+  const auto vehicle_clear = [&](const VoxelKey& key) {
+    const auto cached = clearance_cache.find(key);
+    if (cached != clearance_cache.end()) return cached->second;
+    const bool clear = isClearForVehicle(key);
+    clearance_cache.emplace(key, clear);
+    return clear;
+  };
+  const auto transition_clear = [&](const VoxelKey& from,
+                                    const VoxelKey& to) {
+    const int dx = to.x - from.x;
+    const int dy = to.y - from.y;
+    const int dz = to.z - from.z;
+    for (int ix = 0; ix <= (dx != 0); ++ix) {
+      for (int iy = 0; iy <= (dy != 0); ++iy) {
+        for (int iz = 0; iz <= (dz != 0); ++iz) {
+          const VoxelKey key{from.x + ix * dx,
+                             from.y + iy * dy,
+                             from.z + iz * dz};
+          if (!isKnownFree(key) || !vehicle_clear(key)) return false;
+        }
+      }
+    }
+    return true;
+  };
+
   VoxelKey start = positionToKey(current_pose_.pose.position.x,
                                  current_pose_.pose.position.y,
                                  current_pose_.pose.position.z);
-  if (!isKnownFree(start) || !isClearForVehicle(start)) {
+  if (!isKnownFree(start) || !vehicle_clear(start)) {
     bool found = false;
     for (int radius = 1; radius <= 2 && !found; ++radius) {
       for (int dx = -radius; dx <= radius && !found; ++dx) {
         for (int dy = -radius; dy <= radius && !found; ++dy) {
           for (int dz = -radius; dz <= radius; ++dz) {
             const VoxelKey candidate{start.x + dx, start.y + dy, start.z + dz};
-            if (isKnownFree(candidate) && isClearForVehicle(candidate)) {
+            if (isKnownFree(candidate) && vehicle_clear(candidate)) {
               start = candidate;
               found = true;
               break;
@@ -653,9 +788,6 @@ SuperExplorationDecider::reachableFreeVoxels() const {
     }
   }
 
-  static const int kNeighbors[6][3] = {
-      {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
-      {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
   std::queue<VoxelKey> queue;
   reachable.insert(start);
   queue.push(start);
@@ -668,32 +800,40 @@ SuperExplorationDecider::reachableFreeVoxels() const {
          reachable.size() < static_cast<std::size_t>(max_reachable_voxels_)) {
     const VoxelKey current = queue.front();
     queue.pop();
-    for (const auto& offset : kNeighbors) {
-      const VoxelKey neighbor{current.x + offset[0], current.y + offset[1],
-                              current.z + offset[2]};
-      if (reachable.count(neighbor) > 0 || !isKnownFree(neighbor) ||
-          !isClearForVehicle(neighbor)) {
-        continue;
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -1; dz <= 1; ++dz) {
+          if (dx == 0 && dy == 0 && dz == 0) {
+            continue;
+          }
+          const VoxelKey neighbor{current.x + dx, current.y + dy,
+                                  current.z + dz};
+          if (reachable.count(neighbor) > 0 || !isKnownFree(neighbor)) {
+            continue;
+          }
+          const geometry_msgs::Point point = keyToPoint(neighbor);
+          if (squaredDistance(point, current_pose_.pose.position) >
+              radius_squared) {
+            continue;
+          }
+          const double home_dx = point.x - home_pose_.pose.position.x;
+          const double home_dy = point.y - home_pose_.pose.position.y;
+          const double lateral = -s * home_dx + c * home_dy;
+          const double relative_height =
+              point.z - home_pose_.pose.position.z;
+          if (std::abs(lateral) > max_task_lateral_offset_ ||
+              relative_height < min_observation_height_above_home_ -
+                                    voxel_resolution_ ||
+              relative_height > max_observation_height_above_home_ +
+                                    voxel_resolution_ ||
+              !vehicle_clear(neighbor) ||
+              !transition_clear(current, neighbor)) {
+            continue;
+          }
+          reachable.insert(neighbor);
+          queue.push(neighbor);
+        }
       }
-      const geometry_msgs::Point point = keyToPoint(neighbor);
-      if (squaredDistance(point, current_pose_.pose.position) >
-          radius_squared) {
-        continue;
-      }
-      const double home_dx = point.x - home_pose_.pose.position.x;
-      const double home_dy = point.y - home_pose_.pose.position.y;
-      const double lateral = -s * home_dx + c * home_dy;
-      const double relative_height =
-          point.z - home_pose_.pose.position.z;
-      if (std::abs(lateral) > max_task_lateral_offset_ ||
-          relative_height < min_observation_height_above_home_ -
-                                voxel_resolution_ ||
-          relative_height > max_observation_height_above_home_ +
-                                voxel_resolution_) {
-        continue;
-      }
-      reachable.insert(neighbor);
-      queue.push(neighbor);
     }
   }
   if (reachable.size() >=
@@ -718,55 +858,42 @@ void SuperExplorationDecider::updateMap(
     return;
   }
 
-  const VoxelKey sensor_key = positionToKey(
-      pose.pose.position.x, pose.pose.position.y, pose.pose.position.z);
-  markFree(sensor_key);
-
-  const int stride = std::max(
-      1, static_cast<int>((input.size() + max_points_per_cloud_ - 1) /
-                          max_points_per_cloud_));
-  int accepted = 0;
-  for (std::size_t index = 0; index < input.size(); index += stride) {
-    const auto& point = input[index];
-    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-        !std::isfinite(point.z)) {
-      continue;
-    }
-    const double dx = point.x - pose.pose.position.x;
-    const double dy = point.y - pose.pose.position.y;
-    const double dz = point.z - pose.pose.position.z;
-    const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (distance < voxel_resolution_ * 0.5 || distance > raycast_max_range_) {
-      continue;
-    }
-
-    const VoxelKey endpoint = positionToKey(point.x, point.y, point.z);
-    markOccupied(endpoint);
-    ++accepted;
-
-    if (!raycast_enable_) {
-      continue;
-    }
-    const int steps = std::max(
-        1, static_cast<int>(std::ceil(distance / voxel_resolution_)));
-    for (int step = 1; step < steps; ++step) {
-      const double ratio = static_cast<double>(step) / steps;
-      const VoxelKey ray_key = positionToKey(
-          pose.pose.position.x + ratio * dx,
-          pose.pose.position.y + ratio * dy,
-          pose.pose.position.z + ratio * dz);
-      if (ray_key == endpoint) {
-        break;
-      }
-      if (!isOccupied(ray_key)) {
-        markFree(ray_key);
-      }
+  // Deduplicate per scan. Thousands of points/rays in one voxel are one
+  // observation, not thousands of independent confirmations. Hits win ties.
+  VoxelSet hits, misses;
+  const auto& origin = pose.pose.position;
+  const int stride = std::max(1, static_cast<int>((input.size()+max_points_per_cloud_-1)/max_points_per_cloud_));
+  for (std::size_t index=0; index<input.size(); index+=stride) {
+    const auto& p=input[index];
+    if (!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) continue;
+    const double dx=p.x-origin.x, dy=p.y-origin.y, dz=p.z-origin.z;
+    const double distance=std::sqrt(dx*dx+dy*dy+dz*dz);
+    if (distance < voxel_resolution_*0.5 || distance > raycast_max_range_) continue;
+    hits.insert(positionToKey(p.x,p.y,p.z));
+  }
+  if (raycast_enable_) for (std::size_t index=0; index<input.size(); index+=stride) {
+    const auto& p=input[index];
+    if (!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) continue;
+    const double dx=p.x-origin.x, dy=p.y-origin.y, dz=p.z-origin.z;
+    const double distance=std::sqrt(dx*dx+dy*dy+dz*dz);
+    if (distance < voxel_resolution_*0.5 || distance > raycast_max_range_) continue;
+    const VoxelKey endpoint=positionToKey(p.x,p.y,p.z);
+    const int steps=std::max(1,static_cast<int>(std::ceil(distance/(voxel_resolution_*0.5))));
+    for (int k=0;k<steps;++k) {
+      const double r=double(k)/steps;
+      const VoxelKey key=positionToKey(origin.x+r*dx,origin.y+r*dy,origin.z+r*dz);
+      if (key==endpoint || hits.count(key)) break;
+      misses.insert(key);
+      // A contradictory ray may weaken the FIRST old obstruction only. Never
+      // carve unseen space behind a still-blocking cell in the same scan.
+      if (isOccupied(key)) break;
     }
   }
-
-  if (accepted > 0) {
-    pruneMap();
-  }
+  for (const auto& key:hits) markOccupied(key);
+  for (const auto& key:misses) if (!hits.count(key)) markFree(key);
+  last_scan_hits_=std::move(hits);
+  last_scan_stamp_=cloud.header.stamp;
+  pruneMap();
 }
 
 void SuperExplorationDecider::updateDirectionalEvidence(
@@ -1094,8 +1221,10 @@ SuperExplorationDecider::evaluateMapClosure(
     const double lateral = -s * (point.x - home_pose_.pose.position.x) +
                            c * (point.y - home_pose_.pose.position.y);
     if (std::abs(lateral) > max_task_lateral_offset_ ||
-        std::abs(point.z - home_pose_.pose.position.z -
-                 cruise_height_above_home_) > voxel_resolution_ ||
+        !inObservationHeightBand(
+            point.z, home_pose_.pose.position.z,
+            min_observation_height_above_home_,
+            max_observation_height_above_home_, voxel_resolution_) ||
         !isClearForVehicle(key)) {
       continue;
     }
@@ -1104,9 +1233,12 @@ SuperExplorationDecider::evaluateMapClosure(
     result.max_reachable_progress =
         std::max(result.max_reachable_progress, progress);
   }
+  // The front-wall sensor range is not the minimum useful flight segment.
+  // A wall can be visible at six metres while a shorter, vehicle-clear
+  // observation step remains available before it.
   result.reachable_forward_passage =
       result.max_reachable_progress >
-      result.vehicle_progress + front_obstacle_range_;
+      result.vehicle_progress + min_goal_distance_;
 
   for (const auto& entry : voxels_) {
     if (entry.second == kOccupied) {
@@ -1139,10 +1271,12 @@ SuperExplorationDecider::evaluateMapClosure(
       map_growth_reference_count_ == 0) {
     last_significant_map_growth_time_ = now;
     map_growth_reference_count_ = result.occupied_voxels;
-  } else if (result.occupied_voxels < map_growth_reference_count_ ||
-             result.occupied_voxels >=
-                 map_growth_reference_count_ +
-                     static_cast<std::size_t>(map_closure_growth_voxels_)) {
+  } else if ((result.occupied_voxels > map_growth_reference_count_ &&
+              result.occupied_voxels - map_growth_reference_count_ >=
+                  static_cast<std::size_t>(map_closure_growth_voxels_)) ||
+             (result.occupied_voxels < map_growth_reference_count_ &&
+              map_growth_reference_count_ - result.occupied_voxels >=
+                  static_cast<std::size_t>(map_closure_growth_voxels_))) {
     last_significant_map_growth_time_ = now;
     map_growth_reference_count_ = result.occupied_voxels;
   }
@@ -1225,6 +1359,7 @@ void SuperExplorationDecider::pruneMap() {
   for (auto it = voxels_.begin(); it != voxels_.end();) {
     const geometry_msgs::Point point = keyToPoint(it->first);
     if (squaredDistance(point, current_pose_.pose.position) > radius_squared) {
+      occupancy_evidence_.erase(it->first);
       it = voxels_.erase(it);
     } else {
       ++it;
@@ -1277,6 +1412,65 @@ void SuperExplorationDecider::carveTraversedVehicleEnvelope(
   }
 }
 
+bool SuperExplorationDecider::transitionClear(const VoxelKey& from, const VoxelKey& to) const {
+  const int dx=to.x-from.x,dy=to.y-from.y,dz=to.z-from.z;
+  if(std::abs(dx)>1||std::abs(dy)>1||std::abs(dz)>1) return false;
+  // Full supercover of an adjacent-cell diagonal: validate face/edge cells,
+  // not just endpoint samples which can tunnel through a voxel corner.
+  for(int ix=0;ix<=(dx!=0);++ix)
+    for(int iy=0;iy<=(dy!=0);++iy)
+      for(int iz=0;iz<=(dz!=0);++iz) {
+        const VoxelKey key{from.x+ix*dx,from.y+iy*dy,from.z+iz*dz};
+        if(!isKnownFree(key)||!isClearForVehicle(key)) return false;
+      }
+  return true;
+}
+
+void SuperExplorationDecider::protectTraversedCenterline(
+    const geometry_msgs::Point& position) {
+  if (!have_last_centerline_position_) {
+    last_centerline_position_ = position;
+    have_last_centerline_position_ = true;
+  }
+  const double dx = position.x - last_centerline_position_.x;
+  const double dy = position.y - last_centerline_position_.y;
+  const double dz = position.z - last_centerline_position_.z;
+  const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+  if (!std::isfinite(distance) || distance > 1.0) {
+    have_last_centerline_position_ = false;
+    return;
+  }
+  const int steps = std::max(
+      1, static_cast<int>(std::ceil(distance / std::max(0.05, traversed_centerline_step_))));
+  const int radius_cells = std::max(
+      0, static_cast<int>(std::ceil(
+             traversed_centerline_radius_ / voxel_resolution_)));
+  for (int i = 0; i <= steps; ++i) {
+    const double t = static_cast<double>(i) / static_cast<double>(steps);
+    geometry_msgs::Point sample;
+    sample.x = last_centerline_position_.x + dx * t;
+    sample.y = last_centerline_position_.y + dy * t;
+    sample.z = last_centerline_position_.z + dz * t;
+    const VoxelKey center = positionToKey(sample.x, sample.y, sample.z);
+    for (int ox = -radius_cells; ox <= radius_cells; ++ox) {
+      for (int oy = -radius_cells; oy <= radius_cells; ++oy) {
+        for (int oz = -radius_cells; oz <= radius_cells; ++oz) {
+          const double r = std::sqrt(
+              (ox * voxel_resolution_) * (ox * voxel_resolution_) +
+              (oy * voxel_resolution_) * (oy * voxel_resolution_) +
+              (oz * voxel_resolution_) * (oz * voxel_resolution_));
+          if (r > traversed_centerline_radius_ + 1e-6) {
+            continue;
+          }
+          const VoxelKey key{center.x + ox, center.y + oy, center.z + oz};
+          if (isKnownFree(key)) occupancy_evidence_[key] = occupancy_evidence_min_;
+        }
+      }
+    }
+  }
+  last_centerline_position_ = position;
+}
+
 bool SuperExplorationDecider::isClearForVehicle(const VoxelKey& key) const {
   if (vertical_vehicle_radius_ > 0.0) {
     const double search_xy = vehicle_radius_ + voxel_resolution_ * 0.7071067811865476;
@@ -1323,6 +1517,22 @@ bool SuperExplorationDecider::isNearCoveredGoal(
     }
   }
   return false;
+}
+
+bool SuperExplorationDecider::isNearFailedGoal(
+    const geometry_msgs::Point& point) const {
+  const double radius = std::max(0.75, 2.0 * voxel_resolution_);
+  for (const auto& failed : failed_goals_) {
+    if (squaredDistance(point, failed) < radius * radius) return true;
+  }
+  return false;
+}
+
+void SuperExplorationDecider::rememberFailedGoal(
+    const geometry_msgs::Point& point) {
+  if (isNearFailedGoal(point)) return;
+  failed_goals_.push_back(point);
+  if (failed_goals_.size() > 100) failed_goals_.erase(failed_goals_.begin());
 }
 
 std::vector<SuperExplorationDecider::FrontierCandidate>
@@ -1372,7 +1582,8 @@ SuperExplorationDecider::findFrontiers(VoxelSet& reachable) const {
         squaredDistance(point, current_pose_.pose.position);
     if (distance_squared < min_distance_squared ||
         distance_squared > max_distance_squared ||
-        !isClearForVehicle(entry.first) || isNearCoveredGoal(point)) {
+        !isClearForVehicle(entry.first) || isNearCoveredGoal(point) ||
+        isNearFailedGoal(point)) {
       continue;
     }
 
@@ -1640,6 +1851,7 @@ void SuperExplorationDecider::publishGoal(
   command.reason = reason;
   goal_publisher_.publish(command);
   active_goal_id_ = command.goal_id;
+  accepted_goal_id_ = 0;
   goal_sent_time_ = current_goal_.header.stamp;
   active_goal_initial_distance_ = std::sqrt(squaredDistance(
       current_pose_.pose.position, current_goal_.pose.position));
@@ -1663,6 +1875,7 @@ void SuperExplorationDecider::cancelActiveGoal(const std::string& reason,
   command.reason = reason;
   goal_publisher_.publish(command);
   active_goal_id_ = 0;
+  accepted_goal_id_ = 0;
   have_active_goal_ = false;
   active_goal_is_end_approach_ = false;
   active_goal_is_lateral_detour_ = false;
@@ -1711,7 +1924,7 @@ bool SuperExplorationDecider::publishEndApproachGoal(
 }
 
 bool SuperExplorationDecider::publishForwardLookaheadGoal(
-    const VoxelSet& reachable) {
+    const VoxelSet& reachable, bool require_successor) {
   // Frontier fallback controls how unstructured frontier candidates are
   // ranked; it must not suppress a directly observed, vehicle-clear forward
   // segment. Side-wall visibility can disappear in a surveyed junction while
@@ -1731,7 +1944,7 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
       max_exploration_radius_from_home_ - current_progress;
   const double maximum_lookahead =
       std::min(forward_lookahead_distance_, remaining_radius);
-  // After the first confirmed dead end, breadcrumb return can end at the
+  // After the first confirmed dead end, live-map return can end at the
   // launch voxel with less than the normal two-metre connected free segment
   // visible in the opposite direction. Permit one-voxel observation steps
   // to leave that already traversed origin envelope and obtain a fresh scan.
@@ -1779,6 +1992,15 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
            lookahead >= minimum_lookahead - 1e-6;
            lookahead -= forward_lookahead_step_) {
         const double target_progress = current_progress + lookahead;
+        if (require_successor &&
+            target_progress <=
+                std::cos(mission_heading_yaw_) *
+                    (current_goal_.pose.position.x - home_pose_.pose.position.x) +
+                std::sin(mission_heading_yaw_) *
+                    (current_goal_.pose.position.y - home_pose_.pose.position.y) +
+                0.5 * voxel_resolution_) {
+          continue;
+        }
         geometry_msgs::Point target;
         target.x = home_pose_.pose.position.x + c * target_progress -
                    s * lateral;
@@ -1790,7 +2012,7 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
         // A task-level goal must be proven free and connected by a clear,
         // observed segment. Unknown is not free: allowing a centerline goal
         // merely because it is not occupied can place the goal behind a wall.
-        if (reachable.count(target_key) == 0 ||
+        if (isNearFailedGoal(target) || reachable.count(target_key) == 0 ||
             !isClearForVehicle(target_key)) {
           continue;
         }
@@ -1821,7 +2043,8 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
             break;
           }
         }
-        if (!segment_clear) {
+        if (!segment_clear ||
+            !returnSegmentClear(start, target, 0.05, false)) {
           continue;
         }
         geometry_msgs::PoseStamped goal;
@@ -1898,7 +2121,9 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
         break;
       }
     }
-    if (!direct_clear) continue;
+    if (!direct_clear ||
+        !returnSegmentClear(current_pose_.pose.position,
+                            goal.pose.position, 0.05, false)) continue;
     const double score = candidate_progress - 0.1 * distance +
                          0.01 * candidate.unknown_neighbors;
     if (!found || score > best_score) {
@@ -1935,26 +2160,21 @@ bool SuperExplorationDecider::reverseMissionHeadingAtDeadEnd(
   dead_end_backtracking_ = true;
   return_waypoints_.clear();
   return_waypoint_index_ = 0;
-  for (auto it = outbound_breadcrumbs_.rbegin();
-       it != outbound_breadcrumbs_.rend(); ++it) {
-    if (std::sqrt(squaredDistance(it->pose.position,
-                                  current_pose_.pose.position)) >
-            goal_reached_distance_ &&
-        squaredDistance(it->pose.position, home_pose_.pose.position) >
-            goal_reached_distance_ * goal_reached_distance_) {
-      geometry_msgs::PoseStamped waypoint = *it;
-      waypoint.pose.orientation = yawQuaternion(mission_heading_yaw_);
-      return_waypoints_.push_back(waypoint);
-    }
+  if (!publishFreshReturnGoal("dead_end_live_map")) {
+    // A long frontier evaluation can make its input pose stale before the
+    // return goal is published. Do not latch the reversed heading or enter
+    // backtrack mode without an accepted, live-map-clear first leg.
+    mission_heading_yaw_ = previous_heading;
+    --dead_end_heading_reversal_count_;
+    dead_end_backtracking_ = false;
+    exploration_phase_ = ExplorationPhase::kFrontierFallback;
+    ROS_WARN_THROTTLE(2.0,
+        "Dead-end return has no fresh, SUPER-map-clear first leg; holding for new sensor data");
+    return false;
   }
-  geometry_msgs::PoseStamped home_target = home_pose_;
-  home_target.pose.orientation = yawQuaternion(mission_heading_yaw_);
-  return_waypoints_.push_back(home_target);
-  publishGoal(return_waypoints_.front(), "dead_end_breadcrumb");
   ROS_WARN(
       "Dead end has no vehicle-clear detour; reversing mission heading "
-      "%.1f -> %.1f deg (%d/%d) and backtracking only through known free "
-      "space",
+      "%.1f -> %.1f deg (%d/%d); return goals use the live map",
       previous_heading * 180.0 / M_PI,
       mission_heading_yaw_ * 180.0 / M_PI,
       dead_end_heading_reversal_count_, max_dead_end_heading_reversals_);
@@ -1966,14 +2186,19 @@ bool SuperExplorationDecider::tryForwardHandover(const VoxelSet& reachable) {
     return false;
   }
   const geometry_msgs::Point previous_goal = current_goal_.pose.position;
+  const bool previous_goal_reached =
+      squaredDistance(current_pose_.pose.position, previous_goal) <=
+      goal_reached_distance_ * goal_reached_distance_;
   // publishForwardLookaheadGoal only mutates goal state after it has found a
   // known-free, reachable successor. A failed search must leave the current
   // trajectory active instead of creating an unbounded no-goal interval.
-  if (!publishForwardLookaheadGoal(reachable)) {
+  if (!publishForwardLookaheadGoal(reachable, true)) {
     return false;
   }
-  covered_goals_.push_back(previous_goal);
-  ++reached_goal_count_;
+  if (previous_goal_reached) {
+    covered_goals_.push_back(previous_goal);
+    ++reached_goal_count_;
+  }
   return true;
 }
 
@@ -2096,6 +2321,11 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
             max_frontier_goal_vertical_step_ + 1e-6) {
       continue;
     }
+    // The connected route may bend around a corner. SUPER owns its curved
+    // corridor, so validate this local target in the current occupancy map
+    // without imposing a straight line through the inside of the bend.
+    if (isNearFailedGoal(candidate_goal) ||
+        !returnSegmentClear(candidate_goal, candidate_goal, 0.05)) continue;
     selected_goal.pose.position = candidate_goal;
     found_local_goal = true;
   }
@@ -2130,29 +2360,387 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
   return true;
 }
 
-void SuperExplorationDecider::beginReturnHome(const std::string& reason) {
+double SuperExplorationDecider::outboundSeparation(
+    const geometry_msgs::Point& point) const {
+  double nearest = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < outbound_breadcrumbs_.size(); ++i) {
+    const auto& a = outbound_breadcrumbs_[i].pose.position;
+    const auto& b = i + 1 < outbound_breadcrumbs_.size()
+        ? outbound_breadcrumbs_[i + 1].pose.position : a;
+    const double dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const double len2 = dx * dx + dy * dy + dz * dz;
+    const double t = len2 > 1e-9 ? std::max(0.0, std::min(1.0,
+        ((point.x - a.x) * dx + (point.y - a.y) * dy +
+         (point.z - a.z) * dz) / len2)) : 0.0;
+    geometry_msgs::Point projection;
+    projection.x = a.x + t * dx;
+    projection.y = a.y + t * dy;
+    projection.z = a.z + t * dz;
+    nearest = std::min(nearest, std::sqrt(squaredDistance(point, projection)));
+  }
+  return std::isfinite(nearest) ? nearest : 0.0;
+}
+
+bool SuperExplorationDecider::returnSegmentClear(
+    const geometry_msgs::Point& from, const geometry_msgs::Point& to,
+    double extra_clearance, bool require_known_start) const {
+  if (super_occupied_stamp_.isZero() ||
+      (ros::Time::now() - super_occupied_stamp_).toSec() > return_map_timeout_) {
+    if (extra_clearance > 0.0)
+      ROS_WARN_THROTTLE(5.0,
+          "Forward SUPER-map check has no fresh occupancy: age=%.2f s limit=%.2f s",
+          super_occupied_stamp_.isZero() ? -1.0 :
+              (ros::Time::now() - super_occupied_stamp_).toSec(),
+          return_map_timeout_);
+    return false;
+  }
+  const double distance = std::sqrt(squaredDistance(from, to));
+  const int steps = std::max(1, static_cast<int>(std::ceil(
+      distance / (0.5 * voxel_resolution_))));
+  for (int i = 0; i <= steps; ++i) {
+    const double t = static_cast<double>(i) / steps;
+    const geometry_msgs::Point sample = [&]() {
+      geometry_msgs::Point p;
+      p.x = from.x + t * (to.x - from.x);
+      p.y = from.y + t * (to.y - from.y);
+      p.z = from.z + t * (to.z - from.z);
+      return p;
+    }();
+    const VoxelKey key = positionToKey(sample.x, sample.y, sample.z);
+    // SUPER's current occupancy is the clearance authority for return.
+    // Frontier's historical binary hits can disagree with it near a wall;
+    // still require the complete segment to be observed free here.
+    if ((i > 0 || require_known_start) && !isKnownFree(key)) {
+      if (extra_clearance > 0.0)
+        ROS_WARN_THROTTLE(5.0,
+            "Forward SUPER-map check has an unobserved task cell at (%.2f, %.2f, %.2f), sample %d/%d",
+            sample.x, sample.y, sample.z, i, steps);
+      return false;
+    }
+    if (!super_occupied_points_->empty()) {
+      pcl::PointXYZ query(sample.x, sample.y, sample.z);
+      std::vector<int> indices(1);
+      std::vector<float> distances(1);
+      if (super_occupied_tree_.nearestKSearch(query, 1, indices, distances) > 0 &&
+          distances[0] < std::pow(std::max(vehicle_radius_, return_super_radius_) +
+                                     return_clearance_margin_ +
+                                     std::max(0.0, extra_clearance), 2)) {
+        if (extra_clearance > 0.0)
+          ROS_WARN_THROTTLE(5.0,
+              "Forward SUPER-map check found %.3f m clearance at (%.2f, %.2f, %.2f), sample %d/%d",
+              std::sqrt(distances[0]), sample.x, sample.y, sample.z,
+              i, steps);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool SuperExplorationDecider::publishFreshReturnGoal(
+    const std::string& reason, bool require_successor) {
+  if (!have_home_ || !dataIsFresh() || super_occupied_stamp_.isZero() ||
+      (ros::Time::now() - super_occupied_stamp_).toSec() > return_map_timeout_) {
+    ROS_WARN_THROTTLE(2.0,
+        "Live return unavailable: home=%d data=%d SUPER map age=%.2f s",
+        have_home_, dataIsFresh(), super_occupied_stamp_.isZero() ? -1.0 :
+            (ros::Time::now() - super_occupied_stamp_).toSec());
+    return false;
+  }
+  const auto& start = current_pose_.pose.position;
+  geometry_msgs::Point home = home_pose_.pose.position;
+  if (returning_home_) home.z += return_home_height_offset_;
+  const double home_distance = std::sqrt(squaredDistance(start, home));
+  const double home_arrival_radius = return_home_arrival_radius_ > 0.0
+      ? std::min(goal_reached_distance_, return_home_arrival_radius_)
+      : std::min(goal_reached_distance_, 0.5 * voxel_resolution_);
+  const double minimum_return_displacement = home_distance < 1.5
+      ? std::min(1.0, std::max(0.25, home_distance - home_arrival_radius))
+      : std::max(1.0, goal_reached_distance_);
+  const bool recently_rejected = !rejected_return_point_stamp_.isZero() &&
+      (ros::Time::now() - rejected_return_point_stamp_).toSec() < 10.0;
+  const auto rejected_near = [&](const geometry_msgs::Point& point) {
+    return recently_rejected &&
+        squaredDistance(point, rejected_return_point_) < 1.0;
+  };
+  geometry_msgs::Point selected;
+  bool found = false;
+  if (prefer_outbound_breadcrumbs_ && outbound_breadcrumbs_.size() >= 2) {
+    // Reverse the observed outbound centreline first. Every proposed shortcut
+    // is still checked against both live maps; an old breadcrumb is not proof
+    // that the same space remains clear now.
+    std::vector<double> lengths(outbound_breadcrumbs_.size(), 0.0);
+    for (std::size_t i = 1; i < lengths.size(); ++i) {
+      lengths[i] = lengths[i - 1] + std::sqrt(squaredDistance(
+          outbound_breadcrumbs_[i - 1].pose.position,
+          outbound_breadcrumbs_[i].pose.position));
+    }
+    double nearest_squared = std::numeric_limits<double>::infinity();
+    double nearest_s = 0.0;
+    for (std::size_t i = 1; i < lengths.size(); ++i) {
+      const auto& a = outbound_breadcrumbs_[i - 1].pose.position;
+      const auto& b = outbound_breadcrumbs_[i].pose.position;
+      const double dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      const double squared = dx * dx + dy * dy + dz * dz;
+      if (squared < 1e-8) continue;
+      const double t = std::max(0.0, std::min(1.0,
+          ((start.x - a.x) * dx + (start.y - a.y) * dy +
+           (start.z - a.z) * dz) / squared));
+      geometry_msgs::Point projected;
+      projected.x = a.x + t * dx;
+      projected.y = a.y + t * dy;
+      projected.z = a.z + t * dz;
+      const double distance = squaredDistance(start, projected);
+      if (distance < nearest_squared) {
+        nearest_squared = distance;
+        nearest_s = lengths[i - 1] + t * (lengths[i] - lengths[i - 1]);
+      }
+    }
+    if (nearest_squared <= 1.0 && nearest_s >= minimum_return_displacement) {
+      for (double backward = minimum_return_displacement;
+           backward <= std::min(return_segment_length_, nearest_s) + 1e-6;
+           backward += 0.25) {
+        const double target_s = std::max(0.0, nearest_s - backward);
+        const auto upper = std::upper_bound(lengths.begin(), lengths.end(),
+                                            target_s);
+        const std::size_t index = std::max<std::size_t>(
+            1, static_cast<std::size_t>(upper - lengths.begin()));
+        const double span = lengths[index] - lengths[index - 1];
+        if (span < 1e-8) continue;
+        const double t = (target_s - lengths[index - 1]) / span;
+        const auto& a = outbound_breadcrumbs_[index - 1].pose.position;
+        const auto& b = outbound_breadcrumbs_[index].pose.position;
+        geometry_msgs::Point point;
+        point.x = a.x + t * (b.x - a.x);
+        point.y = a.y + t * (b.y - a.y);
+        point.z = a.z + t * (b.z - a.z);
+        if (point.z <= home_pose_.pose.position.z +
+                           return_max_height_above_home_ + 1e-6 &&
+            !rejected_near(point) && returnSegmentClear(start, point)) {
+          selected = point;
+          found = true;
+        }
+      }
+    }
+  }
+  if (found && (!require_successor ||
+                std::sqrt(squaredDistance(selected, home)) <
+                    std::sqrt(squaredDistance(current_goal_.pose.position,
+                                              home)) -
+                        0.5 * voxel_resolution_)) {
+    geometry_msgs::PoseStamped goal = current_pose_;
+    goal.pose.position = selected;
+    goal.pose.orientation = yawQuaternion(std::atan2(
+        selected.y - start.y, selected.x - start.x));
+    return_waypoints_.assign(1, goal);
+    return_waypoint_index_ = 0;
+    publishGoal(goal, reason + "_breadcrumb", have_active_goal_);
+    return true;
+  }
+  found = false;
+  if (home_distance <= return_segment_length_ &&
+      !rejected_near(home) && returnSegmentClear(start, home)) {
+    selected = home;
+    found = true;
+  } else {
+    struct SearchNode { double cost; VoxelKey key; };
+    const auto later = [](const SearchNode& a, const SearchNode& b) {
+      return a.cost > b.cost;
+    };
+    std::priority_queue<SearchNode, std::vector<SearchNode>, decltype(later)>
+        pending(later);
+    std::unordered_map<VoxelKey, double, VoxelKeyHash> costs;
+    std::unordered_map<VoxelKey, VoxelKey, VoxelKeyHash> parents;
+    std::unordered_map<VoxelKey, bool, VoxelKeyHash> traversable;
+    std::unordered_map<VoxelKey, double, VoxelKeyHash> clearances;
+    // The surveyed safe lane can be narrower than one 0.25 m decision voxel.
+    // Search on a half-voxel lattice and use the actual continuous position
+    // for the root; rounding the root toward a roof can erase every route.
+    if (!returnSegmentClear(start, start)) {
+      ROS_WARN_THROTTLE(2.0,
+          "Live return root is not verified clear at (%.2f, %.2f, %.2f): task_free=%d",
+          start.x, start.y, start.z,
+          isKnownFree(positionToKey(start.x, start.y, start.z)));
+      return false;
+    }
+    const double return_resolution = 0.5 * voxel_resolution_;
+    const VoxelKey origin{
+        static_cast<int>(std::floor(start.x / return_resolution)),
+        static_cast<int>(std::floor(start.y / return_resolution)),
+        static_cast<int>(std::floor(start.z / return_resolution))};
+    const auto return_point = [&](const VoxelKey& key) {
+      geometry_msgs::Point point;
+      point.x = (static_cast<double>(key.x) + 0.5) * return_resolution;
+      point.y = (static_cast<double>(key.y) + 0.5) * return_resolution;
+      point.z = (static_cast<double>(key.z) + 0.5) * return_resolution;
+      return point;
+    };
+    costs[origin] = 0.0;
+    pending.push({0.0, origin});
+    VoxelKey best = origin;
+    double best_score = -std::numeric_limits<double>::infinity();
+    const double search_radius = std::max(4.0, return_segment_length_ + 1.0);
+    std::size_t expanded = 0;
+    std::size_t known_free_nodes = 0;
+    std::size_t super_clear_nodes = 0;
+    std::size_t safe_edges = 0;
+    while (!pending.empty() && expanded < 6000) {
+      const SearchNode node = pending.top();
+      pending.pop();
+      if (node.cost > costs[node.key] + 1e-8) continue;
+      ++expanded;
+      const auto point = node.key == origin ? start : return_point(node.key);
+      const double displacement = std::sqrt(squaredDistance(start, point));
+      if (displacement >= minimum_return_displacement &&
+          displacement <= return_segment_length_ &&
+          point.z <= home_pose_.pose.position.z +
+                         return_max_height_above_home_ + 1e-6) {
+        const double progress = home_distance -
+            std::sqrt(squaredDistance(point, home));
+        const double separation = std::min(2.0, outboundSeparation(point));
+        const auto clearance = clearances.find(node.key);
+        const double clearance_bonus = clearance == clearances.end() ? 0.0 :
+            2.0 * std::min(0.5, std::max(0.0, clearance->second -
+                                            std::max(vehicle_radius_, return_super_radius_)));
+        const double score = 2.0 * progress +
+                             0.5 * clearance_bonus -
+                             1.5 * separation -
+                             0.15 * node.cost;
+        // Prefer the surveyed outbound lane. A lateral detour remains
+        // available when the live map blocks that lane.
+        if (progress >= 0.15 && !rejected_near(point) &&
+            score > best_score) {
+          best_score = score;
+          best = node.key;
+        }
+      }
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dz = -1; dz <= 1; ++dz) {
+            if (std::abs(dx) + std::abs(dy) + std::abs(dz) != 1) continue;
+            const VoxelKey next{node.key.x + dx, node.key.y + dy,
+                                node.key.z + dz};
+            const auto next_point = return_point(next);
+            if (std::sqrt(squaredDistance(start, next_point)) > search_radius ||
+                std::abs(next_point.z - start.z) > 0.75 ||
+                (next_point.z > home_pose_.pose.position.z +
+                                    return_max_height_above_home_ + 1e-6 &&
+                 next_point.z >= point.z - 1e-6))
+              continue;
+            auto clear = traversable.find(next);
+            if (clear == traversable.end()) {
+              bool valid = isKnownFree(positionToKey(
+                  next_point.x, next_point.y, next_point.z));
+              if (valid) ++known_free_nodes;
+              if (valid && !super_occupied_points_->empty()) {
+                pcl::PointXYZ query(next_point.x, next_point.y, next_point.z);
+                std::vector<int> indices(1);
+                std::vector<float> distances(1);
+                if (super_occupied_tree_.nearestKSearch(
+                        query, 1, indices, distances) > 0) {
+                  clearances[next] = std::sqrt(distances[0]);
+                  valid = clearances[next] >=
+                      std::max(vehicle_radius_, return_super_radius_) +
+                          return_clearance_margin_;
+                } else {
+                  valid = false;
+                }
+              }
+              if (valid) ++super_clear_nodes;
+              clear = traversable.emplace(next, valid).first;
+            }
+            if (!clear->second || !returnSegmentClear(point, next_point)) continue;
+            ++safe_edges;
+            const double step = return_resolution *
+                std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz));
+            const double separation = std::min(2.0,
+                outboundSeparation(next_point));
+            const double candidate = node.cost +
+                step * (1.0 + 0.6 * separation);
+            const auto old = costs.find(next);
+            if (old == costs.end() || candidate + 1e-8 < old->second) {
+              costs[next] = candidate;
+              parents[next] = node.key;
+              pending.push({candidate, next});
+            }
+          }
+        }
+      }
+    }
+    if (best == origin) {
+      ROS_WARN_THROTTLE(2.0,
+          "Live return search found no progressive point: expanded=%zu known=%zu SUPER-clear=%zu edges=%zu start=(%.2f,%.2f,%.2f)",
+          expanded, known_free_nodes, super_clear_nodes, safe_edges,
+          start.x, start.y, start.z);
+      return false;
+    }
+    std::vector<VoxelKey> route;
+    for (VoxelKey key = best; !(key == origin); key = parents.at(key)) {
+      route.push_back(key);
+    }
+    std::reverse(route.begin(), route.end());
+    // A shortcut is allowed only when the complete straight segment is clear
+    // in both maps; otherwise publish the farthest visible point on the route.
+    std::size_t eligible_points = 0;
+    for (const auto& key : route) {
+      const auto point = return_point(key);
+      const double distance = std::sqrt(squaredDistance(start, point));
+      if (distance > return_segment_length_) break;
+      if (distance >= minimum_return_displacement &&
+          !rejected_near(point)) {
+        ++eligible_points;
+      } else {
+        continue;
+      }
+      if (returnSegmentClear(start, point)) {
+        selected = point;
+        found = true;
+      }
+    }
+    if (!found) {
+      ROS_WARN_THROTTLE(2.0,
+          "Live return graph route has no directly clear goal: expanded=%zu route=%zu eligible=%zu best=(%.2f,%.2f,%.2f)",
+          expanded, route.size(), eligible_points,
+          return_point(best).x, return_point(best).y, return_point(best).z);
+    }
+  }
+  if (!found) return false;
+  if (require_successor &&
+      std::sqrt(squaredDistance(selected, home)) >=
+          std::sqrt(squaredDistance(current_goal_.pose.position, home)) -
+              0.5 * voxel_resolution_) {
+    return false;
+  }
+  geometry_msgs::PoseStamped goal = current_pose_;
+  goal.pose.position = selected;
+  goal.pose.orientation = yawQuaternion(std::atan2(
+      selected.y - start.y, selected.x - start.x));
+  return_waypoints_.assign(1, goal);
+  return_waypoint_index_ = 0;
+  publishGoal(goal, reason, have_active_goal_);
+  return true;
+}
+
+void SuperExplorationDecider::beginReturnHome(
+    const std::string& reason, bool prefer_outbound_breadcrumbs) {
   if (!have_home_ || returning_home_ || mission_finished_) {
     return;
   }
+  prefer_outbound_breadcrumbs_ = prefer_outbound_breadcrumbs;
+  if (prefer_outbound_breadcrumbs_ && !outbound_breadcrumbs_.empty() &&
+      squaredDistance(outbound_breadcrumbs_.back().pose.position,
+                      current_pose_.pose.position) > 0.25) {
+    outbound_breadcrumbs_.push_back(current_pose_);
+  }
   returning_home_ = true;
   dead_end_backtracking_ = false;
-  cancelActiveGoal("return_home");
+  home_arrival_streak_ = 0;
   return_waypoints_.clear();
   return_waypoint_index_ = 0;
-  for (auto it = outbound_breadcrumbs_.rbegin();
-       it != outbound_breadcrumbs_.rend(); ++it) {
-    if (std::sqrt(squaredDistance(it->pose.position,
-                                  current_pose_.pose.position)) >
-        goal_reached_distance_ &&
-        squaredDistance(it->pose.position, home_pose_.pose.position) >
-            goal_reached_distance_ * goal_reached_distance_) {
-      return_waypoints_.push_back(*it);
-    }
+  if (!publishFreshReturnGoal(reason)) {
+    cancelActiveGoal("waiting_for_live_return_route");
+    publishStatus("RETURN_ROUTE_WAIT", "waiting for a live-map-clear return segment");
   }
-  geometry_msgs::PoseStamped home_target = home_pose_;
-  home_target.pose.position.z += return_home_height_offset_;
-  return_waypoints_.push_back(home_target);
-  publishGoal(return_waypoints_.front(), reason);
   std_msgs::Bool message;
   message.data = true;
   returning_publisher_.publish(message);
@@ -2165,41 +2753,175 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
   if (!dataIsFresh() || !have_home_) {
+    // A dropped synchronized cloud should not cancel an already certified
+    // SUPER trajectory while odometry and commands are still arriving. Wait
+    // briefly for the map stream to recover, but issue no new goal on old data.
+    const bool super_map_fresh = super_occupied_stamp_.isZero() ||
+        (ros::Time::now() - super_occupied_stamp_).toSec() <= 3.0;
+    if (have_home_ && have_active_goal_ && have_data_ && super_map_fresh &&
+        !last_sync_time_.isZero() &&
+        (ros::Time::now() - last_sync_time_).toSec() <=
+            data_timeout_ + active_goal_data_grace_) {
+      publishStatus("WAIT_SENSOR_RECOVERY",
+                    "keeping the active certified trajectory during a short cloud gap");
+      return;
+    }
     cancelActiveGoal("wait_data");
     publishStatus("WAIT_DATA", "Fast-LIO2 synchronized data is stale or absent");
     return;
   }
 
-  if (have_battery_ && battery_percentage_ >= 0.0 &&
-      battery_percentage_ <= battery_return_threshold_) {
+  if ((have_battery_ && battery_percentage_ >= 0.0 &&
+       battery_percentage_ <= battery_return_threshold_) ||
+      low_voltage_return_requested_) {
     return_requested_ = true;
   }
   if (return_requested_) {
-    beginReturnHome("external request or low battery");
+    beginReturnHome(low_voltage_return_requested_
+                        ? "battery voltage below return threshold"
+                        : "external request or low battery",
+                    true);
+  }
+
+  // The occupancy map can reveal a roof or wall after a command has been
+  // committed. Start a verified return while the current position still has
+  // enough space for SUPER's 1 m corridor, before the next frontier carries
+  // the aircraft into a narrower pocket with no valid return root.
+  if (min_forward_super_clearance_ > return_super_radius_ &&
+      exploration_started_ && !returning_home_ &&
+      !dead_end_backtracking_ && !mission_finished_ &&
+      !super_occupied_stamp_.isZero() &&
+      (ros::Time::now() - super_occupied_stamp_).toSec() <=
+          return_map_timeout_ && !super_occupied_points_->empty()) {
+    const auto& position = current_pose_.pose.position;
+    const double dx = position.x - home_pose_.pose.position.x;
+    const double dy = position.y - home_pose_.pose.position.y;
+    const double progress = std::cos(mission_heading_yaw_) * dx +
+                            std::sin(mission_heading_yaw_) * dy;
+    if (progress >= min_clearance_return_progress_) {
+      const pcl::PointXYZ query(position.x, position.y, position.z);
+      std::vector<int> indices(1);
+      std::vector<float> squared_distances(1);
+      if (super_occupied_tree_.nearestKSearch(
+              query, 1, indices, squared_distances) > 0 &&
+          squared_distances[0] < min_forward_super_clearance_ *
+                                     min_forward_super_clearance_) {
+        ROS_WARN("Forward clearance %.3f m is approaching SUPER's %.2f m safety radius; returning before the route closes",
+                 std::sqrt(squared_distances[0]), return_super_radius_);
+        beginReturnHome("forward safety clearance narrowing");
+      }
+    }
+  }
+
+  // An apparent frontier is not a flyable route when SUPER repeatedly
+  // rejects its safety corridor. Map-closure mode previously waited forever
+  // because visible candidate voxels kept resetting the frontier timer even
+  // though the vehicle had made no progress. Return along the live map after
+  // a bounded stationary interval, without claiming that the model closed.
+  if (!returning_home_ && !dead_end_backtracking_ &&
+      !mission_finished_ && exploration_started_ && !have_active_goal_ &&
+      // Once closure has started confirming, allow the remaining decision
+      // cycles to finish before the generic stalled-route return can win.
+      !(use_map_closure_completion_ && map_closure_complete_streak_ > 0) &&
+      !last_motion_progress_time_.isZero() &&
+      (ros::Time::now() - last_motion_progress_time_).toSec() >=
+          no_frontier_timeout_) {
+    publishStatus("FORWARD_ROUTE_STALLED",
+                  "no vehicle-clear forward progress; returning on the live map");
+    beginReturnHome("forward safety corridor remained unavailable");
   }
 
   if (returning_home_) {
-    if (active_goal_id_ == 0) {
-      publishGoal(current_goal_, "resume_return_home_after_data_gap");
+    // New return legs are checked against the current SUPER occupancy map
+    // before publication. During execution SUPER owns the certified curved
+    // trajectory and rechecks it on each replan. A straight line from the
+    // tracking pose to the goal is not that trajectory; cancelling on that
+    // line repeatedly stranded the vehicle near a 0.97 m map boundary.
+    geometry_msgs::Point home = home_pose_.pose.position;
+    home.z += return_home_height_offset_;
+    if (return_home_arrival_radius_ > 0.0) {
+      const double radius = std::min(goal_reached_distance_,
+                                     return_home_arrival_radius_);
+      if (squaredDistance(current_pose_.pose.position, home) <=
+          radius * radius) {
+        ++home_arrival_streak_;
+      } else {
+        home_arrival_streak_ = 0;
+      }
+      if (home_arrival_streak_ >= 2) {
+        returning_home_ = false;
+        mission_finished_ = true;
+        cancelActiveGoal("home_reached");
+        std_msgs::Bool message;
+        message.data = true;
+        finished_publisher_.publish(message);
+        message.data = false;
+        returning_publisher_.publish(message);
+        publishStatus("COMPLETE", "home launch area reached");
+        return;
+      }
     }
-    const bool final_return_waypoint =
-        return_waypoint_index_ + 1 == return_waypoints_.size();
-    const double return_arrival_distance = final_return_waypoint
-        ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
-        : goal_reached_distance_;
+    if (active_goal_id_ == 0) {
+      if (ros::Time::now() >= rejected_goal_retry_after_)
+        publishFreshReturnGoal("return_replan");
+      if (active_goal_id_ == 0) {
+        publishStatus("RETURN_ROUTE_WAIT", "no verified return segment");
+        return;
+      }
+    }
+    const bool goal_is_home =
+        squaredDistance(current_goal_.pose.position, home) < 1e-6;
+    const double return_arrival_distance = goal_is_home
+        ? (return_home_arrival_radius_ > 0.0
+               ? std::min(goal_reached_distance_, return_home_arrival_radius_)
+               : std::min(goal_reached_distance_, 0.5 * voxel_resolution_))
+        : std::min(goal_reached_distance_, 0.5);
+    // Reaching a candidate coordinate is not evidence that SUPER ever
+    // committed a trajectory to that goal. During a rest handover the old
+    // terminal command may still be held, and advancing again here can
+    // preempt planning before it succeeds.
     const bool return_waypoint_reached =
+        accepted_goal_id_ == active_goal_id_ &&
         squaredDistance(current_pose_.pose.position,
                         current_goal_.pose.position) <=
         return_arrival_distance * return_arrival_distance;
-    if (return_waypoint_reached &&
-        return_waypoint_index_ + 1 < return_waypoints_.size()) {
-      ++return_waypoint_index_;
-      publishGoal(return_waypoints_[return_waypoint_index_],
-                  "return_breadcrumb", true);
-      publishStatus("RETURNING", "following observed outbound route");
+    if (!return_waypoint_reached && !goal_sent_time_.isZero() &&
+        (ros::Time::now() - goal_sent_time_).toSec() > goal_timeout_ &&
+        ros::Time::now() >= rejected_goal_retry_after_) {
+      rejected_return_point_ = current_goal_.pose.position;
+      rejected_return_point_stamp_ = ros::Time::now();
+      if (!publishFreshReturnGoal("return_goal_timeout")) {
+        rejected_goal_retry_after_ = ros::Time::now() + ros::Duration(2.0);
+        publishStatus("RETURN_ROUTE_WAIT",
+                      "stalled return goal; waiting for a new clear segment");
+      }
       return;
     }
-    if (return_waypoint_reached && final_return_waypoint) {
+    // Retarget an accepted intermediate leg while SUPER still has a moving
+    // trajectory. The new segment must be verified against both live maps
+    // and make progress beyond the old waypoint. Keep the final home leg so
+    // arrival is confirmed at the actual launch position.
+    if (!return_waypoint_reached && !goal_is_home &&
+        accepted_goal_id_ == active_goal_id_ &&
+        std::sqrt(squaredDistance(current_pose_.pose.position,
+                                  current_goal_.pose.position)) <=
+            std::min(return_goal_handover_distance_,
+                     return_segment_length_ - 0.5) &&
+        std::sqrt(squaredDistance(current_pose_.pose.position,
+                                  current_goal_.pose.position)) <=
+            active_goal_initial_distance_ - 0.75 &&
+        publishFreshReturnGoal("return_handover", true)) {
+      publishStatus("RETURN_HANDOVER", "verified successor sent before intermediate stop");
+      return;
+    }
+    if (return_waypoint_reached && !goal_is_home) {
+      if (!publishFreshReturnGoal("return_live_map")) {
+        cancelActiveGoal("return_route_unavailable");
+        publishStatus("RETURN_ROUTE_WAIT", "waiting for a live-map-clear return segment");
+      }
+      return;
+    }
+    if (return_waypoint_reached && goal_is_home) {
       returning_home_ = false;
       mission_finished_ = true;
       cancelActiveGoal("home_reached");
@@ -2210,29 +2932,47 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       returning_publisher_.publish(message);
       publishStatus("COMPLETE", "home reached");
     } else {
-      publishStatus("RETURNING", "following home goal through SUPER");
+      publishStatus("RETURNING", "following verified return segment");
     }
     return;
   }
   if (dead_end_backtracking_) {
     if (active_goal_id_ == 0) {
-      publishGoal(return_waypoints_[return_waypoint_index_],
-                  "resume_dead_end_backtrack_after_data_gap");
+      if (ros::Time::now() >= rejected_goal_retry_after_)
+        publishFreshReturnGoal("dead_end_replan");
+      if (active_goal_id_ == 0) {
+        publishStatus("RETURN_ROUTE_WAIT", "no verified dead-end return segment");
+        return;
+      }
     }
-    const bool final_backtrack_waypoint =
-        return_waypoint_index_ + 1 == return_waypoints_.size();
-    const double backtrack_arrival_distance = final_backtrack_waypoint
+    const bool goal_is_home = squaredDistance(
+        current_goal_.pose.position, home_pose_.pose.position) < 1e-6;
+    const double backtrack_arrival_distance = goal_is_home
         ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
-        : goal_reached_distance_;
+        : std::min(goal_reached_distance_, 0.5);
+    if (!goal_sent_time_.isZero() &&
+        squaredDistance(current_pose_.pose.position,
+                        current_goal_.pose.position) >
+            backtrack_arrival_distance * backtrack_arrival_distance &&
+        (ros::Time::now() - goal_sent_time_).toSec() > goal_timeout_ &&
+        ros::Time::now() >= rejected_goal_retry_after_) {
+      rejected_return_point_ = current_goal_.pose.position;
+      rejected_return_point_stamp_ = ros::Time::now();
+      if (!publishFreshReturnGoal("dead_end_goal_timeout")) {
+        rejected_goal_retry_after_ = ros::Time::now() + ros::Duration(2.0);
+        publishStatus("RETURN_ROUTE_WAIT",
+                      "stalled backtrack goal; waiting for a new clear segment");
+      }
+      return;
+    }
     if (squaredDistance(current_pose_.pose.position,
                         current_goal_.pose.position) <=
         backtrack_arrival_distance * backtrack_arrival_distance) {
-      if (return_waypoint_index_ + 1 < return_waypoints_.size()) {
-        ++return_waypoint_index_;
-        publishGoal(return_waypoints_[return_waypoint_index_],
-                    "dead_end_breadcrumb", true);
-        publishStatus("DEAD_END_BACKTRACK",
-                      "following observed outbound route to mission origin");
+      if (!goal_is_home) {
+        if (!publishFreshReturnGoal("dead_end_live_map")) {
+          cancelActiveGoal("dead_end_route_unavailable");
+          publishStatus("RETURN_ROUTE_WAIT", "waiting for a live-map-clear return segment");
+        }
         return;
       }
       cancelActiveGoal("dead_end_origin_reached");
@@ -2248,7 +2988,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
                     "mission origin reached; exploring the opposite side");
     } else {
       publishStatus("DEAD_END_BACKTRACK",
-                    "following observed outbound route to mission origin");
+                    "following verified live-map route to mission origin");
     }
     return;
   }
@@ -2280,8 +3020,10 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       const double dy = point.y - home_pose_.pose.position.y;
       const double lateral = -s * dx + c * dy;
       if (std::abs(lateral) > max_task_lateral_offset_ ||
-          std::abs(point.z - home_pose_.pose.position.z -
-                   cruise_height_above_home_) > voxel_resolution_) continue;
+          !inObservationHeightBand(
+              point.z, home_pose_.pose.position.z,
+              min_observation_height_above_home_,
+              max_observation_height_above_home_, voxel_resolution_)) continue;
       ++free_corridor;
       const double progress = c * dx + s * dy;
       free_ahead = std::max(free_ahead, progress);
@@ -2300,6 +3042,21 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
         voxels_.size(), free_corridor, reachable.size(), free_ahead,
         reachable_ahead, isKnownFree(current_key),
         isClearForVehicle(current_key), candidates.size());
+    if (reachable.size()<20 && free_ahead-reachable_ahead>2.0) {
+      int unknown=0,blocked=0,clearance=0,band=0;
+      for(int dx=-1;dx<=1;++dx) for(int dy=-1;dy<=1;++dy) for(int dz=-1;dz<=1;++dz) {
+        if(!dx&&!dy&&!dz) continue;
+        const VoxelKey n{current_key.x+dx,current_key.y+dy,current_key.z+dz};
+        const auto p=keyToPoint(n);
+        if(isOccupied(n)) ++blocked;
+        else if(!isKnownFree(n)) ++unknown;
+        else if(!isClearForVehicle(n)) ++clearance;
+        else if(p.z-home_pose_.pose.position.z<min_observation_height_above_home_-voxel_resolution_ ||
+                p.z-home_pose_.pose.position.z>max_observation_height_above_home_+voxel_resolution_) ++band;
+      }
+      ROS_WARN("REACHABILITY_DISCONNECTED_CHECK key=(%d,%d,%d) reach=%zu unknown=%d occupied=%d clearance=%d height_band=%d; no obstacles erased",
+          current_key.x,current_key.y,current_key.z,reachable.size(),unknown,blocked,clearance,band);
+    }
   }
   const MapClosureStatus closure =
       evaluateMapClosure(candidates, reachable, coverage.end_wall_found);
@@ -2359,7 +3116,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const bool active_goal_is_forward = isForwardCandidate(
         FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
     const bool forward_goal_handover =
-        !front_obstacle_confirmed && active_goal_is_forward &&
+        !front_obstacle_confirmed && active_goal_is_forward_lookahead_ &&
+        accepted_goal_id_ == active_goal_id_ &&
         !active_goal_is_end_approach_ &&
         distance <= forward_goal_handover_distance_ &&
         distance <= active_goal_initial_distance_ - 0.5;
@@ -2371,38 +3129,53 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
         isForwardCandidate(
             FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
     if (forward_goal_handover && tryForwardHandover(reachable)) {
-      publishStatus("GOAL_HANDOVER", "reachable successor accepted before old goal cancellation");
+      publishStatus("GOAL_HANDOVER", "verified successor sent while previous goal remains active");
       return;
     }
-    // A one-metre handover radius is not an arrival tolerance. If the next
-    // target is still unknown, keep following the current forward target
-    // until within half a decision voxel, allowing fresh lidar viewpoints.
+    // A one-metre handover radius is not an arrival tolerance. For short
+    // forward/lateral observation steps use one decision voxel as the arrival
+    // radius. Half a voxel was too narrow for the 2 Hz task-level decision
+    // loop: the vehicle could pass briefly inside that radius between ticks,
+    // then settle just outside it and wait until goal timeout even though
+    // SUPER had already completed its smooth trajectory.
     const bool forward_target =
         !front_obstacle_confirmed && active_goal_is_forward &&
         !active_goal_is_end_approach_;
     // A lateral detour can be only one 0.5 m decision voxel away.  Applying
     // the normal 1 m frontier tolerance caused it to be cancelled at the
     // next 2 Hz decision tick before the aircraft had moved, followed by an
-    // endless cancel/replan loop at obstacles and T junctions.  Require both
-    // short observation steps and lateral transitions to reach half a voxel.
-    const bool precise_short_goal =
-        forward_target || active_goal_is_forward_lookahead_ ||
-        active_goal_is_lateral_detour_;
-    const double arrival_distance = precise_short_goal
+    // endless cancel/replan loop at obstacles and T junctions. Keep lateral
+    // detours and front-wall approaches at half a voxel, but allow unobstructed
+    // straight look-ahead goals one full voxel so the 2 Hz task loop cannot
+    // miss a brief valid arrival between decision ticks.
+    const bool tight_short_goal =
+        active_goal_is_lateral_detour_ ||
+        (active_goal_is_forward_lookahead_ && front_obstacle_confirmed);
+    const bool relaxed_forward_goal =
+        !tight_short_goal &&
+        (forward_target || active_goal_is_forward_lookahead_);
+    const double arrival_distance = tight_short_goal
         ? std::min(goal_reached_distance_, 0.5 * voxel_resolution_)
-        : goal_reached_distance_;
+        : (relaxed_forward_goal
+               ? std::min(goal_reached_distance_, voxel_resolution_)
+               : goal_reached_distance_);
     if (distance <= arrival_distance) {
       covered_goals_.push_back(current_goal_.pose.position);
       ++reached_goal_count_;
-      cancelActiveGoal("goal_reached");
+      // Nominal arrival retains the certified stop reference until next SET.
+      have_active_goal_ = false;
+      active_goal_id_ = 0;
+      accepted_goal_id_ = 0;
       publishStatus("GOAL_REACHED", "selecting next frontier");
     } else if (preempt_blocked_forward_goal) {
       covered_goals_.push_back(current_goal_.pose.position);
+      rememberFailedGoal(current_goal_.pose.position);
       cancelActiveGoal("front_wall_preempt");
       publishStatus("GOAL_PREEMPTED",
                     "confirmed front wall blocks the forward goal");
     } else if (goal_age > goal_timeout_) {
       covered_goals_.push_back(current_goal_.pose.position);
+      rememberFailedGoal(current_goal_.pose.position);
       cancelActiveGoal("goal_timeout");
       publishStatus("GOAL_TIMEOUT", "discarding unreachable candidate");
     } else {
@@ -2438,6 +3211,12 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
+  if (!have_active_goal_ && publishForwardLookaheadGoal(reachable)) {
+    publishStatus("EXPLORING",
+                  "continuous forward look-ahead goal sent to SUPER");
+    return;
+  }
+
   if (!have_active_goal_ && use_map_closure_completion_ &&
       closure.front_boundary_seen && !closure.reachable_forward_passage &&
       closure.actionable_frontiers == 0 &&
@@ -2445,17 +3224,20 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     if (reverseMissionHeadingAtDeadEnd(closure)) {
       publishStatus(
           "DEAD_END_BACKTRACK",
-          "heading reversed; following recorded safe route to mission origin");
+          "heading reversed; planning a fresh route on the current map");
+      return;
+    }
+    if (max_dead_end_heading_reversals_ <= 0) {
+      // A live obstacle is only one part of map closure. The boundary can be
+      // temporary while free rays or lateral frontier cells are still being
+      // incorporated. The confirmed closure path above publishes
+      // model_complete and begins return after the map has converged.
+      publishStatus("WAIT_MAP_CLOSURE",
+                    "front boundary closed; awaiting confirmed map convergence");
       return;
     }
     publishStatus("WAIT_MAP_CLOSURE",
                   "front boundary closed; waiting for frontier and map convergence");
-    return;
-  }
-
-  if (!have_active_goal_ && publishForwardLookaheadGoal(reachable)) {
-    publishStatus("EXPLORING",
-                  "continuous forward look-ahead goal sent to SUPER");
     return;
   }
 
@@ -2492,12 +3274,27 @@ void SuperExplorationDecider::returnRequestCallback(
 void SuperExplorationDecider::rejectedGoalCallback(
     const std_msgs::UInt64::ConstPtr& message) {
   if (!have_active_goal_ || message->data != active_goal_id_) return;
+  if (returning_home_ || dead_end_backtracking_) {
+    rejected_return_point_ = current_goal_.pose.position;
+    rejected_return_point_stamp_ = ros::Time::now();
+  }
+  if (!returning_home_ && !dead_end_backtracking_) {
+    rememberFailedGoal(current_goal_.pose.position);
+  }
   ROS_WARN("SUPER rejected goal %llu; waiting for a fresh map before retry",
            static_cast<unsigned long long>(message->data));
   have_active_goal_ = false;
   active_goal_id_ = 0;
+  accepted_goal_id_ = 0;
   rejected_goal_retry_after_ = ros::Time::now() + ros::Duration(1.0);
   publishStatus("GOAL_REJECTED", "SUPER rejected unavailable target; not counted as explored");
+}
+
+void SuperExplorationDecider::acceptedGoalCallback(
+    const std_msgs::UInt64::ConstPtr& message) {
+  if (have_active_goal_ && message->data == active_goal_id_) {
+    accepted_goal_id_ = message->data;
+  }
 }
 
 void SuperExplorationDecider::missionEnableCallback(
@@ -2529,6 +3326,16 @@ void SuperExplorationDecider::batteryCallback(
     have_battery_ = true;
     battery_percentage_ = message->percentage;
   }
+  if (std::isfinite(message->voltage) && message->voltage > 0.0) {
+    battery_voltage_ = message->voltage;
+    if (battery_voltage_ < battery_return_voltage_) {
+      low_voltage_return_requested_ = true;
+      return_requested_ = true;
+      if (enabled_ && have_home_ && !returning_home_ && !mission_finished_) {
+        beginReturnHome("battery voltage below return threshold", true);
+      }
+    }
+  }
 }
 
 void SuperExplorationDecider::publishStatus(const std::string& state,
@@ -2540,12 +3347,22 @@ void SuperExplorationDecider::publishStatus(const std::string& state,
 
 void SuperExplorationDecider::clearMissionState() {
   voxels_.clear();
+  occupancy_evidence_.clear();
+  last_scan_hits_.clear();
+  last_scan_stamp_=ros::Time();
+  super_occupied_stamp_ = ros::Time();
+  super_occupied_points_->clear();
+  rejected_return_point_stamp_ = ros::Time();
+  have_last_centerline_position_ = false;
   covered_goals_.clear();
+  failed_goals_.clear();
   outbound_breadcrumbs_.clear();
   return_waypoints_.clear();
   return_waypoint_index_ = 0;
+  home_arrival_streak_ = 0;
   current_goal_ = geometry_msgs::PoseStamped();
   active_goal_initial_distance_ = 0.0;
+  accepted_goal_id_ = 0;
   rejected_goal_retry_after_ = ros::Time();
   have_data_ = false;
   have_home_ = false;
@@ -2561,6 +3378,9 @@ void SuperExplorationDecider::clearMissionState() {
   return_requested_ = false;
   have_battery_ = false;
   battery_percentage_ = -1.0;
+  battery_voltage_ = -1.0;
+  low_voltage_return_requested_ = false;
+  prefer_outbound_breadcrumbs_ = false;
   reached_goal_count_ = 0;
   three_wall_complete_streak_ = 0;
   map_closure_complete_streak_ = 0;
@@ -2575,6 +3395,8 @@ void SuperExplorationDecider::clearMissionState() {
   front_obstacle_streak_ = 0;
   first_data_time_ = ros::Time();
   last_frontier_time_ = ros::Time();
+  last_motion_progress_time_ = ros::Time();
+  last_motion_progress_position_ = geometry_msgs::Point();
   last_actionable_frontier_time_ = ros::Time();
   last_significant_map_growth_time_ = ros::Time();
   std_msgs::Bool false_message;

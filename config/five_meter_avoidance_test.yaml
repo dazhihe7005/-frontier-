@@ -1,0 +1,36 @@
+# Temporary pre-Task-1 flight check. This node replaces mission_scheduler and
+# super_exploration_decider only in the dedicated five-metre launch files.
+rc_topic: /mavros/rc/in
+state_topic: /mavros/state
+odometry_topic: /Odometry
+cloud_topic: /mine_uav/task1/cloud_registered
+goal_topic: /mine_uav/super/goal_command
+world_frame: camera_init
+
+# MAVROS RC channel indexes are zero based: 6 is physical CH7.
+trigger_channel: 6
+low_threshold: 1300
+high_threshold: 1700
+switch_stable_time: 0.35
+rc_timeout: 0.6
+
+# Do not give SUPER a goal until the task-gated map has received new scans.
+odometry_timeout: 0.5
+cloud_timeout: 1.0
+map_warmup_time: 1.0
+map_warmup_clouds: 5
+
+# A CH7 rising edge only requests the test. Keep task authority disabled until
+# the armed aircraft has held a genuinely stable hover for this full interval.
+start_max_speed: 0.20
+start_max_vertical_speed: 0.10
+start_stable_time: 1.0
+start_check_timeout: 15.0
+
+goal_distance: 5.0
+goal_timeout: 25.0
+goal_accept_timeout: 4.0
+position_tolerance: 0.35
+speed_tolerance: 0.20
+settle_time: 1.0
+control_rate: 20.0

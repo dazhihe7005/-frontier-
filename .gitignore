@@ -16,3 +16,11 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Local repair snapshots; current sources and Git history are authoritative.
+.repair_backup_*/
+
+# NUC-local convenience links; launch files use portable package targets.
+/scripts/gazebo_mid360_fastlio_adapter_frontier.py
+/scripts/sitl_task_operator_frontier.py
+/scripts/pointcloud1_to_pointcloud2

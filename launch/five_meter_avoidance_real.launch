@@ -1,0 +1,74 @@
+<launch>
+  <!--
+    Temporary first-Offboard flight check.
+
+    This launch intentionally does not start mission_scheduler or
+    super_exploration_decider. It leaves the permanent task-one launch and
+    decision logic untouched, and retains the production sensor, SUPER and
+    PX4 command path. The node never arms PX4.
+  -->
+  <arg name="start_livox" default="true"/>
+  <arg name="start_fastlio" default="true"/>
+  <arg name="start_mavros" default="true"/>
+  <arg name="start_super" default="true"/>
+  <arg name="rviz" default="false"/>
+  <arg name="fallback_mode" default="POSCTL"/>
+  <!-- The boot wrapper discovers this value.  Manual launches must provide it
+       explicitly so this safety-critical launch never guesses a fixed tty. -->
+  <arg name="px4_device"/>
+  <!-- Recording is opt-in for manual roslaunch use.  The systemd wrapper
+       enables it and supplies a fresh, timestamped directory on every boot. -->
+  <arg name="record_flight" default="false"/>
+  <arg name="flight_log_dir"
+       default="/home/nuc/flight_logs/five_meter/manual"/>
+
+  <group if="$(arg record_flight)">
+    <!-- Record every ROS topic, including Livox/Fast-LIO data, so a flight can
+         be reconstructed without guessing the failure source.  Five-minute
+         splits limit power-loss damage to the active segment.  A recorder
+         failure must not tear down the in-flight control chain. -->
+    <node pkg="rosbag" type="record" name="five_meter_flight_recorder"
+          output="screen" required="false"
+          args="--all --lz4 --split --duration=5m --buffsize=1024 --min-space=100G --output-name=$(arg flight_log_dir)/ros_all"/>
+  </group>
+
+  <node pkg="mine_uav_control" type="task1_real_time_guard.py"
+        name="five_meter_real_time_guard" output="screen" required="true"/>
+
+  <group if="$(arg start_livox)">
+    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360s.launch"/>
+  </group>
+  <group if="$(arg start_fastlio)">
+    <include file="$(find fast_lio)/launch/mapping_mid360.launch">
+      <arg name="rviz" value="$(arg rviz)"/>
+    </include>
+  </group>
+  <group if="$(arg start_mavros)">
+    <include file="$(find mine_uav_control)/launch/px4_serial.launch">
+      <arg name="device" value="$(arg px4_device)"/>
+    </include>
+  </group>
+
+  <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>
+
+  <node pkg="mine_uav_control" type="task1_perception_gate"
+        name="five_meter_perception_gate" output="screen" required="true"/>
+
+  <node pkg="mine_uav_control" type="five_meter_avoidance_test"
+        name="five_meter_avoidance_test" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/five_meter_avoidance_test.yaml"/>
+  </node>
+
+  <group if="$(arg start_super)">
+    <node pkg="super_planner" type="fsm_node" name="fsm_node"
+          output="screen" required="true">
+      <param name="config_path"
+             value="$(find mine_uav_control)/config/super_task1.yaml"/>
+    </node>
+  </group>
+
+  <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
+    <arg name="fallback_mode" value="$(arg fallback_mode)"/>
+  </include>
+</launch>

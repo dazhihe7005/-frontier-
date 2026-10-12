@@ -4,7 +4,8 @@
     <param name="prestream_duration" value="1.0"/>
     <param name="mode_request_interval" value="0.5"/>
     <param name="command_timeout" value="0.5"/>
+    <param name="return_recovery_timeout" value="2.0"/>
   </node>
   <test test-name="super_bridge_manual_override" pkg="mine_uav_control"
-        type="test_super_bridge_manual_override.py" time-limit="25"/>
+        type="test_super_bridge_manual_override.py" time-limit="45"/>
 </launch>

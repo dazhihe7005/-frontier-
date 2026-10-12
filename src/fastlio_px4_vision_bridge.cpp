@@ -151,6 +151,7 @@ class FastlioPx4VisionBridge {
                        : 0.0;
     alignment_ready_ = true;
     jump_detected_ = false;
+    input_velocity_ = geometry_msgs::Point();
 
     geometry_msgs::TransformStamped transform;
     transform.header.stamp = ros::Time::now();
@@ -202,16 +203,40 @@ class FastlioPx4VisionBridge {
       }
       captureAlignment(*odometry);
     }
-    if (have_previous_input_ &&
+    const double displacement_squared = have_previous_input_ ?
         squaredDistance(previous_input_position_,
-                        odometry->pose.pose.position) >
-            max_input_jump_ * max_input_jump_) {
+                        odometry->pose.pose.position) : 0.0;
+    if (have_previous_input_ &&
+        displacement_squared > max_input_jump_ * max_input_jump_) {
       jump_detected_ = true;
       publishStatus("INPUT_JUMP");
       ROS_ERROR("Fast-LIO position jumped more than %.2f m; vision output stopped",
                 max_input_jump_);
     }
+    input_velocity_ = geometry_msgs::Point();
+    if (have_previous_input_ && !jump_detected_) {
+      const double dt = (odometry->header.stamp - previous_input_stamp_).toSec();
+      if (dt >= 0.03 && dt <= 0.3) {
+        input_velocity_.x = (odometry->pose.pose.position.x -
+                             previous_input_position_.x) / dt;
+        input_velocity_.y = (odometry->pose.pose.position.y -
+                             previous_input_position_.y) / dt;
+        input_velocity_.z = (odometry->pose.pose.position.z -
+                             previous_input_position_.z) / dt;
+        const double speed = std::sqrt(
+            input_velocity_.x * input_velocity_.x +
+            input_velocity_.y * input_velocity_.y +
+            input_velocity_.z * input_velocity_.z);
+        if (speed > 2.0) {
+          const double scale = 2.0 / speed;
+          input_velocity_.x *= scale;
+          input_velocity_.y *= scale;
+          input_velocity_.z *= scale;
+        }
+      }
+    }
     previous_input_position_ = odometry->pose.pose.position;
+    previous_input_stamp_ = odometry->header.stamp;
     have_previous_input_ = true;
     latest_odometry_ = *odometry;
     last_input_time_ = ros::Time::now();
@@ -225,16 +250,24 @@ class FastlioPx4VisionBridge {
     output.header.frame_id = output_frame_;
 
     const auto& input_pose = latest_odometry_.pose.pose;
-    const double dx = input_pose.position.x -
+    const double sample_age = std::max(
+        0.0, std::min(0.4, (stamp - latest_odometry_.header.stamp).toSec()));
+    const double predicted_x = input_pose.position.x +
+                               input_velocity_.x * sample_age;
+    const double predicted_y = input_pose.position.y +
+                               input_velocity_.y * sample_age;
+    const double predicted_z = input_pose.position.z +
+                               input_velocity_.z * sample_age;
+    const double dx = predicted_x -
                       (zero_initial_xy_ ? origin_.x : 0.0);
-    const double dy = input_pose.position.y -
+    const double dy = predicted_y -
                       (zero_initial_xy_ ? origin_.y : 0.0);
     const double c = std::cos(initial_yaw_);
     const double s = std::sin(initial_yaw_);
     output.pose.pose.position.x = c * dx + s * dy;
     output.pose.pose.position.y = -s * dx + c * dy;
     output.pose.pose.position.z =
-        input_pose.position.z - (zero_initial_z_ ? origin_.z : 0.0);
+        predicted_z - (zero_initial_z_ ? origin_.z : 0.0);
     output.pose.pose.orientation =
         multiply(yawQuaternion(-initial_yaw_), input_pose.orientation);
 
@@ -283,6 +316,10 @@ class FastlioPx4VisionBridge {
       }
       return;
     }
+    // Publish a bounded prediction of the delayed Fast-LIO sample at `now`.
+    // The sample header is about 0.27 s old in this SITL chain; forwarding
+    // that position unchanged with a new stamp created tracking lag, while
+    // forwarding its old stamp exceeded PX4's EKF fusion horizon.
     pose_publisher_.publish(makeVisionPose(now));
     publishStatus("STREAMING");
   }
@@ -367,6 +404,8 @@ class FastlioPx4VisionBridge {
   bool mavros_connected_{false};
   bool mavros_armed_{false};
   bool health_published_{false};
+  ros::Time previous_input_stamp_;
+  geometry_msgs::Point input_velocity_;
   bool last_health_{false};
 };
 

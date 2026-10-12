@@ -39,23 +39,35 @@
       <!-- Collision remains a deterministic simplified hull. The detailed
            STEP-derived mesh is visual-only so ray/contact physics stay stable. -->
       <collision name='centre_body_collision'>
-        <pose>0 0 0 0 0 0</pose>
+        <!-- Keep the fuselage clear of the floor. Ground contact is handled
+             by four small simulation-only feet below, avoiding a large flat
+             ODE contact patch that injected impulsive IMU acceleration. -->
+        <pose>0 0 0.02 0 0 0</pose>
         <geometry>
           <box>
-            <size>0.325 0.307 0.10</size>
+            <size>0.325 0.307 0.06</size>
           </box>
         </geometry>
-        <surface>
-          <contact>
-            <ode>
-              <min_depth>0.001</min_depth>
-              <max_vel>0</max_vel>
-            </ode>
-          </contact>
-          <friction>
-            <ode/>
-          </friction>
-        </surface>
+      </collision>
+      <collision name='landing_foot_fr'>
+        <pose>0.12 -0.11 -0.045 0 0 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.08</length></cylinder></geometry>
+        <surface><contact><ode><min_depth>0.0002</min_depth><max_vel>0.02</max_vel><kp>80000</kp><kd>250</kd></ode></contact><friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction></surface>
+      </collision>
+      <collision name='landing_foot_fl'>
+        <pose>0.12 0.11 -0.045 0 0 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.08</length></cylinder></geometry>
+        <surface><contact><ode><min_depth>0.0002</min_depth><max_vel>0.02</max_vel><kp>80000</kp><kd>250</kd></ode></contact><friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction></surface>
+      </collision>
+      <collision name='landing_foot_br'>
+        <pose>-0.12 -0.11 -0.045 0 0 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.08</length></cylinder></geometry>
+        <surface><contact><ode><min_depth>0.0002</min_depth><max_vel>0.02</max_vel><kp>80000</kp><kd>250</kd></ode></contact><friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction></surface>
+      </collision>
+      <collision name='landing_foot_bl'>
+        <pose>-0.12 0.11 -0.045 0 0 0</pose>
+        <geometry><cylinder><radius>0.014</radius><length>0.08</length></cylinder></geometry>
+        <surface><contact><ode><min_depth>0.0002</min_depth><max_vel>0.02</max_vel><kp>80000</kp><kd>250</kd></ode></contact><friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction></surface>
       </collision>
       <collision name='front_right_arm_collision'>
         <pose>0.109751 -0.109751 0.015 0 0 -0.78539816339</pose>

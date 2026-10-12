@@ -12,7 +12,7 @@
   <arg name="takeoff_hover_yaw_tolerance_deg" default="10.0"/>
   <arg name="vision_stable_duration" default="3.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
-  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
+  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_goaf_smooth.yaml"/>
   <arg name="fastlio_config"
        default="$(find mine_uav_control)/config/fastlio_gazebo_mid360.yaml"/>
   <!-- Canonical no-GPS SITL airframe. This selects PX4 autostart 1018; the
@@ -26,9 +26,9 @@
   <!-- A surveyed, nearly level patch of the actual irregular collision mesh.
        Its relief keeps the Gazebo contact solver and IMU physically active,
        while the resulting initial roll/pitch remain below one degree. -->
-  <arg name="spawn_x" default="1.85"/>
-  <arg name="spawn_y" default="-0.65"/>
-  <arg name="spawn_z" default="0.1404"/>
+  <arg name="spawn_x" default="1.3"/>
+  <arg name="spawn_y" default="0.15"/>
+  <arg name="spawn_z" default="0.11"/>
   <arg name="spawn_yaw" default="0"/>
   <arg name="mission_heading_offset" default="0.0"/>
   <arg name="use_absolute_mission_heading" default="false"/>
@@ -51,6 +51,7 @@
   <arg name="forward_corridor_half_width" default="2.0"/>
   <arg name="forward_goal_lateral_search_width" default="2.0"/>
   <arg name="max_frontier_goal_distance" default="8.0"/>
+  <arg name="forward_lookahead_distance" default="8.0"/>
   <arg name="max_frontier_goal_vertical_step" default="0.5"/>
   <arg name="max_task_lateral_offset" default="4.0"/>
   <arg name="map_closure_min_progress" default="8.0"/>
@@ -59,13 +60,26 @@
   <arg name="map_closure_growth_voxels" default="500"/>
   <arg name="use_map_closure_completion" default="true"/>
   <arg name="require_three_wall_completion" default="false"/>
-  <arg name="no_frontier_timeout" default="8.0"/>
+  <!-- Allow map stability confirmation to finish after the last safe goal;
+       the occupancy count can reset its four-second window near the end wall. -->
+  <arg name="no_frontier_timeout" default="15.0"/>
+  <!-- The 0.25 m decision map takes several simulated seconds to evaluate;
+       retain the latest SUPER occupancy for that bounded interval. SUPER
+       still checks every executed trajectory against its live ROG map. -->
+  <arg name="return_map_timeout" default="8.0"/>
+  <arg name="return_segment_length" default="3.0"/>
+  <arg name="return_home_arrival_radius" default="0.0"/>
+  <arg name="min_forward_super_clearance" default="0.0"/>
+  <arg name="min_clearance_return_progress" default="0.0"/>
   <arg name="max_outbound_backtrack" default="2.0"/>
   <arg name="max_dead_end_heading_reversals" default="0"/>
   <arg name="dead_end_reversal_delay" default="4.0"/>
   <arg name="min_observation_height_above_home" default="0.0"/>
   <arg name="max_observation_height_above_home" default="0.3"/>
   <arg name="cruise_height_above_home" default="0.0"/>
+  <!-- Airborne home is around 1.43 m in the goaf run. Keep return goals below
+       1.63 m so SUPER and PX4 have room under the 1.8 m acceptance ceiling. -->
+  <arg name="return_max_height_above_home" default="0.2"/>
   <arg name="lidar_max_range" default="30.0"/>
   <arg name="max_global_points" default="120000"/>
   <arg name="bridge_max_horizontal_radius" default="40.0"/>
@@ -74,7 +88,7 @@
   <arg name="bridge_height_clamp_tolerance" default="0.25"/>
   <arg name="require_mission_enable_edge" default="true"/>
 
-  <include file="$(find px4)/launch/mavros_posix_sitl.launch">
+  <include file="$(find mine_uav_control)/launch/mavros_posix_sitl_task1.launch">
     <arg name="gui" value="$(arg gui)"/>
     <arg name="interactive" value="false"/>
     <arg name="vehicle" value="$(arg vehicle)"/>
@@ -88,6 +102,15 @@
     <arg name="Y" value="$(arg spawn_yaw)"/>
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
+
+  <!-- The simulated downward range is an independent observation of ground
+       clearance. Feed it to PX4's conditional range aid while retaining the
+       barometer as the primary height reference. The mine floor is uneven,
+       so range must not become the global height reference. -->
+  <node pkg="mine_uav_control" type="task1_sitl_downward_range_filter.py"
+        name="task1_sitl_downward_range_filter" output="log" required="true">
+    <param name="max_valid_range" value="5.0"/>
+  </node>
 
   <!-- Default no-GPS localization chain: simulated MID360 returns and raw
        PX4 IMU are the only estimator inputs. Gazebo world pose is not used. -->
@@ -212,6 +235,8 @@
            value="$(arg forward_goal_lateral_search_width)"/>
     <param name="max_frontier_goal_distance"
            value="$(arg max_frontier_goal_distance)"/>
+    <param name="forward_lookahead_distance"
+           value="$(arg forward_lookahead_distance)"/>
     <param name="max_frontier_goal_vertical_step"
            value="$(arg max_frontier_goal_vertical_step)"/>
     <param name="max_task_lateral_offset"
@@ -245,7 +270,17 @@
     <param name="directional_vertical_tolerance" value="1.5"/>
     <!-- Return to the airborne task-start hover. Landing remains manual. -->
     <param name="return_home_height_offset" value="0.0"/>
+    <param name="return_max_height_above_home"
+           value="$(arg return_max_height_above_home)"/>
     <param name="no_frontier_timeout" value="$(arg no_frontier_timeout)"/>
+    <param name="return_map_timeout" value="$(arg return_map_timeout)"/>
+    <param name="return_segment_length" value="$(arg return_segment_length)"/>
+    <param name="return_home_arrival_radius"
+           value="$(arg return_home_arrival_radius)"/>
+    <param name="min_forward_super_clearance"
+           value="$(arg min_forward_super_clearance)"/>
+    <param name="min_clearance_return_progress"
+           value="$(arg min_clearance_return_progress)"/>
     <param name="require_mission_enable_edge" value="$(arg require_mission_enable_edge)"/>
     <param name="mission_heading_offset" value="$(arg mission_heading_offset)"/>
     <param name="use_absolute_mission_heading"
@@ -260,15 +295,14 @@
            value="$(arg super_config_path)"/>
   </node>
 
-  <!-- The 1018 airframe has neither GPS nor live RC/manual input, so POSCTL
-       and AUTO.LOITER are rejected after OFFBOARD exits. Task one has already
-       returned home here; AUTO.LAND is the safe PX4-owned terminal action. -->
+  <!-- The 1018 SITL airframe has no live RC/manual input, so PX4 rejects
+       POSCTL even when MAVROS acknowledges the request. After the task has
+       returned to the launch area, transfer control to PX4 AUTO.LAND. -->
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
     <arg name="fallback_mode" value="AUTO.LAND"/>
-    <!-- The planner remains limited to 1.0 m/s.  SITL needs a separate
-         anomaly threshold because PX4 tracking velocity is inherited by
-         online replans and can briefly exceed the nominal planner limit. -->
-    <arg name="max_speed" value="2.2"/>
+    <!-- SUPER commands at most 1.0 m/s.  The bridge allows a small margin
+         for optimizer sampling and replans that inherit PX4 tracking speed. -->
+    <arg name="max_speed" value="1.2"/>
     <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
     <arg name="min_height" value="$(arg bridge_min_height)"/>
     <arg name="max_height" value="$(arg bridge_max_height)"/>
