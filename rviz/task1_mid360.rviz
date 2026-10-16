@@ -107,7 +107,7 @@ Visualization Manager:
   Global Options:
     Background Color: 28; 32; 38
     Default Light: true
-    Fixed Frame: camera_init
+    Fixed Frame: task1_planning
     Frame Rate: 30
   Name: root
   Tools:
@@ -138,7 +138,7 @@ Visualization Manager:
       Name: Current View
       Near Clip Distance: 0.01
       Pitch: 1.25
-      Target Frame: camera_init
+      Target Frame: task1_planning
       Yaw: 3.14
     Saved: ~
 Window Geometry:

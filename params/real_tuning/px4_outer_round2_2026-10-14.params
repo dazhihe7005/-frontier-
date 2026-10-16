@@ -1,0 +1,11 @@
+# NOTE: 2026-10-14 conservative horizontal outer-loop round 2
+# Applied only while disarmed and landed. Force-pull readback verified.
+# Round-1 rate P changes were reverted before applying this outer-loop step.
+# D, rate I/D, attitude gains, and vertical gains remain unchanged.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_ROLLRATE_P	0.150	9
+1	1	MC_PITCHRATE_P	0.165	9
+1	1	MC_YAWRATE_P	0.200	9
+1	1	MPC_XY_P	0.800	9
+1	1	MPC_XY_VEL_P_ACC	1.800	9
+1	1	MPC_XY_VEL_I_ACC	0.300	9

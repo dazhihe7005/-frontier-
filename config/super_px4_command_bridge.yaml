@@ -1,21 +1,66 @@
 command_topic: /planning/pos_cmd
 output_topic: /mine_uav/setpoint_cmd
-expected_frame: camera_init
+# task1_perception_gate has already rotated map data and planner commands into
+# this gravity-aligned frame.  Only the captured origin translation remains for
+# the command bridge to apply.
+alignment_topic: /mine_uav/task1/planning_to_px4_alignment
+expected_frame: task1_planning
 
 # SUPER commands must remain fresh. A timeout latches the operator gate off.
 command_timeout: 0.25
 local_pose_timeout: 0.5
 output_rate: 50.0
 
-# Hard validation guards. SUPER's nominal trajectory limit is 1.0 m/s.  The
-# bridge allows 0.2 m/s for optimizer sampling and inherited tracking speed;
-# this is a fault threshold, not the requested flight speed.
-max_speed: 1.2
+# Current real-flight speed contract. Launch files may still apply a different
+# limit for a deliberately isolated simulation.
+max_speed: 0.8
+max_measured_speed: 0.8
+# Govern the velocity PX4's position loop will request, not just SUPER's
+# feed-forward velocity. These gains must match the aircraft's MPC_XY_P and
+# MPC_Z_P values. Routine limiting continues the task; a much larger tracking
+# error remains a fault instead of being hidden by an extreme counter-command.
+max_predicted_speed: 0.7
+tracking_position_gain_xy: 0.9
+tracking_position_gain_z: 1.0
+max_governor_tracking_error: 0.65
+# OFFBOARD may only engage from the same stable-hover envelope used by the
+# five-metre operator. This is checked before the mode request, not afterward.
+max_offboard_entry_speed: 0.25
 max_acceleration: 1.25
 max_horizontal_radius: 40.0
 min_height: -0.5
 max_height: 1.8
 height_clamp_tolerance: 0.25
+
+# Independent live obstacle guard. The cloud and task odometry share the
+# gravity-aligned planning frame. Horizontal clearance and vertical relevance
+# are evaluated separately, so height cannot be added through a 3-D norm to
+# disguise an XY violation. A violation publishes an immediate measured-pose
+# stop and requests POSCTL instead of extrapolating the previous trajectory.
+obstacle_safety_enabled: true
+obstacle_cloud_topic: /mine_uav/task1/cloud_registered
+task_odometry_topic: /mine_uav/task1/odometry
+obstacle_cloud_timeout: 0.35
+live_horizontal_clearance: 0.8
+live_vertical_half_height: 0.5
+# Remove only the task-frame ground support plane from obstacle-cylinder and
+# surface-coverage checks. Real obstacle returns at/above z=0 stay protected.
+obstacle_min_z: 0.0
+
+# Do not approach a newly seen obstacle on a sparse edge/handful of returns.
+# Three consecutive 10 Hz frames must describe a surface with the configured
+# point count and horizontal/vertical extent. Two incomplete frames while
+# already in OFFBOARD trigger the same immediate stop and mode exit.
+coverage_guard_distance: 2.5
+coverage_lateral_half_width: 2.5
+coverage_vertical_half_height: 1.5
+coverage_min_points: 30
+coverage_min_horizontal_span: 0.6
+coverage_min_vertical_span: 0.6
+coverage_confirm_frames: 3
+coverage_reject_frames: 2
+obstacle_voxel_resolution: 0.10
+max_obstacle_points: 100000
 
 # Continuity guard: reject discontinuous planner output before it can reach PX4.
 max_yaw_rate: 0.75
@@ -27,6 +72,9 @@ continuity_nominal_dt: 0.01
 reacquire_blend_duration: 3.5
 max_initial_command_distance: 0.65
 max_initial_yaw_error: 0.70
+# Reject a restarted/re-aligned Fast-LIO frame while an autonomous task is
+# active. This is the full 3-D rotation threshold (radians), not yaw only.
+max_alignment_rotation_change: 0.05
 exploration_status_topic: "/mine_uav/exploration/status"
 use_acceleration: true
 

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "mine_uav_control/fastlio_mount_alignment.hpp"
+
 namespace mine_uav_control {
 
 struct FiveMeterGoal {
@@ -27,6 +29,40 @@ inline FiveMeterGoal makeForwardGoal(double start_x, double start_y,
   goal.y = start_y + distance * std::sin(yaw);
   goal.z = start_z;
   goal.yaw = normalizeAngle(yaw);
+  return goal;
+}
+
+// Build a goal in the raw Fast-LIO map whose displacement becomes horizontal
+// and forward after the map-to-PX4 alignment is applied.  The planner must
+// continue to receive camera_init coordinates; only this temporary test goal
+// is pulled back through the inverse alignment.
+inline FiveMeterGoal makeOutputHorizontalForwardGoal(
+    double start_x, double start_y, double start_z, double raw_map_yaw,
+    double distance, const Quaternion& map_to_output) {
+  const Vector3 raw_heading(std::cos(raw_map_yaw),
+                            std::sin(raw_map_yaw), 0.0);
+  const Vector3 output_heading = rotateVector(map_to_output, raw_heading);
+  const double horizontal_norm =
+      std::hypot(output_heading.x, output_heading.y);
+
+  // A valid 3-D rotation can only make this degenerate when the requested raw
+  // heading is vertical in the output frame.  Keep a deterministic fallback;
+  // the caller's normal 25-degree mount compensation is far from this case.
+  const double output_x = horizontal_norm > 1e-9
+      ? output_heading.x / horizontal_norm
+      : 1.0;
+  const double output_y = horizontal_norm > 1e-9
+      ? output_heading.y / horizontal_norm
+      : 0.0;
+  const Vector3 raw_displacement = rotateVector(
+      conjugate(map_to_output),
+      Vector3(distance * output_x, distance * output_y, 0.0));
+
+  FiveMeterGoal goal;
+  goal.x = start_x + raw_displacement.x;
+  goal.y = start_y + raw_displacement.y;
+  goal.z = start_z + raw_displacement.z;
+  goal.yaw = normalizeAngle(raw_map_yaw);
   return goal;
 }
 

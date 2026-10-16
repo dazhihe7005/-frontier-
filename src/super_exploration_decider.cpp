@@ -61,8 +61,8 @@ SuperExplorationDecider::SuperExplorationDecider(
     const ros::NodeHandle& nh, const ros::NodeHandle& private_nh)
     : nh_(nh),
       private_nh_(private_nh),
-      cloud_subscriber_(nh_, "/cloud_registered", 1),
-      odom_subscriber_(nh_, "/Odometry", 1) {
+      cloud_subscriber_(nh_, "/mine_uav/task1/cloud_registered", 1),
+      odom_subscriber_(nh_, "/mine_uav/task1/odometry", 1) {
   loadParameters();
   if (require_mission_enable_edge_) {
     enabled_ = false;
@@ -131,9 +131,11 @@ SuperExplorationDecider::SuperExplorationDecider(
 }
 
 bool SuperExplorationDecider::loadParameters() {
-  private_nh_.param("cloud_topic", cloud_topic_, std::string("/cloud_registered"));
+  private_nh_.param("cloud_topic", cloud_topic_,
+                    std::string("/mine_uav/task1/cloud_registered"));
   private_nh_.param("free_ray_topic", free_ray_topic_, std::string());
-  private_nh_.param("odom_topic", odom_topic_, std::string("/Odometry"));
+  private_nh_.param("odom_topic", odom_topic_,
+                    std::string("/mine_uav/task1/odometry"));
   private_nh_.param("goal_command_topic", goal_command_topic_,
                     std::string("/mine_uav/super/goal_command"));
   private_nh_.param("world_frame", world_frame_, std::string("world"));

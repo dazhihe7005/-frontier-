@@ -1,0 +1,9 @@
+# NOTE: 2026-10-14 conservative roll/yaw damping round 3
+# Applied only while disarmed and landed. Force-pull readback verified.
+# Rate P/D, roll/pitch rate I, pitch attitude, and vertical gains remain unchanged.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MPC_XY_P	0.750	9
+1	1	MPC_XY_VEL_P_ACC	1.900	9
+1	1	MPC_XY_VEL_I_ACC	0.270	9
+1	1	MC_YAW_P	2.500	9
+1	1	MC_YAWRATE_I	0.080	9

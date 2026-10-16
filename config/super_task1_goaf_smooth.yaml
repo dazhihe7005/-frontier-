@@ -1,6 +1,7 @@
 # Goaf SITL profile: 1 m/s speed limit and gentle acceleration for broad turns near the irregular
 # end wall. The general task-one and real-flight profile remains separate.
 fsm:
+  frame_id: "task1_planning"
   click_goal_en: false
   click_goal_topic: "/goal"
   goal_command_en: true
@@ -34,10 +35,11 @@ super_planner:
   planning_horizon: 7.0
   sensing_horizon: -1
   receding_dis: 4.0
-  # Unified centre-to-obstacle safety radius.  Keep it here, in the continuous
-  # CIRI corridor, rather than splitting it between a physical radius and a
-  # second occupancy-map inflation margin.
-  robot_r: 1.0
+  # Match the real profile's anisotropic envelope: 1.0 m horizontal clearance
+  # and 0.6 m vertical clearance.
+  robot_r: 0.6
+  horizontal_clearance_extra: 0.4
+  clearance_vertical_band: 0.6
   # Give the finer inflated grid a bounded search window in the return lane.
   astar_search_timeout: 0.8
   # Broad planner bounds shared by level and inclined simulated mines. Each
@@ -118,17 +120,20 @@ rog_map:
   # The primary A* search reads the inflated map directly. Its neighbour
   # radius is used only by a fallback search, so zero inflation admitted
   # paths whose CIRI seed lines were under 1.0 m from obstacles. Eleven 0.1 m
-  # cells include one fine cell of quantization beyond CIRI's 1.0 m radius.
+  # cells include 0.3 m of front-end search allowance beyond CIRI's 1.0 m
+  # horizontal radius. This covers obstacle-voxel and diagonal segment
+  # quantization; the continuous corridor still enforces exactly 1.0 m.
+  # Vertical inflation is limited to 0.6 m.
   # The former 0.2 m grid snapped some return targets more than 1 m away.
-  inflation_step: 11
+  inflation_step: 13
+  inflation_vertical_step: 6
   unk_inflation_en: false
   unk_inflation_step: 1
   map_size: [50, 50, 6]
   fix_map_origin: [0, 0, 0]
   frontier_extraction_en: false
-  # These are broad camera_init limits, not the per-scenario PX4 fence. They
-  # cover the surveyed tunnel incline while the sliding local map remains 6 m
-  # high around the vehicle.
+  # These are broad, level task-frame limits, not the per-scenario PX4 fence.
+  # The perception gate removes the fixed radar mounting tilt before planning.
   virtual_ceil_height: 9.0
   virtual_ground_height: -5.0
   load_pcd_en: false
@@ -149,14 +154,14 @@ rog_map:
     odom_timeout: 2.0
   visualization:
     enable: true
-    # ROG consumes task-gated odometry and clouds in camera_init coordinates.
-    # Publish occupancy and markers in that same frame for frontier return.
-    frame_id: "camera_init"
+    # ROG consumes task-gated odometry and clouds after they have been levelled.
+    # Publish occupancy and markers in that same task frame.
+    frame_id: "task1_planning"
     use_dynamic_reconfigure: false
     time_rate: 2
     frame_rate: 0
     range: [15, 15, 4]
-    frame_id: "camera_init"
+    frame_id: "task1_planning"
     pub_unknown_map_en: false
   intensity_thresh: -10
   point_filt_num: 1

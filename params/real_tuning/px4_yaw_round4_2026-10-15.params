@@ -1,0 +1,8 @@
+# NOTE: 2026-10-15 yaw proportional-dominance round 4
+# Applied only while disarmed and landed. Force-pull readback verified.
+# Round-3 horizontal gains are preserved. Yaw D/FF and all roll/pitch gains remain unchanged.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_YAW_P	2.800	9
+1	1	MC_YAWRATE_P	0.250	9
+1	1	MC_YAWRATE_I	0.100	9
+1	1	MC_YR_INT_LIM	0.030	9

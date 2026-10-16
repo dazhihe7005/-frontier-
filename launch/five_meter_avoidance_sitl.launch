@@ -4,7 +4,8 @@
   <arg name="rviz" default="false"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="6.0"/>
-  <arg name="takeoff_height" default="1.5"/>
+  <arg name="takeoff_height" default="1.0"/>
+  <arg name="goal_distance" default="5.0"/>
   <arg name="world"
        default="$(find mine_uav_control)/worlds/five_meter_avoidance.world"/>
   <arg name="vehicle_sdf"
@@ -59,6 +60,14 @@
         name="fastlio_px4_vision_bridge" output="screen" required="true">
     <rosparam command="load"
               file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
+    <!-- Temporary real-aircraft mounting compensation is disabled in SITL. -->
+    <param name="temporary_sensor_roll_in_body_deg" value="0.0"/>
+    <param name="temporary_sensor_pitch_in_body_deg" value="0.0"/>
+    <param name="temporary_sensor_yaw_in_body_deg" value="0.0"/>
+    <param name="sensor_position_in_body_x" value="0.0"/>
+    <param name="sensor_position_in_body_y" value="0.0"/>
+    <param name="sensor_position_in_body_z" value="0.0"/>
+    <param name="require_fastlio_health" value="false"/>
   </node>
 
   <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
@@ -105,6 +114,7 @@
     <rosparam command="load"
               file="$(find mine_uav_control)/config/five_meter_avoidance_test.yaml"/>
     <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
+    <param name="goal_distance" value="$(arg goal_distance)"/>
   </node>
 
   <node pkg="super_planner" type="fsm_node" name="fsm_node"
@@ -113,8 +123,14 @@
   </node>
 
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
-    <arg name="fallback_mode" value="AUTO.LAND"/>
-    <arg name="max_speed" value="1.2"/>
+    <!-- Match the real-aircraft contract: task completion hands control to
+         Position mode. Post-handover motion in no-RC SITL is not flight
+         acceptance evidence because there is no physical neutral stick. -->
+    <arg name="fallback_mode" value="POSCTL"/>
+    <arg name="max_speed" value="0.8"/>
+    <arg name="max_measured_speed" value="0.8"/>
+    <arg name="max_predicted_speed" value="0.7"/>
+    <arg name="max_offboard_entry_speed" value="0.25"/>
     <arg name="max_horizontal_radius" value="10.0"/>
     <arg name="min_height" value="-0.5"/>
     <arg name="max_height" value="2.0"/>

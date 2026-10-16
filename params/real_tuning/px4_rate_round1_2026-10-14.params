@@ -1,0 +1,7 @@
+# NOTE: 2026-10-14 conservative rate-controller round 1
+# Applied only while disarmed and landed. Force-pull readback verified.
+# I, D, attitude, position, and velocity gains remain unchanged.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_ROLLRATE_P	0.160	9
+1	1	MC_PITCHRATE_P	0.170	9
+1	1	MC_YAWRATE_P	0.220	9

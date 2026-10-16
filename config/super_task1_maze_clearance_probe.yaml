@@ -2,6 +2,7 @@
 # Identical to super_task1.yaml except robot_r=1.40 m to test whether
 # continuous-corridor physical radius controls wall standoff.
 fsm:
+  frame_id: "task1_planning"
   click_goal_en: false
   click_goal_topic: "/goal"
   goal_command_en: true
@@ -34,7 +35,7 @@ super_planner:
   receding_dis: 4.0
   # Probe: 0.40 m physical radius + 1.00 m desired surface clearance.
   robot_r: 1.40
-  # Planner camera_init bounds for the 40 m SITL profile (alignment_z=0).
+  # Planner task-frame bounds for the 40 m SITL profile (alignment_z=0).
   # Real flights require bounds converted from the measured PX4 alignment.
   flight_min_z: -2.0
   flight_max_z: 1.8
@@ -113,7 +114,7 @@ rog_map:
   map_size: [50, 50, 6]
   fix_map_origin: [0, 0, 0]
   frontier_extraction_en: false
-  # WARNING: This is a map bound in camera_init, not the PX4 flight fence.
+  # WARNING: This is a level planning-map bound, not the PX4 flight fence.
   # With the current inflation settings, input 4.0 allows getGridType(Vec3f)
   # up to roughly z=2.5; the bridge separately caps aligned PX4-local z=1.8.
   # A 3.2 trial kept this room flyable but raised optimizer warnings (run12).
@@ -141,7 +142,7 @@ rog_map:
     time_rate: 2
     frame_rate: 0
     range: [15, 15, 4]
-    frame_id: "camera_init"
+    frame_id: "task1_planning"
     pub_unknown_map_en: false
   intensity_thresh: -10
   point_filt_num: 1

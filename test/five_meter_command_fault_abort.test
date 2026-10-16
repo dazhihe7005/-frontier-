@@ -1,0 +1,19 @@
+<launch>
+  <node pkg="mine_uav_control" type="five_meter_avoidance_test"
+        name="five_meter_avoidance_test" output="screen" required="true">
+    <param name="rc_topic" value="/test/rc"/>
+    <param name="state_topic" value="/test/state"/>
+    <param name="odometry_topic" value="/test/odometry"/>
+    <param name="cloud_topic" value="/test/cloud"/>
+    <param name="goal_topic" value="/test/goal"/>
+    <param name="alignment_topic" value="/test/alignment"/>
+    <param name="world_frame" value="task1_planning"/>
+    <param name="switch_stable_time" value="0.1"/>
+    <param name="start_stable_time" value="0.5"/>
+    <param name="map_warmup_time" value="0.5"/>
+    <param name="map_warmup_clouds" value="1"/>
+    <param name="control_rate" value="20.0"/>
+  </node>
+  <test test-name="five_meter_command_fault_abort" pkg="mine_uav_control"
+        type="test_five_meter_command_fault_abort.py" time-limit="25"/>
+</launch>

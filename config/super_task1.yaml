@@ -1,12 +1,13 @@
 # Repository-owned SUPER profile for task one. Do not edit SUPER's upstream
 # click_smooth_ros1.yaml for this project; all task-specific tuning lives here.
 fsm:
+  frame_id: "task1_planning"
   click_goal_en: false
   click_goal_topic: "/goal"
   goal_command_en: true
   goal_command_topic: "/mine_uav/super/goal_command"
   click_height: -10.0
-  goal_snap_max_distance: 0.35
+  goal_snap_max_distance: 0.50
   click_yaw_en: true
   replan_rate: 6.0
   cmd_topic: "/planning/pos_cmd"
@@ -34,10 +35,29 @@ super_planner:
   planning_horizon: 7.0
   sensing_horizon: -1
   receding_dis: 4.0
-  # Unified centre-to-obstacle safety radius.  Keep it here, in the continuous
-  # CIRI corridor, rather than splitting it between a physical radius and a
-  # second occupancy-map inflation margin.
-  robot_r: 1.0
+  # Anisotropic safety contract: 0.8 m horizontal and 0.5 m vertical.
+  # CIRI starts from the 0.5 m base sphere, then attempts a horizontal-only
+  # 0.3 m inset. The front-end map is one 0.1 m grid cell stricter at 0.9 m
+  # horizontally. Every optimized result is independently checked against
+  # the exact 0.8 m hard
+  # cylinder, so a locally infeasible CIRI inset cannot weaken acceptance.
+  robot_r: 0.5
+  horizontal_clearance_extra: 0.3
+  clearance_vertical_band: 0.5
+  # Independent finite-height cylinder checked against raw occupied voxels
+  # after optimization. XY and Z are tested separately: while vertical
+  # separation is below 0.5 m, it cannot reduce the required 0.8 m XY gap.
+  horizontal_hard_clearance: 0.8
+  horizontal_hard_vertical_half_height: 0.5
+  # Task-frame ground returns are near z=-0.05 m. Keep their support plane
+  # out of the vertical obstacle cylinders while retaining obstacle top/face
+  # returns at z>=0.0 m (the latest real low obstacle reached z=0.065 m).
+  horizontal_hard_min_obstacle_z: 0.0
+  # Once a side is selected around a centerline obstacle, retain the required
+  # lateral offset until the aircraft centre is beyond its far edge plus the
+  # full hard radius. This prevents the 2026-10-15 early centerline cutback.
+  prevent_premature_center_return: true
+  centerline_obstacle_half_width: 1.2
   # Give the finer inflated grid a bounded search window in the return lane.
   astar_search_timeout: 0.8
   # Broad planner bounds shared by level and inclined simulated mines. Each
@@ -54,7 +74,9 @@ traj_opt:
     save_log_en: false
     print_optimizer_log: false
   boundary:
-    max_vel: 0.8
+    # Current flight contract: 0.6 m/s nominal planning, 0.7 m/s predicted
+    # closed-loop governance, and 0.8 m/s planner/measured hard limits.
+    max_vel: 0.6
     max_acc: 1.0
     max_jerk: 4.0
     max_omg: 2.5
@@ -111,24 +133,38 @@ astar:
   allow_diag: true
   heu_type: 2
   debug_visualization_en: false
+  # First search only inside a narrow band around the start-to-goal height
+  # profile. That makes left/right bypass a hard first choice. Only if this
+  # search has no route may A* retry upward. Only when that second search also
+  # fails may the final fallback descend below the profile. A vertical step
+  # costs twice a lateral step so either vertical fallback stays economical.
+  lateral_bypass_first: true
+  lateral_bypass_vertical_band: 0.15
+  lateral_bypass_min_horizontal_span: 1.0
+  vertical_bypass_up_only: true
+  downward_bypass_last: true
+  vertical_motion_cost: 2.0
 
 rog_map:
   resolution: 0.1
   inflation_resolution: 0.1
   # The primary A* search reads the inflated map directly. Its neighbour
   # radius is used only by a fallback search, so zero inflation admitted
-  # paths whose CIRI seed lines were under 1.0 m from obstacles. Eleven 0.1 m
-  # cells include one fine cell of quantization beyond CIRI's 1.0 m radius.
+  # paths whose CIRI seed lines were under 0.8 m from obstacles. Nine 0.1 m
+  # cells add one grid cell beyond the 0.8 m final hard radius. It is
+  # not the acceptance limit: optimized trajectories are still checked
+  # independently against the exact 0.8 m cylinder.
+  # Vertical inflation implements the independent 0.5 m vertical clearance.
   # The former 0.2 m grid snapped some return targets more than 1 m away.
-  inflation_step: 11
+  inflation_step: 9
+  inflation_vertical_step: 5
   unk_inflation_en: false
   unk_inflation_step: 1
   map_size: [50, 50, 6]
   fix_map_origin: [0, 0, 0]
   frontier_extraction_en: false
-  # These are broad camera_init limits, not the per-scenario PX4 fence. They
-  # cover the surveyed tunnel incline while the sliding local map remains 6 m
-  # high around the vehicle.
+  # These are broad, level task-frame limits, not the per-scenario PX4 fence.
+  # The perception gate removes the fixed radar mounting tilt before planning.
   virtual_ceil_height: 9.0
   virtual_ground_height: -5.0
   load_pcd_en: false
@@ -149,14 +185,14 @@ rog_map:
     odom_timeout: 2.0
   visualization:
     enable: true
-    # ROG consumes task-gated odometry and clouds in camera_init coordinates.
-    # Publish occupancy and markers in that same frame for frontier return.
-    frame_id: "camera_init"
+    # ROG consumes task-gated odometry and clouds after they have been levelled.
+    # Publish occupancy and markers in that same task frame.
+    frame_id: "task1_planning"
     use_dynamic_reconfigure: false
     time_rate: 2
     frame_rate: 0
     range: [15, 15, 4]
-    frame_id: "camera_init"
+    frame_id: "task1_planning"
     pub_unknown_map_en: false
   intensity_thresh: -10
   point_filt_num: 1

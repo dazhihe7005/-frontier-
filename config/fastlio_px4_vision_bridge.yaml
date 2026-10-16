@@ -8,17 +8,55 @@ output_child_frame: "base_link"
 # updates at 10 Hz, so the latest validated pose is restamped at 30 Hz.
 publish_rate: 30.0
 data_timeout: 0.3
+timestamp_timeout: 0.6
 max_input_jump: 2.0
+max_input_speed: 2.0
+max_input_angular_speed: 2.0
+max_prediction_horizon: 0.35
+
+# The 10 Hz Fast-LIO input is republished at 30 Hz. Position and attitude are
+# extrapolated only to the current output tick over a bounded horizon; these
+# rates add uncertainty in proportion to that horizon.
+prediction_position_noise_rate: 0.15
+prediction_orientation_noise_rate: 0.20
 
 # Minimum covariance floors prevent the repeated 30 Hz pose from appearing
 # unrealistically perfect to EKF2.
 position_stddev: 0.05
 orientation_stddev: 0.10
+max_input_position_variance: 4.0
+
+# Stop external-vision output when FAST-LIO reports translation degeneracy or
+# its health heartbeat disappears. The modified real Fast-LIO publishes this
+# latched signal and raises position variance to 25 m^2 when unhealthy.
+require_fastlio_health: true
+fastlio_health_topic: "/fast_lio/localization_healthy"
+fastlio_health_timeout: 0.5
 
 # Establish a task-local PX4 frame when the bridge starts while disarmed.
 zero_initial_xy: true
 zero_initial_z: true
 zero_initial_yaw: true
+zero_initial_roll_pitch: true
+
+# MID360 installation compensation in ROS FLU convention. The temporary
+# -90.9-degree yaw workaround was removed after restoring the radar to point
+# forward. The physical 25-degree forward/down tilt remains and must still be
+# applied to odometry, covariance, attitude and SUPER commands so horizontal
+# travel does not leak into PX4's height estimate.
+temporary_sensor_roll_in_body_deg: 0.0
+temporary_sensor_pitch_in_body_deg: 25.0
+temporary_sensor_yaw_in_body_deg: 0.0
+
+# FAST-LIO /Odometry is located at the MID360 internal IMU. This body-FLU
+# lever arm combines the CAD lidar position [0.1315, 0, 0.223] m with the
+# configured MID360 lidar-to-IMU translation [-0.011, -0.02329, 0.04412] m.
+# The bridge converts the measurement and planner targets to the body origin,
+# so PX4 EKF2_EV_POS_X/Y/Z must remain zero for this output.
+sensor_position_in_body_x: 0.133803
+sensor_position_in_body_y: -0.011364
+sensor_position_in_body_z: 0.173245
+
 require_mavros_connection: true
 allow_alignment_while_armed: false
 auto_realign_after_odometry_timeout: true

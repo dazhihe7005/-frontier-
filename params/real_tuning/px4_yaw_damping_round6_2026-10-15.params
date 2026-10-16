@@ -1,0 +1,9 @@
+# NOTE: 2026-10-15 yaw damping round 6, based on ULog id240.
+# Applied to the real FCU only after connected=true, armed=false and landed_state=1.
+# A forced 1093-parameter pull and live readback verified all four values.
+# Roll, pitch, horizontal-position and vertical-response gains are unchanged.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_YAW_P	2.400	9
+1	1	MC_YAWRATE_P	0.280	9
+1	1	MC_YAWRATE_I	0.080	9
+1	1	MC_YR_INT_LIM	0.020	9

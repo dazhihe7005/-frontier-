@@ -1,0 +1,8 @@
+<launch>
+  <node pkg="mine_uav_control" type="task1_perception_gate"
+        name="task1_perception_gate_test" output="screen" required="true">
+    <param name="require_vision_healthy" value="false"/>
+  </node>
+  <test test-name="task1_planning_frame" pkg="mine_uav_control"
+        type="test_task1_planning_frame.py" time-limit="30"/>
+</launch>

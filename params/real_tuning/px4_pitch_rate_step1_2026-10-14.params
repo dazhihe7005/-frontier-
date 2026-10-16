@@ -1,0 +1,7 @@
+# NOTE: 2026-10-14 first bounded pitch-rate damping step
+# Import only while disarmed. This file is intentionally not loaded by launch.
+# Applied directly to the disarmed real PX4 and force-pull verified at
+# 2026-10-14T16:51:00+08:00.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_PITCHRATE_D	0.0033	9
+1	1	MC_PITCHRATE_P	0.165	9

@@ -1,19 +1,31 @@
 #include "mine_uav_control/motion_continuity.hpp"
+#include "mine_uav_control/fastlio_mount_alignment.hpp"
+#include "mine_uav_control/obstacle_safety.hpp"
+#include "mine_uav_control/tracking_speed_governor.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
+#include <stdexcept>
 #include <string>
+#include <tuple>
 
 #include <geometry_msgs/TransformStamped.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/TwistStamped.h>
+#include <geometry_msgs/Vector3Stamped.h>
 #include <mavros_msgs/PositionTarget.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <quadrotor_msgs/PositionCommand.h>
+#include <nav_msgs/Odometry.h>
 #include <ros/ros.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>
 #include <std_srvs/SetBool.h>
+#include <vector>
 
 #include "mine_uav_control/offboard_mode_guard.hpp"
 
@@ -47,6 +59,12 @@ double yawFromQuaternion(const geometry_msgs::Quaternion& q) {
                     1.0 - 2.0 * (y * y + z * z));
 }
 
+mine_uav_control::Quaternion toMathQuaternion(
+    const geometry_msgs::Quaternion& q) {
+  return mine_uav_control::normalized(
+      mine_uav_control::Quaternion(q.x, q.y, q.z, q.w));
+}
+
 double vectorNorm(double x, double y, double z) {
   return std::sqrt(x * x + y * y + z * z);
 }
@@ -60,12 +78,29 @@ class SuperPx4CommandBridge {
                       std::string("/planning/pos_cmd"));
     private_nh_.param("output_topic", output_topic_,
                       std::string("/mine_uav/setpoint_cmd"));
+    private_nh_.param(
+        "alignment_topic", alignment_topic_,
+        std::string("/mine_uav/task1/planning_to_px4_alignment"));
     private_nh_.param("expected_frame", expected_frame_,
-                      std::string("camera_init"));
+                      std::string("task1_planning"));
     private_nh_.param("command_timeout", command_timeout_, 0.25);
     private_nh_.param("local_pose_timeout", local_pose_timeout_, 0.5);
     private_nh_.param("output_rate", output_rate_, 50.0);
     private_nh_.param("max_speed", max_speed_, 1.0);
+    private_nh_.param("max_measured_speed", max_measured_speed_, max_speed_);
+    max_predicted_speed_ = max_measured_speed_;
+    private_nh_.param("max_predicted_speed", max_predicted_speed_,
+                      max_predicted_speed_);
+    private_nh_.param("tracking_position_gain_xy",
+                      tracking_position_gain_xy_, 0.9);
+    private_nh_.param("tracking_position_gain_z",
+                      tracking_position_gain_z_, 1.0);
+    private_nh_.param("max_governor_tracking_error",
+                      max_governor_tracking_error_, 0.65);
+    private_nh_.param("measured_speed_timeout", measured_speed_timeout_, 0.5);
+    private_nh_.param("overspeed_duration", overspeed_duration_, 0.10);
+    private_nh_.param("max_offboard_entry_speed",
+                      max_offboard_entry_speed_, 0.20);
     private_nh_.param("max_acceleration", max_acceleration_, 3.0);
     private_nh_.param("max_yaw_rate", max_yaw_rate_, 0.75);
     private_nh_.param("max_position_rate", max_position_rate_, 1.10);
@@ -83,8 +118,12 @@ class SuperPx4CommandBridge {
     private_nh_.param("height_clamp_tolerance", height_clamp_tolerance_, 0.25);
     private_nh_.param("max_alignment_translation_change",
                       max_alignment_translation_change_, 0.05);
-    private_nh_.param("max_alignment_yaw_change",
-                      max_alignment_yaw_change_, 0.05);
+    if (!private_nh_.getParam("max_alignment_rotation_change",
+                              max_alignment_rotation_change_)) {
+      // Accept the old yaw-only parameter name for existing launch files.
+      private_nh_.param("max_alignment_yaw_change",
+                        max_alignment_rotation_change_, 0.05);
+    }
     private_nh_.param("use_acceleration", use_acceleration_, true);
     private_nh_.param("auto_enable_topic", auto_enable_topic_,
                       std::string("/mine_uav/mission/auto_enable"));
@@ -102,11 +141,54 @@ class SuperPx4CommandBridge {
     private_nh_.param("return_recovery_timeout", return_recovery_timeout_,
                       12.0);
     private_nh_.param("software_enable_default", software_enabled_, true);
+    private_nh_.param("obstacle_safety_enabled", obstacle_safety_enabled_,
+                      false);
+    private_nh_.param("obstacle_cloud_topic", obstacle_cloud_topic_,
+                      std::string("/mine_uav/task1/cloud_registered"));
+    private_nh_.param("task_odometry_topic", task_odometry_topic_,
+                      std::string("/mine_uav/task1/odometry"));
+    private_nh_.param("obstacle_cloud_timeout", obstacle_cloud_timeout_, 0.35);
+    private_nh_.param("live_horizontal_clearance",
+                      live_horizontal_clearance_, 0.8);
+    private_nh_.param("live_vertical_half_height",
+                      live_vertical_half_height_, 0.5);
+    private_nh_.param("obstacle_min_z", obstacle_min_z_, -1.0e6);
+    private_nh_.param("coverage_guard_distance",
+                      coverage_guard_distance_, 2.5);
+    private_nh_.param("coverage_lateral_half_width",
+                      coverage_lateral_half_width_, 2.5);
+    private_nh_.param("coverage_vertical_half_height",
+                      coverage_vertical_half_height_, 1.5);
+    private_nh_.param("coverage_min_points", coverage_min_points_, 30);
+    private_nh_.param("coverage_min_horizontal_span",
+                      coverage_min_horizontal_span_, 0.6);
+    private_nh_.param("coverage_min_vertical_span",
+                      coverage_min_vertical_span_, 0.6);
+    private_nh_.param("coverage_confirm_frames",
+                      coverage_confirm_frames_, 3);
+    private_nh_.param("coverage_reject_frames",
+                      coverage_reject_frames_, 2);
+    private_nh_.param("max_obstacle_points", max_obstacle_points_, 20000);
+    private_nh_.param("obstacle_voxel_resolution",
+                      obstacle_voxel_resolution_, 0.10);
 
     command_timeout_ = std::max(0.05, command_timeout_);
     local_pose_timeout_ = std::max(0.1, local_pose_timeout_);
     output_rate_ = std::max(10.0, output_rate_);
     max_speed_ = std::max(0.1, max_speed_);
+    max_measured_speed_ = std::max(0.1, max_measured_speed_);
+    max_predicted_speed_ = std::max(
+        0.1, std::min(max_predicted_speed_, max_measured_speed_));
+    tracking_position_gain_xy_ =
+        std::max(0.0, tracking_position_gain_xy_);
+    tracking_position_gain_z_ =
+        std::max(0.0, tracking_position_gain_z_);
+    max_governor_tracking_error_ =
+        std::max(0.1, max_governor_tracking_error_);
+    measured_speed_timeout_ = std::max(0.1, measured_speed_timeout_);
+    overspeed_duration_ = std::max(0.02, overspeed_duration_);
+    max_offboard_entry_speed_ = std::max(
+        0.02, std::min(max_offboard_entry_speed_, max_measured_speed_));
     max_acceleration_ = std::max(0.1, max_acceleration_);
     max_yaw_rate_ = std::max(0.1, max_yaw_rate_);
     max_position_rate_ = std::max(max_speed_, max_position_rate_);
@@ -120,10 +202,29 @@ class SuperPx4CommandBridge {
     max_horizontal_radius_ = std::max(1.0, max_horizontal_radius_);
     max_alignment_translation_change_ =
         std::max(0.001, max_alignment_translation_change_);
-    max_alignment_yaw_change_ = std::max(0.001, max_alignment_yaw_change_);
+    max_alignment_rotation_change_ =
+        std::max(0.001, max_alignment_rotation_change_);
     prestream_duration_ = std::max(1.0, prestream_duration_);
     mode_request_interval_ = std::max(0.5, mode_request_interval_);
     return_recovery_timeout_ = std::max(2.0, return_recovery_timeout_);
+    obstacle_cloud_timeout_ = std::max(0.1, obstacle_cloud_timeout_);
+    live_horizontal_clearance_ = std::max(0.1, live_horizontal_clearance_);
+    live_vertical_half_height_ = std::max(0.1, live_vertical_half_height_);
+    coverage_guard_distance_ = std::max(live_horizontal_clearance_,
+                                        coverage_guard_distance_);
+    coverage_lateral_half_width_ = std::max(
+        live_horizontal_clearance_, coverage_lateral_half_width_);
+    coverage_vertical_half_height_ = std::max(
+        live_vertical_half_height_, coverage_vertical_half_height_);
+    coverage_min_points_ = std::max(1, coverage_min_points_);
+    coverage_min_horizontal_span_ = std::max(
+        0.1, coverage_min_horizontal_span_);
+    coverage_min_vertical_span_ = std::max(0.1, coverage_min_vertical_span_);
+    coverage_confirm_frames_ = std::max(1, coverage_confirm_frames_);
+    coverage_reject_frames_ = std::max(1, coverage_reject_frames_);
+    max_obstacle_points_ = std::max(100, max_obstacle_points_);
+    obstacle_voxel_resolution_ = std::max(0.05,
+                                          obstacle_voxel_resolution_);
     if (min_height_ > max_height_) {
       std::swap(min_height_, max_height_);
     }
@@ -131,8 +232,11 @@ class SuperPx4CommandBridge {
     command_subscriber_ = nh_.subscribe(
         command_topic_, 10, &SuperPx4CommandBridge::commandCallback, this);
     alignment_subscriber_ = nh_.subscribe(
-        "/mine_uav/task1/fastlio_to_px4_alignment", 1,
+        alignment_topic_, 1,
         &SuperPx4CommandBridge::alignmentCallback, this);
+    sensor_position_subscriber_ = nh_.subscribe(
+        "/mine_uav/task1/fastlio_sensor_position_in_body", 1,
+        &SuperPx4CommandBridge::sensorPositionCallback, this);
     mission_subscriber_ = nh_.subscribe(
         "/mine_uav/mission/goaf_enable", 1,
         &SuperPx4CommandBridge::missionCallback, this);
@@ -156,6 +260,15 @@ class SuperPx4CommandBridge {
     local_pose_subscriber_ = nh_.subscribe(
         "/mavros/local_position/pose", 10,
         &SuperPx4CommandBridge::localPoseCallback, this);
+    local_velocity_subscriber_ = nh_.subscribe(
+        "/mavros/local_position/velocity_local", 20,
+        &SuperPx4CommandBridge::localVelocityCallback, this);
+    task_odometry_subscriber_ = nh_.subscribe(
+        task_odometry_topic_, 20,
+        &SuperPx4CommandBridge::taskOdometryCallback, this);
+    obstacle_cloud_subscriber_ = nh_.subscribe(
+        obstacle_cloud_topic_, 2,
+        &SuperPx4CommandBridge::obstacleCloudCallback, this);
 
     command_publisher_ =
         nh_.advertise<mavros_msgs::PositionTarget>(output_topic_, 10);
@@ -163,6 +276,8 @@ class SuperPx4CommandBridge {
         "/mine_uav/task1/command_ready", 1, true);
     status_publisher_ = nh_.advertise<std_msgs::String>(
         "/mine_uav/task1/command_status", 1, true);
+    fault_publisher_ = nh_.advertise<std_msgs::String>(
+        "/mine_uav/task1/command_fault", 1, true);
     return_request_publisher_ = nh_.advertise<std_msgs::Bool>(
         "/mine_uav/exploration/return_home", 1, true);
     enable_service_ = private_nh_.advertiseService(
@@ -175,12 +290,36 @@ class SuperPx4CommandBridge {
 
     publishReady(false);
     publishReturnRequest(false);
+    publishFault("");
     publishStatus("WAIT_ALIGNMENT");
     ROS_WARN("SUPER-to-PX4 bridge ready: RC auto-enable and task selection are "
              "required; the bridge may request OFFBOARD but never arms PX4");
   }
 
  private:
+  void sensorPositionCallback(
+      const geometry_msgs::Vector3Stamped::ConstPtr& position) {
+    const auto& p = position->vector;
+    const double norm = vectorNorm(p.x, p.y, p.z);
+    if (!finite(p.x) || !finite(p.y) || !finite(p.z) || norm > 1.0) {
+      latchFault("INVALID_SENSOR_LEVER_ARM");
+      return;
+    }
+    const mine_uav_control::Vector3 next(p.x, p.y, p.z);
+    const bool changed = have_sensor_position_ &&
+        vectorNorm(next.x - sensor_position_in_body_.x,
+                   next.y - sensor_position_in_body_.y,
+                   next.z - sensor_position_in_body_.z) > 0.01;
+    if (changed && auto_enabled_ && mission_enabled_) {
+      valid_command_ = false;
+      latchFault("SENSOR_LEVER_ARM_CHANGED_DURING_TASK");
+      resetPrestream();
+      return;
+    }
+    sensor_position_in_body_ = next;
+    have_sensor_position_ = true;
+  }
+
   void alignmentCallback(
       const geometry_msgs::TransformStamped::ConstPtr& transform) {
     const auto& t = transform->transform.translation;
@@ -194,12 +333,13 @@ class SuperPx4CommandBridge {
       latchFault("INVALID_ALIGNMENT");
       return;
     }
-    const double new_yaw = yawFromQuaternion(q);
+    const auto new_rotation = toMathQuaternion(q);
     const bool alignment_changed = alignment_ready_ &&
         (vectorNorm(t.x - alignment_x_, t.y - alignment_y_,
                     t.z - alignment_z_) > max_alignment_translation_change_ ||
-         std::abs(normalizeAngle(new_yaw - alignment_yaw_)) >
-             max_alignment_yaw_change_);
+         mine_uav_control::quaternionAngularDistance(
+             new_rotation, alignment_rotation_) >
+             max_alignment_rotation_change_);
     if (alignment_changed && auto_enabled_ && mission_enabled_) {
       // Updating this transform while executing would reinterpret the old
       // SUPER trajectory in a new PX4 frame. Invalidate it and exit first.
@@ -216,23 +356,47 @@ class SuperPx4CommandBridge {
     alignment_x_ = t.x;
     alignment_y_ = t.y;
     alignment_z_ = t.z;
-    alignment_yaw_ = new_yaw;
+    alignment_rotation_ = new_rotation;
     alignment_ready_ = true;
     updateStatus();
   }
 
   void missionCallback(const std_msgs::Bool::ConstPtr& enabled) {
+    const bool was_enabled = mission_enabled_;
     mission_enabled_ = enabled->data;
+    if (!was_enabled && mission_enabled_) {
+      // A new task selection is a new command epoch. Never let a terminal
+      // sample retained from the previous goal qualify the next OFFBOARD
+      // prestream as fresh.
+      valid_command_ = false;
+      last_command_time_ = ros::Time();
+      latest_source_stamp_ = ros::Time();
+      resetPrestream();
+      resetContinuityGuard();
+      resetReacquire();
+      hold_target_latched_ = false;
+      obstacle_coverage_complete_streak_ = 0;
+      obstacle_coverage_incomplete_streak_ = 0;
+      obstacle_safety_ready_ = !obstacle_safety_enabled_;
+      obstacle_hazard_stop_active_ = false;
+      obstacle_voxels_.clear();
+    }
     if (!mission_enabled_) {
+      overspeed_since_ = ros::Time();
       recovery_pending_ = false;
       recovery_attempted_ = false;
       returning_home_ = false;
       return_route_wait_since_ = ros::Time();
       publishReturnRequest(false);
       beginOffboardExit("TASK1_DESELECTED");
+      valid_command_ = false;
+      last_command_time_ = ros::Time();
+      latest_source_stamp_ = ros::Time();
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      publishFault("");
+      obstacle_hazard_stop_active_ = false;
     }
     updateStatus();
   }
@@ -240,7 +404,24 @@ class SuperPx4CommandBridge {
   void autoEnableCallback(const std_msgs::Bool::ConstPtr& enabled) {
     const bool was_enabled = auto_enabled_;
     auto_enabled_ = enabled->data;
+    if (!was_enabled && auto_enabled_) {
+      // Goal acceptance is the start of a fresh control epoch. Discard any
+      // planner sample emitted during map warmup or before the new goal was
+      // accepted; OFFBOARD must wait for a post-acceptance command.
+      valid_command_ = false;
+      last_command_time_ = ros::Time();
+      latest_source_stamp_ = ros::Time();
+      resetPrestream();
+      resetContinuityGuard();
+      resetReacquire();
+      overspeed_since_ = ros::Time();
+      obstacle_coverage_complete_streak_ = 0;
+      obstacle_coverage_incomplete_streak_ = 0;
+      obstacle_safety_ready_ = !obstacle_safety_enabled_;
+      obstacle_hazard_stop_active_ = false;
+    }
     if (was_enabled && !auto_enabled_) {
+      overspeed_since_ = ros::Time();
       recovery_pending_ = false;
       recovery_attempted_ = false;
       publishReturnRequest(false);
@@ -249,6 +430,8 @@ class SuperPx4CommandBridge {
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      publishFault("");
+      obstacle_hazard_stop_active_ = false;
     }
     updateStatus();
   }
@@ -331,7 +514,9 @@ class SuperPx4CommandBridge {
     px4_mode_ = state->mode;
     if (px4_mode_ != offboard_mode_) {
       have_published_target_ = false;
-      hold_target_latched_ = false;
+      if (previous_mode == offboard_mode_) {
+        hold_target_latched_ = false;
+      }
     }
     if (mine_uav_control::externalOffboardExit(
             previous_mode, px4_mode_, offboard_mode_, offboard_owned_,
@@ -364,16 +549,215 @@ class SuperPx4CommandBridge {
     have_local_pose_ = true;
   }
 
+  void taskOdometryCallback(const nav_msgs::Odometry::ConstPtr& odometry) {
+    const auto& p = odometry->pose.pose.position;
+    if (!finite(p.x) || !finite(p.y) || !finite(p.z)) {
+      have_task_odometry_ = false;
+      return;
+    }
+    latest_task_position_ = {p.x, p.y, p.z};
+    last_task_odometry_time_ = ros::Time::now();
+    have_task_odometry_ = true;
+  }
+
+  bool obstacleCloudFresh(const ros::Time& now) const {
+    return !obstacle_safety_enabled_ ||
+        (have_obstacle_cloud_ && have_task_odometry_ &&
+         !last_obstacle_cloud_time_.isZero() &&
+         !last_task_odometry_time_.isZero() &&
+         (now - last_obstacle_cloud_time_).toSec() <=
+             obstacle_cloud_timeout_ &&
+         (now - last_task_odometry_time_).toSec() <=
+             obstacle_cloud_timeout_);
+  }
+
+  void triggerObstacleHazard(const std::string& reason) {
+    if (obstacle_hazard_stop_active_) return;
+    obstacle_hazard_stop_active_ = true;
+    valid_command_ = false;
+    resetReacquire();
+    resetContinuityGuard();
+    latchFault(reason);
+  }
+
+  void obstacleCloudCallback(
+      const sensor_msgs::PointCloud2::ConstPtr& cloud) {
+    if (!obstacle_safety_enabled_) return;
+    std::vector<mine_uav_control::ObstaclePoint> points;
+    const std::size_t total =
+        static_cast<std::size_t>(cloud->width) * cloud->height;
+    const std::size_t stride = std::max<std::size_t>(
+        1, (total + static_cast<std::size_t>(max_obstacle_points_) - 1) /
+               static_cast<std::size_t>(max_obstacle_points_));
+    points.reserve(std::min<std::size_t>(total, max_obstacle_points_));
+    try {
+      sensor_msgs::PointCloud2ConstIterator<float> x(*cloud, "x");
+      sensor_msgs::PointCloud2ConstIterator<float> y(*cloud, "y");
+      sensor_msgs::PointCloud2ConstIterator<float> z(*cloud, "z");
+      std::size_t index = 0;
+      for (; x != x.end(); ++x, ++y, ++z, ++index) {
+        if (index % stride != 0) continue;
+        if (!finite(*x) || !finite(*y) || !finite(*z)) continue;
+        points.push_back({*x, *y, *z});
+      }
+    } catch (const std::runtime_error& error) {
+      have_obstacle_cloud_ = false;
+      if (auto_enabled_ && mission_enabled_) {
+        triggerObstacleHazard("INVALID_OBSTACLE_CLOUD");
+      }
+      ROS_ERROR_THROTTLE(1.0, "Invalid obstacle cloud: %s", error.what());
+      return;
+    }
+    const ros::Time now = ros::Time::now();
+    last_obstacle_cloud_time_ = now;
+    have_obstacle_cloud_ = true;
+    for (const auto& point : points) {
+      if (obstacle_voxels_.size() >=
+              static_cast<std::size_t>(max_obstacle_points_)) {
+        break;
+      }
+      const auto key = std::make_tuple(
+          static_cast<int>(std::floor(point.x / obstacle_voxel_resolution_)),
+          static_cast<int>(std::floor(point.y / obstacle_voxel_resolution_)),
+          static_cast<int>(std::floor(point.z / obstacle_voxel_resolution_)));
+      obstacle_voxels_[key] = point;
+    }
+    points.clear();
+    points.reserve(obstacle_voxels_.size());
+    for (const auto& entry : obstacle_voxels_) {
+      points.push_back(entry.second);
+    }
+    if (!have_task_odometry_ ||
+        (now - last_task_odometry_time_).toSec() > obstacle_cloud_timeout_) {
+      obstacle_safety_ready_ = false;
+      return;
+    }
+
+    const auto clearance = mine_uav_control::liveHorizontalCylinderClearance(
+        points, latest_task_position_, live_horizontal_clearance_,
+        live_vertical_half_height_, obstacle_min_z_);
+    if (clearance.violated) {
+      ROS_ERROR(
+          "LIVE_OBSTACLE_CLEARANCE: vehicle task xyz=(%.3f, %.3f, %.3f), "
+          "obstacle=(%.3f, %.3f, %.3f), horizontal=%.3f m < %.3f m, "
+          "vertical=%.3f m",
+          latest_task_position_.x, latest_task_position_.y,
+          latest_task_position_.z, clearance.obstacle.x,
+          clearance.obstacle.y, clearance.obstacle.z,
+          clearance.horizontal_distance, live_horizontal_clearance_,
+          clearance.vertical_distance);
+      obstacle_safety_ready_ = false;
+      if (auto_enabled_ && mission_enabled_) {
+        triggerObstacleHazard("LIVE_OBSTACLE_CLEARANCE");
+      }
+      return;
+    }
+
+    double forward_x = latest_planning_velocity_x_;
+    double forward_y = latest_planning_velocity_y_;
+    if (std::hypot(forward_x, forward_y) < 0.05) {
+      forward_x = last_planning_forward_x_;
+      forward_y = last_planning_forward_y_;
+    } else {
+      const double speed = std::hypot(forward_x, forward_y);
+      last_planning_forward_x_ = forward_x / speed;
+      last_planning_forward_y_ = forward_y / speed;
+    }
+    const auto coverage = mine_uav_control::evaluateForwardObstacleCoverage(
+        points, latest_task_position_, forward_x, forward_y,
+        coverage_guard_distance_, coverage_lateral_half_width_,
+        coverage_vertical_half_height_,
+        static_cast<std::size_t>(coverage_min_points_),
+        coverage_min_horizontal_span_, coverage_min_vertical_span_,
+        obstacle_min_z_);
+    if (!coverage.obstacle_nearby) {
+      obstacle_coverage_complete_streak_ = 0;
+      obstacle_coverage_incomplete_streak_ = 0;
+      obstacle_safety_ready_ = true;
+      return;
+    }
+    if (coverage.complete) {
+      obstacle_coverage_complete_streak_ = std::min(
+          coverage_confirm_frames_, obstacle_coverage_complete_streak_ + 1);
+      obstacle_coverage_incomplete_streak_ = 0;
+    } else {
+      obstacle_coverage_complete_streak_ = 0;
+      obstacle_coverage_incomplete_streak_ = std::min(
+          coverage_reject_frames_, obstacle_coverage_incomplete_streak_ + 1);
+    }
+    obstacle_safety_ready_ =
+        obstacle_coverage_complete_streak_ >= coverage_confirm_frames_;
+    if (!obstacle_safety_ready_) {
+      ROS_WARN_THROTTLE(
+          0.5,
+          "OBSTACLE_SURFACE_INCOMPLETE: points=%zu horizontal_span=%.3f m "
+          "vertical_span=%.3f m nearest=%.3f m; holding before approach",
+          coverage.point_count, coverage.horizontal_span,
+          coverage.vertical_span, coverage.nearest_horizontal);
+      if (obstacle_coverage_incomplete_streak_ >= coverage_reject_frames_ &&
+          auto_enabled_ && mission_enabled_ && offboard_owned_ &&
+          px4_mode_ == offboard_mode_) {
+        triggerObstacleHazard("OBSTACLE_SURFACE_INCOMPLETE");
+      }
+    }
+  }
+
+  void localVelocityCallback(
+      const geometry_msgs::TwistStamped::ConstPtr& velocity) {
+    const auto& v = velocity->twist.linear;
+    if (!finite(v.x) || !finite(v.y) || !finite(v.z)) {
+      have_local_velocity_ = false;
+      overspeed_since_ = ros::Time();
+      if (auto_enabled_ && offboard_owned_) {
+        latchFault("INVALID_LOCAL_VELOCITY");
+      }
+      return;
+    }
+    const ros::Time now = ros::Time::now();
+    latest_measured_speed_ = vectorNorm(v.x, v.y, v.z);
+    last_local_velocity_time_ = now;
+    have_local_velocity_ = true;
+    if (!(auto_enabled_ && offboard_owned_ &&
+          px4_mode_ == offboard_mode_)) {
+      overspeed_since_ = ros::Time();
+      return;
+    }
+    if (latest_measured_speed_ <= max_measured_speed_) {
+      overspeed_since_ = ros::Time();
+      return;
+    }
+    if (overspeed_since_.isZero()) {
+      overspeed_since_ = now;
+      return;
+    }
+    if ((now - overspeed_since_).toSec() >= overspeed_duration_) {
+      ROS_ERROR_THROTTLE(
+          0.5,
+          "Measured automatic-flight speed %.3f m/s exceeds hard limit %.3f m/s",
+          latest_measured_speed_, max_measured_speed_);
+      valid_command_ = false;
+      latchFault("MEASURED_SPEED_LIMIT");
+    }
+  }
+
   bool gatesReady() const {
     return software_enabled_ && auto_enabled_ && mission_enabled_ &&
            !mission_complete_ &&
            alignment_ready_ && vision_healthy_ && mavros_connected_ &&
+           localVelocityFresh(ros::Time::now()) &&
+           obstacleCloudFresh(ros::Time::now()) && obstacle_safety_ready_ &&
            !fault_latched_;
   }
 
   bool localPoseFresh(const ros::Time& now) const {
     return have_local_pose_ && !last_local_pose_time_.isZero() &&
            (now - last_local_pose_time_).toSec() <= local_pose_timeout_;
+  }
+
+  bool localVelocityFresh(const ros::Time& now) const {
+    return have_local_velocity_ && !last_local_velocity_time_.isZero() &&
+           (now - last_local_velocity_time_).toSec() <=
+               measured_speed_timeout_;
   }
 
   bool enableCallback(std_srvs::SetBool::Request& request,
@@ -430,31 +814,64 @@ class SuperPx4CommandBridge {
 
   mavros_msgs::PositionTarget convert(
       const quadrotor_msgs::PositionCommand& command) const {
-    const double c = std::cos(alignment_yaw_);
-    const double s = std::sin(alignment_yaw_);
     mavros_msgs::PositionTarget output;
     output.header.stamp = ros::Time::now();
     output.header.frame_id = "map";
     output.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
     output.type_mask = 0;
 
-    output.position.x = c * command.position.x - s * command.position.y +
-                        alignment_x_;
-    output.position.y = s * command.position.x + c * command.position.y +
-                        alignment_y_;
-    output.position.z = command.position.z + alignment_z_;
-    output.velocity.x =
-        c * command.velocity.x - s * command.velocity.y;
-    output.velocity.y =
-        s * command.velocity.x + c * command.velocity.y;
-    output.velocity.z = command.velocity.z;
-    output.acceleration_or_force.x =
-        c * command.acceleration.x - s * command.acceleration.y;
-    output.acceleration_or_force.y =
-        s * command.acceleration.x + c * command.acceleration.y;
-    output.acceleration_or_force.z = command.acceleration.z;
-    output.yaw = normalizeAngle(command.yaw + alignment_yaw_);
-    output.yaw_rate = command.yaw_dot;
+    const auto position = mine_uav_control::rotateVector(
+        alignment_rotation_, mine_uav_control::Vector3(
+            command.position.x, command.position.y, command.position.z));
+    const auto velocity = mine_uav_control::rotateVector(
+        alignment_rotation_, mine_uav_control::Vector3(
+            command.velocity.x, command.velocity.y, command.velocity.z));
+    const auto acceleration = mine_uav_control::rotateVector(
+        alignment_rotation_, mine_uav_control::Vector3(
+            command.acceleration.x, command.acceleration.y,
+            command.acceleration.z));
+    output.position.x = position.x + alignment_x_;
+    output.position.y = position.y + alignment_y_;
+    output.position.z = position.z + alignment_z_;
+    output.velocity.x = velocity.x;
+    output.velocity.y = velocity.y;
+    output.velocity.z = velocity.z;
+    output.acceleration_or_force.x = acceleration.x;
+    output.acceleration_or_force.y = acceleration.y;
+    output.acceleration_or_force.z = acceleration.z;
+
+    // Transform the horizontal heading and its derivative through the same
+    // 3-D map rotation. This remains correct when pitch compensation is active.
+    const auto heading = mine_uav_control::rotateVector(
+        alignment_rotation_, mine_uav_control::Vector3(
+            std::cos(command.yaw), std::sin(command.yaw), 0.0));
+    const auto heading_derivative = mine_uav_control::rotateVector(
+        alignment_rotation_, mine_uav_control::Vector3(
+            -std::sin(command.yaw), std::cos(command.yaw), 0.0));
+    const double horizontal_heading_squared =
+        heading.x * heading.x + heading.y * heading.y;
+    output.yaw = normalizeAngle(std::atan2(heading.y, heading.x));
+    output.yaw_rate = horizontal_heading_squared > 1e-8
+        ? command.yaw_dot *
+              (heading.x * heading_derivative.y -
+               heading.y * heading_derivative.x) /
+              horizontal_heading_squared
+        : 0.0;
+    // The planner trajectory is expressed at Fast-LIO's MID360 IMU origin,
+    // while PX4 controls the aircraft body origin. Remove the attitude-
+    // dependent lever-arm displacement. Initial body attitude is identity in
+    // this task-local output frame, so the correction is zero at handoff.
+    if (have_sensor_position_) {
+      const auto desired_sensor_offset = mine_uav_control::rotateVector(
+          mine_uav_control::quaternionFromRpy(0.0, 0.0, output.yaw),
+          sensor_position_in_body_);
+      output.position.x -=
+          desired_sensor_offset.x - sensor_position_in_body_.x;
+      output.position.y -=
+          desired_sensor_offset.y - sensor_position_in_body_.y;
+      output.position.z -=
+          desired_sensor_offset.z - sensor_position_in_body_.z;
+    }
     if (!use_acceleration_) {
       output.type_mask |= mavros_msgs::PositionTarget::IGNORE_AFX |
                           mavros_msgs::PositionTarget::IGNORE_AFY |
@@ -472,6 +889,7 @@ class SuperPx4CommandBridge {
     reacquire_active_ = false;
     reacquire_start_time_ = ros::Time();
     source_stream_active_ = false;
+    speed_governor_active_ = false;
   }
 
   void startEmergencyBrake() {
@@ -529,10 +947,14 @@ class SuperPx4CommandBridge {
 
   mavros_msgs::PositionTarget makeLastCommandHoldTarget(
       const ros::Time& now) const {
-    if (last_command_time_.isZero()) {
+    if (!have_published_target_) {
       return makeHoldTarget(now);
     }
-    auto hold = have_published_target_ ? published_target_ : latest_target_;
+    // Task teardown intentionally clears the source-command timestamp. The
+    // already transmitted endpoint is nevertheless the only continuous hold
+    // reference; switching to measured pose here injects the tracking error
+    // as a position step at the end of the brake.
+    auto hold = published_target_;
     hold.header.stamp = now;
     hold.header.frame_id = "map";
     hold.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
@@ -692,6 +1114,12 @@ class SuperPx4CommandBridge {
 
   void commandCallback(
       const quadrotor_msgs::PositionCommand::ConstPtr& command) {
+    if (!mission_enabled_) {
+      // SUPER can keep publishing a terminal command after task teardown.
+      // It must not refill the cache that the next task epoch will use.
+      valid_command_ = false;
+      return;
+    }
     if (recovery_pending_ &&
         (!returning_home_ ||
          command->trajectory_id == recovery_source_trajectory_id_)) {
@@ -723,6 +1151,8 @@ class SuperPx4CommandBridge {
       valid_command_ = false;
       return;
     }
+    latest_planning_velocity_x_ = command->velocity.x;
+    latest_planning_velocity_y_ = command->velocity.y;
     const auto output = convert(*command);
     auto bounded_output = output;
     if (bounded_output.position.z > max_height_ &&
@@ -772,7 +1202,9 @@ class SuperPx4CommandBridge {
       recovery_pending_ = false;
     }
     valid_command_ = true;
-    hold_target_latched_ = false;
+    if (px4_mode_ == offboard_mode_) {
+      hold_target_latched_ = false;
+    }
     latest_target_ = accepted_output;
     latest_source_trajectory_id_ = command->trajectory_id;
     latest_source_stamp_ = command->header.stamp;
@@ -849,6 +1281,74 @@ class SuperPx4CommandBridge {
     return projected;
   }
 
+  bool governPredictedTrackingSpeed(mavros_msgs::PositionTarget* target) {
+    const double error_x =
+        target->position.x - latest_local_pose_.pose.position.x;
+    const double error_y =
+        target->position.y - latest_local_pose_.pose.position.y;
+    const double error_z =
+        target->position.z - latest_local_pose_.pose.position.z;
+    const double tracking_error = vectorNorm(error_x, error_y, error_z);
+    if (tracking_error > max_governor_tracking_error_) {
+      ROS_ERROR(
+          "PX4 tracking error %.3f m exceeds governor limit %.3f m; refusing "
+          "to hide a localization or trajectory fault",
+          tracking_error, max_governor_tracking_error_);
+      return false;
+    }
+
+    const std::array<double, 3> planned_velocity{{
+        target->velocity.x, target->velocity.y, target->velocity.z}};
+    const std::array<double, 3> position_error{{error_x, error_y, error_z}};
+    const std::array<double, 3> position_gain{{
+        tracking_position_gain_xy_, tracking_position_gain_xy_,
+        tracking_position_gain_z_}};
+    const auto governed = mine_uav_control::governTrackingSpeed(
+        planned_velocity, position_error, position_gain,
+        max_predicted_speed_);
+    if (!governed.valid) {
+      ROS_ERROR("PX4 tracking speed governor received non-finite input");
+      return false;
+    }
+
+    speed_governor_active_ = governed.active;
+    if (!governed.active) return true;
+
+    const double governed_feedforward_speed = vectorNorm(
+        governed.feedforward_velocity[0], governed.feedforward_velocity[1],
+        governed.feedforward_velocity[2]);
+    if (governed_feedforward_speed > max_speed_ + 1e-6) {
+      ROS_ERROR(
+          "PX4 speed governor would require %.3f m/s feed-forward, above "
+          "bridge limit %.3f m/s (tracking error %.3f m)",
+          governed_feedforward_speed, max_speed_, tracking_error);
+      return false;
+    }
+
+    const double raw_speed = vectorNorm(
+        planned_velocity[0] + position_gain[0] * position_error[0],
+        planned_velocity[1] + position_gain[1] * position_error[1],
+        planned_velocity[2] + position_gain[2] * position_error[2]);
+    target->velocity.x = governed.feedforward_velocity[0];
+    target->velocity.y = governed.feedforward_velocity[1];
+    target->velocity.z = governed.feedforward_velocity[2];
+    // Acceleration is feed-forward too. Scale it continuously with the speed
+    // intervention instead of leaving the original trajectory acceleration
+    // free to push through an actively governed velocity request.
+    target->acceleration_or_force.x *= governed.scale;
+    target->acceleration_or_force.y *= governed.scale;
+    target->acceleration_or_force.z *= governed.scale;
+    ROS_WARN_THROTTLE(
+        1.0,
+        "Governing PX4 tracking request %.3f -> %.3f m/s without abort: "
+        "planner_v=(%.3f, %.3f, %.3f), error=(%.3f, %.3f, %.3f), "
+        "governed_feedforward=(%.3f, %.3f, %.3f)",
+        raw_speed, max_predicted_speed_, planned_velocity[0],
+        planned_velocity[1], planned_velocity[2], error_x, error_y, error_z,
+        target->velocity.x, target->velocity.y, target->velocity.z);
+    return true;
+  }
+
   mavros_msgs::PositionTarget makeHoldTarget(const ros::Time& now) const {
     mavros_msgs::PositionTarget hold;
     hold.header.stamp = now;
@@ -879,8 +1379,61 @@ class SuperPx4CommandBridge {
     return hold;
   }
 
+  bool offboardEntrySafe(const ros::Time& now, std::string* reason) const {
+    if (!localPoseFresh(now) || !localVelocityFresh(now)) {
+      *reason = "PRESTREAM_STATE_NOT_FRESH";
+      return false;
+    }
+    if (latest_measured_speed_ > max_offboard_entry_speed_) {
+      *reason = "PRESTREAM_VEHICLE_NOT_STABLE";
+      return false;
+    }
+    const auto desired = projectSourceTarget(now);
+    const auto& p = latest_local_pose_.pose.position;
+    const double error_x = desired.position.x - p.x;
+    const double error_y = desired.position.y - p.y;
+    const double error_z = desired.position.z - p.z;
+    const double tracking_error = vectorNorm(error_x, error_y, error_z);
+    if (tracking_error > max_governor_tracking_error_) {
+      ROS_ERROR(
+          "Refusing OFFBOARD entry: initial tracking error %.3f m exceeds %.3f m",
+          tracking_error, max_governor_tracking_error_);
+      *reason = "PRESTREAM_TRACKING_ERROR";
+      return false;
+    }
+    const double predicted_speed = vectorNorm(
+        desired.velocity.x + tracking_position_gain_xy_ * error_x,
+        desired.velocity.y + tracking_position_gain_xy_ * error_y,
+        desired.velocity.z + tracking_position_gain_z_ * error_z);
+    if (!finite(predicted_speed)) {
+      *reason = "PRESTREAM_INVALID_PREDICTED_SPEED";
+      return false;
+    }
+    return true;
+  }
+
   void outputTimerCallback(const ros::TimerEvent&) {
     const ros::Time now = ros::Time::now();
+    if (obstacle_safety_enabled_ && auto_enabled_ && mission_enabled_ &&
+        offboard_owned_ && px4_mode_ == offboard_mode_ &&
+        !obstacleCloudFresh(now)) {
+      triggerObstacleHazard("OBSTACLE_CLOUD_TIMEOUT");
+    }
+    if (obstacle_hazard_stop_active_ && px4_mode_ == offboard_mode_) {
+      // Collision proximity is different from an ordinary command timeout:
+      // do not extrapolate the old velocity for the normal smooth brake.
+      // Command the measured pose with zero derivatives, then immediately
+      // request the pilot/fallback position mode.
+      auto hold = makeHoldTarget(now);
+      command_publisher_.publish(hold);
+      published_target_ = hold;
+      published_target_time_ = now;
+      have_published_target_ = true;
+      publishReady(false);
+      requestMode(fallback_mode_, now, false);
+      publishStatus("OBSTACLE_HAZARD_STOP_EXITING_OFFBOARD");
+      return;
+    }
     if (recovery_pending_ &&
         (now - recovery_started_).toSec() > return_recovery_timeout_) {
       recovery_pending_ = false;
@@ -937,8 +1490,10 @@ class SuperPx4CommandBridge {
     }
 
     if (px4_mode_ != offboard_mode_) {
-      hold_target_latched_ = false;
-      publishCheckedTarget(makeFixedHoldTarget(now, true), now);
+      // Prestream a hold captured from the aircraft's current pose. Reusing a
+      // planner endpoint here made the second 2026-10-14 attempt command the
+      // previous goal, 6.1 m away, at the instant OFFBOARD engaged.
+      publishCheckedTarget(makeFixedHoldTarget(now, false), now);
       publishReady(false);
       if (require_armed_for_offboard_ && !mavros_armed_) {
         publishStatus("PRESTREAM_WAIT_ARMED");
@@ -949,6 +1504,12 @@ class SuperPx4CommandBridge {
       } else if (!automatic_mode_switch_) {
         publishStatus("PRESTREAM_WAIT_MANUAL_OFFBOARD");
       } else {
+        std::string entry_failure;
+        if (!offboardEntrySafe(now, &entry_failure)) {
+          valid_command_ = false;
+          latchFault(entry_failure);
+          return;
+        }
         requestMode(offboard_mode_, now, true);
         publishStatus("REQUESTING_OFFBOARD");
       }
@@ -999,13 +1560,24 @@ class SuperPx4CommandBridge {
         }
       }
       auto output_target = blendReacquire(desired, now);
+      // PX4 adds MPC_XY_P/MPC_Z_P times position error to the trajectory
+      // feed-forward velocity. Govern that sum before publishing while
+      // preserving SUPER's collision-checked position reference. Routine
+      // limiting continues the mission; only an infeasible/abnormal tracking
+      // error exits OFFBOARD.
+      if (!governPredictedTrackingSpeed(&output_target)) {
+        valid_command_ = false;
+        latchFault("SPEED_GOVERNOR_INFEASIBLE");
+        return;
+      }
       if (!publishCheckedTarget(output_target, now)) return;
       published_source_trajectory_id_=latest_source_trajectory_id_;
       if (hold_requested_ && outputNearRest(output_target)) {
         activateExplorationHold(now);
       }
       publishReady(true);
-      publishStatus(reacquire_active_ ? "SMOOTH_REACQUIRE" : "STREAMING");
+      publishStatus(speed_governor_active_ ? "SPEED_GOVERNING" :
+                    (reacquire_active_ ? "SMOOTH_REACQUIRE" : "STREAMING"));
     } else {
       valid_command_ = false;
       resetReacquire();
@@ -1026,6 +1598,9 @@ class SuperPx4CommandBridge {
   }
 
   void latchFault(const std::string& reason) {
+    if (auto_enabled_ && mission_enabled_) {
+      publishFault(reason);
+    }
     const bool returnable_command_fault =
         reason == "HEIGHT_GEOFENCE" || reason == "HORIZONTAL_GEOFENCE" ||
         reason == "SPEED_LIMIT" || reason == "ACCELERATION_LIMIT" ||
@@ -1091,19 +1666,23 @@ class SuperPx4CommandBridge {
       }
       return;
     }
-    if (localPoseFresh(now))
-      publishCheckedTarget(makeFixedHoldTarget(now, true), now);
+    if (localPoseFresh(now) &&
+        !publishCheckedTarget(makeFixedHoldTarget(now, true), now)) return;
     requestMode(fallback_mode_, now, false);
     publishStatus("EXITING_OFFBOARD_TO_" + fallback_mode_);
   }
 
   void requestMode(const std::string& mode, const ros::Time& now,
                    bool entering_offboard) {
-    if (!last_mode_request_time_.isZero() &&
+    // A safety exit must not wait behind the throttle for the immediately
+    // preceding OFFBOARD-entry request. Throttle only repeated requests for
+    // the same mode.
+    if (mode == last_requested_mode_ && !last_mode_request_time_.isZero() &&
         (now - last_mode_request_time_).toSec() < mode_request_interval_) {
       return;
     }
     last_mode_request_time_ = now;
+    last_requested_mode_ = mode;
     mavros_msgs::SetMode request;
     request.request.base_mode = 0;
     request.request.custom_mode = mode;
@@ -1141,6 +1720,13 @@ class SuperPx4CommandBridge {
       publishStatus("WAIT_MAVROS");
     } else if (!localPoseFresh(ros::Time::now())) {
       publishStatus("WAIT_LOCAL_POSE");
+    } else if (!localVelocityFresh(ros::Time::now())) {
+      publishStatus("WAIT_LOCAL_VELOCITY");
+    } else if (obstacle_safety_enabled_ &&
+               !obstacleCloudFresh(ros::Time::now())) {
+      publishStatus("WAIT_OBSTACLE_CLOUD");
+    } else if (obstacle_safety_enabled_ && !obstacle_safety_ready_) {
+      publishStatus("WAIT_OBSTACLE_SURFACE_COVERAGE");
     } else if (fault_latched_) {
       publishStatus("FAULT_LATCHED_TOGGLE_AUTO_LOW");
     } else if (require_armed_for_offboard_ && !mavros_armed_) {
@@ -1149,6 +1735,8 @@ class SuperPx4CommandBridge {
       publishStatus("PRESTREAM");
     } else if (!valid_command_) {
       publishStatus("WAIT_SUPER_COMMAND");
+    } else if (speed_governor_active_) {
+      publishStatus("SPEED_GOVERNING");
     } else {
       publishStatus("READY");
     }
@@ -1175,10 +1763,25 @@ class SuperPx4CommandBridge {
     last_status_ = status;
   }
 
+  void publishFault(const std::string& reason) {
+    if (!reason.empty() && !active_fault_reason_.empty()) {
+      return;
+    }
+    if (fault_published_ && reason == active_fault_reason_) {
+      return;
+    }
+    std_msgs::String message;
+    message.data = reason;
+    fault_publisher_.publish(message);
+    active_fault_reason_ = reason;
+    fault_published_ = true;
+  }
+
   ros::NodeHandle nh_;
   ros::NodeHandle private_nh_;
   ros::Subscriber command_subscriber_;
   ros::Subscriber alignment_subscriber_;
+  ros::Subscriber sensor_position_subscriber_;
   ros::Subscriber mission_subscriber_;
   ros::Subscriber auto_enable_subscriber_;
   ros::Subscriber vision_subscriber_;
@@ -1187,15 +1790,22 @@ class SuperPx4CommandBridge {
   ros::Subscriber exploration_status_subscriber_;
   ros::Subscriber state_subscriber_;
   ros::Subscriber local_pose_subscriber_;
+  ros::Subscriber local_velocity_subscriber_;
+  ros::Subscriber task_odometry_subscriber_;
+  ros::Subscriber obstacle_cloud_subscriber_;
   ros::Publisher command_publisher_;
   ros::Publisher ready_publisher_;
   ros::Publisher status_publisher_;
+  ros::Publisher fault_publisher_;
   ros::Publisher return_request_publisher_;
   ros::ServiceServer enable_service_;
   ros::ServiceClient set_mode_client_;
   ros::Timer output_timer_;
 
   geometry_msgs::PoseStamped latest_local_pose_;
+  mine_uav_control::ObstaclePoint latest_task_position_;
+  std::map<std::tuple<int, int, int>, mine_uav_control::ObstaclePoint>
+      obstacle_voxels_;
   mavros_msgs::PositionTarget latest_target_;
   mavros_msgs::PositionTarget latched_hold_target_;
   mavros_msgs::PositionTarget previous_target_;
@@ -1212,9 +1822,12 @@ class SuperPx4CommandBridge {
   bool brake_active_{false};
   std::string command_topic_;
   std::string output_topic_;
+  std::string alignment_topic_;
   std::string expected_frame_;
   std::string auto_enable_topic_;
   std::string exploration_status_topic_;
+  std::string obstacle_cloud_topic_;
+  std::string task_odometry_topic_;
   std::string offboard_mode_{"OFFBOARD"};
   std::string fallback_mode_{"POSCTL"};
   double return_recovery_timeout_{12.0};
@@ -1226,11 +1839,17 @@ class SuperPx4CommandBridge {
   ros::Time return_route_wait_since_;
   std::string px4_mode_;
   std::string last_status_;
+  std::string active_fault_reason_;
+  std::string last_requested_mode_;
   ros::Time last_command_time_;
   ros::Time latest_source_stamp_;
   uint32_t latest_source_trajectory_id_{0};
   uint32_t published_source_trajectory_id_{0};
   ros::Time last_local_pose_time_;
+  ros::Time last_local_velocity_time_;
+  ros::Time last_task_odometry_time_;
+  ros::Time last_obstacle_cloud_time_;
+  ros::Time overspeed_since_;
   ros::Time prestream_started_;
   ros::Time last_mode_request_time_;
   ros::Time previous_target_time_;
@@ -1239,6 +1858,14 @@ class SuperPx4CommandBridge {
   double local_pose_timeout_{0.5};
   double output_rate_{50.0};
   double max_speed_{1.0};
+  double max_measured_speed_{1.0};
+  double max_predicted_speed_{1.0};
+  double tracking_position_gain_xy_{0.9};
+  double tracking_position_gain_z_{1.0};
+  double max_governor_tracking_error_{0.65};
+  double measured_speed_timeout_{0.5};
+  double overspeed_duration_{0.10};
+  double max_offboard_entry_speed_{0.20};
   double max_acceleration_{3.0};
   double max_yaw_rate_{0.75};
   double max_position_rate_{1.10};
@@ -1254,17 +1881,37 @@ class SuperPx4CommandBridge {
   double max_height_{1.8};
   double height_clamp_tolerance_{0.25};
   double max_alignment_translation_change_{0.05};
-  double max_alignment_yaw_change_{0.05};
+  double max_alignment_rotation_change_{0.05};
   double alignment_x_{0.0};
   double alignment_y_{0.0};
   double alignment_z_{0.0};
-  double alignment_yaw_{0.0};
+  mine_uav_control::Quaternion alignment_rotation_;
+  mine_uav_control::Vector3 sensor_position_in_body_;
   double prestream_duration_{1.0};
   double mode_request_interval_{1.0};
+  double obstacle_voxel_resolution_{0.10};
+  double obstacle_cloud_timeout_{0.35};
+  double live_horizontal_clearance_{0.8};
+  double live_vertical_half_height_{0.5};
+  double obstacle_min_z_{-1.0e6};
+  double coverage_guard_distance_{2.5};
+  double coverage_lateral_half_width_{2.5};
+  double coverage_vertical_half_height_{1.5};
+  double coverage_min_horizontal_span_{0.6};
+  double coverage_min_vertical_span_{0.6};
+  double latest_planning_velocity_x_{1.0};
+  double latest_planning_velocity_y_{0.0};
+  double last_planning_forward_x_{1.0};
+  double last_planning_forward_y_{0.0};
+  int coverage_min_points_{30};
+  int coverage_confirm_frames_{3};
+  int coverage_reject_frames_{2};
+  int max_obstacle_points_{20000};
   bool use_acceleration_{true};
   bool automatic_mode_switch_{true};
   bool require_armed_for_offboard_{true};
   bool alignment_ready_{false};
+  bool have_sensor_position_{false};
   bool mission_enabled_{false};
   bool auto_enabled_{false};
   bool vision_healthy_{false};
@@ -1275,10 +1922,21 @@ class SuperPx4CommandBridge {
   bool mavros_armed_{false};
   bool software_enabled_{true};
   bool fault_latched_{false};
+  bool fault_published_{false};
   bool offboard_owned_{false};
   bool exit_requested_{false};
   bool valid_command_{false};
   bool have_local_pose_{false};
+  bool have_local_velocity_{false};
+  bool have_task_odometry_{false};
+  bool have_obstacle_cloud_{false};
+  bool obstacle_safety_enabled_{false};
+  bool obstacle_safety_ready_{true};
+  bool obstacle_hazard_stop_active_{false};
+  int obstacle_coverage_complete_streak_{0};
+  int obstacle_coverage_incomplete_streak_{0};
+  bool speed_governor_active_{false};
+  double latest_measured_speed_{0.0};
   mavros_msgs::PositionTarget published_target_;
   ros::Time published_target_time_;
   bool have_published_target_{false};

@@ -1,4 +1,5 @@
 #include "mine_uav_control/motion_continuity.hpp"
+#include "mine_uav_control/tracking_speed_governor.hpp"
 #include <gtest/gtest.h>
 using namespace mine_uav_control;
 static const char* check(const MotionSample& a,const MotionSample& b,double dt=.02) { return motionTransitionFailure(a,b,dt,1.1,1.75,6.0,.75); }
@@ -19,6 +20,33 @@ TEST(MotionContinuity, YawWrapIsNotAnArtificialTurn) { MotionSample a,b;a.yaw=M_
 TEST(MotionContinuity, NinetyDegreeYawStepRejected) { MotionSample a,b;b.yaw=M_PI_2;EXPECT_NE(nullptr,check(a,b)); }
 TEST(MotionContinuity, BackwardAndDuplicateTimeRejected) { MotionSample a;EXPECT_NE(nullptr,check(a,a,-.1));EXPECT_NE(nullptr,check(a,a,0)); }
 TEST(MotionContinuity, FutureAndStaleMessagesNotRelabelledFresh) { EXPECT_FALSE(sourceStampFresh(10,11,2));EXPECT_FALSE(sourceStampFresh(10,7,2));EXPECT_TRUE(sourceStampFresh(10,9.9,2)); }
+
+TEST(TrackingSpeedGovernor, LeavesRequestBelowLimitUnchanged) {
+  const auto result = governTrackingSpeed(
+      {{0.2, 0.0, 0.0}}, {{0.1, 0.0, 0.0}}, {{0.9, 0.9, 1.0}}, 0.4);
+  ASSERT_TRUE(result.valid);
+  EXPECT_FALSE(result.active);
+  EXPECT_NEAR(result.feedforward_velocity[0], 0.2, 1e-12);
+  EXPECT_NEAR(result.closed_loop_velocity[0], 0.29, 1e-12);
+}
+
+TEST(TrackingSpeedGovernor, CompensatesPositionPursuitWithoutAborting) {
+  const auto result = governTrackingSpeed(
+      {{0.3, 0.0, 0.0}}, {{0.15, 0.0, 0.0}}, {{0.9, 0.9, 1.0}}, 0.4);
+  ASSERT_TRUE(result.valid);
+  EXPECT_TRUE(result.active);
+  EXPECT_NEAR(result.feedforward_velocity[0], 0.265, 1e-12);
+  EXPECT_NEAR(result.closed_loop_velocity[0], 0.4, 1e-12);
+}
+
+TEST(TrackingSpeedGovernor, ProjectsTheCombinedThreeDimensionalVector) {
+  const auto result = governTrackingSpeed(
+      {{0.3, 0.0, 0.0}}, {{0.0, 0.3, 0.2}}, {{0.9, 0.9, 1.0}}, 0.4);
+  ASSERT_TRUE(result.valid);
+  EXPECT_TRUE(result.active);
+  EXPECT_NEAR(norm3(result.closed_loop_velocity), 0.4, 1e-12);
+  EXPECT_LT(result.scale, 1.0);
+}
 
 
 TEST(MotionContinuity, QuinticOffsetMatchesBothBoundaryStates) {

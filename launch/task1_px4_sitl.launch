@@ -136,6 +136,14 @@
         name="fastlio_px4_vision_bridge" output="screen" required="true">
     <rosparam command="load"
               file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
+    <!-- Temporary real-aircraft mounting compensation is disabled in SITL. -->
+    <param name="temporary_sensor_roll_in_body_deg" value="0.0"/>
+    <param name="temporary_sensor_pitch_in_body_deg" value="0.0"/>
+    <param name="temporary_sensor_yaw_in_body_deg" value="0.0"/>
+    <param name="sensor_position_in_body_x" value="0.0"/>
+    <param name="sensor_position_in_body_y" value="0.0"/>
+    <param name="sensor_position_in_body_z" value="0.0"/>
+    <param name="require_fastlio_health" value="false"/>
   </node>
 
   <!-- Build the planner cloud from the real FAST-LIO2 pose and the same raw

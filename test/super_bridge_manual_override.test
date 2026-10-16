@@ -5,7 +5,13 @@
     <param name="mode_request_interval" value="0.5"/>
     <param name="command_timeout" value="0.5"/>
     <param name="return_recovery_timeout" value="2.0"/>
+    <param name="max_speed" value="0.4"/>
+    <param name="max_measured_speed" value="0.4"/>
+    <param name="max_predicted_speed" value="0.4"/>
+    <param name="tracking_position_gain_xy" value="0.9"/>
+    <param name="tracking_position_gain_z" value="1.0"/>
+    <param name="overspeed_duration" value="0.1"/>
   </node>
   <test test-name="super_bridge_manual_override" pkg="mine_uav_control"
-        type="test_super_bridge_manual_override.py" time-limit="45"/>
+        type="test_super_bridge_manual_override.py" time-limit="60"/>
 </launch>

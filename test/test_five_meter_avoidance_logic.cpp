@@ -46,4 +46,43 @@ TEST(FiveMeterAvoidanceLogic, NormalizesCapturedYaw) {
   EXPECT_NEAR(goal.y, 0.0, 1e-9);
 }
 
+TEST(FiveMeterAvoidanceLogic, PullsHorizontalGoalBackThroughPitchAlignment) {
+  const auto alignment = mine_uav_control::quaternionFromRpy(
+      0.0, 25.0 * kPi / 180.0, 0.0);
+  const auto goal = mine_uav_control::makeOutputHorizontalForwardGoal(
+      1.0, 2.0, 3.0, 0.0, 5.0, alignment);
+
+  EXPECT_NEAR(goal.x, 1.0 + 5.0 * std::cos(25.0 * kPi / 180.0), 1e-9);
+  EXPECT_NEAR(goal.y, 2.0, 1e-9);
+  EXPECT_NEAR(goal.z, 3.0 + 5.0 * std::sin(25.0 * kPi / 180.0), 1e-9);
+
+  const auto output_displacement = mine_uav_control::rotateVector(
+      alignment, mine_uav_control::Vector3(
+          goal.x - 1.0, goal.y - 2.0, goal.z - 3.0));
+  EXPECT_NEAR(output_displacement.x, 5.0, 1e-9);
+  EXPECT_NEAR(output_displacement.y, 0.0, 1e-9);
+  EXPECT_NEAR(output_displacement.z, 0.0, 1e-9);
+}
+
+TEST(FiveMeterAvoidanceLogic, PreservesAlignedHorizontalHeading) {
+  const auto alignment = mine_uav_control::multiply(
+      mine_uav_control::quaternionFromRpy(0.0, 25.0 * kPi / 180.0, 0.0),
+      mine_uav_control::quaternionFromRpy(0.0, 0.0, -0.4));
+  const double raw_yaw = 0.7;
+  const auto goal = mine_uav_control::makeOutputHorizontalForwardGoal(
+      0.0, 0.0, 0.0, raw_yaw, 5.0, alignment);
+  const auto output_displacement = mine_uav_control::rotateVector(
+      alignment, mine_uav_control::Vector3(goal.x, goal.y, goal.z));
+  const auto output_raw_heading = mine_uav_control::rotateVector(
+      alignment, mine_uav_control::Vector3(
+          std::cos(raw_yaw), std::sin(raw_yaw), 0.0));
+
+  EXPECT_NEAR(std::hypot(output_displacement.x, output_displacement.y),
+              5.0, 1e-9);
+  EXPECT_NEAR(output_displacement.z, 0.0, 1e-9);
+  EXPECT_NEAR(std::atan2(output_displacement.y, output_displacement.x),
+              std::atan2(output_raw_heading.y, output_raw_heading.x), 1e-9);
+  EXPECT_NEAR(goal.yaw, raw_yaw, 1e-9);
+}
+
 }  // namespace

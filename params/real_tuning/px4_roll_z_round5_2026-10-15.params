@@ -1,0 +1,7 @@
+# NOTE: 2026-10-15 conservative roll and vertical-response round 5
+# Applied only while disarmed and landed. Forced FCU parameter pull and live readback verified.
+# Round-4 yaw and round-3 horizontal gains are preserved; roll I/D and Z position/I/D remain unchanged.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_ROLLRATE_P	0.160	9
+1	1	MPC_Z_VEL_P_ACC	4.400	9
+1	1	MPC_THR_HOVER	0.580	9

@@ -13,6 +13,8 @@
   <arg name="start_super" default="true"/>
   <arg name="rviz" default="false"/>
   <arg name="fallback_mode" default="POSCTL"/>
+  <!-- Override to 1.0 or 3.0 for staged validation before the full run. -->
+  <arg name="goal_distance" default="5.0"/>
   <!-- The boot wrapper discovers this value.  Manual launches must provide it
        explicitly so this safety-critical launch never guesses a fixed tty. -->
   <arg name="px4_device"/>
@@ -21,15 +23,33 @@
   <arg name="record_flight" default="false"/>
   <arg name="flight_log_dir"
        default="/home/nuc/flight_logs/five_meter/manual"/>
+  <arg name="download_px4_ulog" default="true"/>
 
   <group if="$(arg record_flight)">
-    <!-- Record every ROS topic, including Livox/Fast-LIO data, so a flight can
-         be reconstructed without guessing the failure source.  Five-minute
-         splits limit power-loss damage to the active segment.  A recorder
-         failure must not tear down the in-flight control chain. -->
+    <!-- Record every ROS topic except the two high-rate Fast-LIO registered
+         clouds.  They are duplicate intermediate products that can be rebuilt
+         from the retained /livox/lidar + /livox/imu stream; /Odometry and the
+         gated planner input cloud remain recorded.  Five-minute splits limit
+         power-loss damage to the active segment.  A recorder failure must not
+         tear down the in-flight control chain. -->
     <node pkg="rosbag" type="record" name="five_meter_flight_recorder"
           output="screen" required="false"
-          args="--all --lz4 --split --duration=5m --buffsize=1024 --min-space=100G --output-name=$(arg flight_log_dir)/ros_all"/>
+          args="--all --exclude=^/(cloud_registered|cloud_registered_body)$ --lz4 --split --duration=5m --repeat-latched --publish --buffsize=256 --min-space=100G --output-name=$(arg flight_log_dir)/ros_all"/>
+
+    <!-- PX4 uORB/internal estimator data is not present in a ROS bag.  Fetch
+         the just-finished ULog only after disarm and keep it beside the bag.
+         This node is deliberately non-required: logging must never tear down
+         the localization or control chain. -->
+    <node if="$(arg download_px4_ulog)"
+          pkg="mine_uav_control" type="px4_ulog_downloader.py"
+          name="five_meter_px4_ulog_downloader"
+          output="screen" required="false">
+      <param name="output_directory" value="$(arg flight_log_dir)"/>
+      <param name="post_disarm_delay_s" value="5.0"/>
+      <param name="request_block_bytes" value="46080"/>
+      <param name="request_timeout_s" value="4.0"/>
+      <param name="max_retries" value="8"/>
+    </node>
   </group>
 
   <node pkg="mine_uav_control" type="task1_real_time_guard.py"
@@ -58,6 +78,7 @@
         name="five_meter_avoidance_test" output="screen" required="true">
     <rosparam command="load"
               file="$(find mine_uav_control)/config/five_meter_avoidance_test.yaml"/>
+    <param name="goal_distance" value="$(arg goal_distance)"/>
   </node>
 
   <group if="$(arg start_super)">
@@ -70,5 +91,13 @@
 
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
     <arg name="fallback_mode" value="$(arg fallback_mode)"/>
+    <!-- Dedicated first-flight hard limits. max_speed rejects planner output;
+         max_predicted_speed governs planner velocity plus PX4 position-error
+         pursuit; max_measured_speed independently catches actual overspeed. -->
+    <arg name="max_speed" value="0.8"/>
+    <arg name="max_measured_speed" value="0.8"/>
+    <!-- Keep 0.10 m/s of control margin below the measured hard limit. -->
+    <arg name="max_predicted_speed" value="0.7"/>
+    <arg name="max_offboard_entry_speed" value="0.25"/>
   </include>
 </launch>

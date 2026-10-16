@@ -112,6 +112,8 @@ if(CATKIN_ENABLE_TESTING)
     target_link_libraries(test_motion_continuity ${GTEST_MAIN_LIBRARIES})
   endif()
   add_rostest(test/super_bridge_manual_override.test)
+  add_rostest(test/five_meter_command_fault_abort.test)
+  add_rostest(test/task1_planning_frame.test)
   add_rostest(test/shaft_mission_ros.test)
   add_rostest(test/mission_scheduler_edges.test)
   catkin_add_nosetests(test/test_sitl_shaft_router_lifecycle.py)
@@ -120,6 +122,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
   catkin_add_nosetests(test/test_sitl_shaft_optical_flow_depth.py)
   catkin_add_nosetests(test/test_task1_sitl_downward_range_filter.py)
+  catkin_add_nosetests(test/test_px4_ulog_downloader.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp
@@ -160,6 +163,18 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_five_meter_avoidance_logic)
     target_link_libraries(test_five_meter_avoidance_logic ${GTEST_MAIN_LIBRARIES})
   endif()
+  catkin_add_gtest(test_fastlio_mount_alignment
+    test/test_fastlio_mount_alignment.cpp
+  )
+  if(TARGET test_fastlio_mount_alignment)
+    target_link_libraries(test_fastlio_mount_alignment ${GTEST_MAIN_LIBRARIES})
+  endif()
+  catkin_add_gtest(test_obstacle_safety
+    test/test_obstacle_safety.cpp
+  )
+  if(TARGET test_obstacle_safety)
+    target_link_libraries(test_obstacle_safety ${GTEST_MAIN_LIBRARIES})
+  endif()
   catkin_add_gtest(test_outbound_goal_contract
     test/test_outbound_goal_contract.cpp
   )
@@ -191,6 +206,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
 catkin_install_python(PROGRAMS
   scripts/task1_sitl_downward_range_filter.py
   scripts/task1_real_time_guard.py
+  scripts/px4_ulog_downloader.py
   scripts/analyze_task1_height_contract.py
   scripts/analyze_task1_sitl_bag.py
   scripts/ground_station.py

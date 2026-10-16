@@ -1,0 +1,6 @@
+# NOTE: 2026-10-15 yaw-rate proportional round 7, based on ULog id248/id249.
+# Applied to the real FCU only after connected=true, armed=false and landed_state=1.
+# A forced 1093-parameter pull and live readback verified the value.
+# MC_YAW_P, MC_YAWRATE_I/D and MC_YR_INT_LIM remain unchanged from round 6.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MC_YAWRATE_P	0.320	9

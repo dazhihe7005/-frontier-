@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 
+#include <geometry_msgs/TransformStamped.h>
 #include <mavros_msgs/RCIn.h>
 #include <mavros_msgs/State.h>
 #include <nav_msgs/Odometry.h>
@@ -50,13 +51,16 @@ class FiveMeterAvoidanceTest {
     private_node_.param("state_topic", state_topic_,
                         std::string("/mavros/state"));
     private_node_.param("odometry_topic", odometry_topic_,
-                        std::string("/Odometry"));
+                        std::string("/mine_uav/task1/odometry"));
     private_node_.param("cloud_topic", cloud_topic_,
                         std::string("/mine_uav/task1/cloud_registered"));
     private_node_.param("goal_topic", goal_topic_,
                         std::string("/mine_uav/super/goal_command"));
+    private_node_.param(
+        "alignment_topic", alignment_topic_,
+        std::string("/mine_uav/task1/planning_to_px4_alignment"));
     private_node_.param("world_frame", world_frame_,
-                        std::string("camera_init"));
+                        std::string("task1_planning"));
     private_node_.param("trigger_channel", trigger_channel_, 6);
     private_node_.param("low_threshold", low_threshold_, 1300);
     private_node_.param("high_threshold", high_threshold_, 1700);
@@ -89,12 +93,17 @@ class FiveMeterAvoidanceTest {
         &FiveMeterAvoidanceTest::odometryCallback, this);
     cloud_subscriber_ = node_.subscribe(cloud_topic_, 5,
         &FiveMeterAvoidanceTest::cloudCallback, this);
+    alignment_subscriber_ = node_.subscribe(
+        alignment_topic_, 1, &FiveMeterAvoidanceTest::alignmentCallback, this);
     accepted_subscriber_ = node_.subscribe(
         "/mine_uav/super/accepted_goal_id", 10,
         &FiveMeterAvoidanceTest::acceptedCallback, this);
     rejected_subscriber_ = node_.subscribe(
         "/mine_uav/super/rejected_goal_id", 10,
         &FiveMeterAvoidanceTest::rejectedCallback, this);
+    command_fault_subscriber_ = node_.subscribe(
+        "/mine_uav/task1/command_fault", 1,
+        &FiveMeterAvoidanceTest::commandFaultCallback, this);
 
     goal_publisher_ = node_.advertise<super_planner::GoalCommand>(
         goal_topic_, 10, true);
@@ -208,10 +217,44 @@ class FiveMeterAvoidanceTest {
     if (phase_ == Phase::kWarmup) ++warmup_cloud_count_;
   }
 
+  void alignmentCallback(
+      const geometry_msgs::TransformStamped::ConstPtr& message) {
+    const auto& q = message->transform.rotation;
+    const double norm =
+        std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (!std::isfinite(q.x) || !std::isfinite(q.y) ||
+        !std::isfinite(q.z) || !std::isfinite(q.w) ||
+        !std::isfinite(norm) || norm < 1e-6) {
+      ROS_ERROR_THROTTLE(1.0,
+                         "Five-metre test rejected invalid alignment");
+      return;
+    }
+    if (!world_frame_.empty() && message->child_frame_id != world_frame_) {
+      ROS_ERROR_THROTTLE(
+          1.0,
+          "Five-metre test rejected alignment child frame '%s'; expected '%s'",
+          message->child_frame_id.c_str(), world_frame_.c_str());
+      return;
+    }
+    const auto rotation = mine_uav_control::normalized(
+        mine_uav_control::Quaternion(q.x, q.y, q.z, q.w));
+    if (mine_uav_control::quaternionAngularDistance(
+            rotation, mine_uav_control::Quaternion()) > 1e-3) {
+      have_alignment_ = false;
+      ROS_ERROR_THROTTLE(
+          1.0, "Five-metre test requires a pre-levelled planning frame");
+      return;
+    }
+    have_alignment_ = true;
+  }
+
   void acceptedCallback(const std_msgs::UInt64::ConstPtr& message) {
     if (phase_ == Phase::kActive && message->data == active_goal_id_) {
       if (!goal_accepted_) {
         goal_accepted_ = true;
+        // Do not let the command bridge begin its OFFBOARD prestream until
+        // SUPER has committed a trajectory for this exact goal lifecycle.
+        publishAutomaticControl(true);
         ROS_INFO("SUPER accepted five-metre test goal %llu",
                  static_cast<unsigned long long>(active_goal_id_));
       }
@@ -221,6 +264,15 @@ class FiveMeterAvoidanceTest {
   void rejectedCallback(const std_msgs::UInt64::ConstPtr& message) {
     if (phase_ == Phase::kActive && message->data == active_goal_id_) {
       finish(false, "SUPER_REJECTED_GOAL");
+    }
+  }
+
+  void commandFaultCallback(const std_msgs::String::ConstPtr& message) {
+    if ((phase_ == Phase::kWarmup || phase_ == Phase::kActive) &&
+        !message->data.empty()) {
+      ROS_ERROR("Five-metre test aborting on command bridge fault: %s",
+                message->data.c_str());
+      finish(false, "COMMAND_BRIDGE_FAULT_" + message->data);
     }
   }
 
@@ -304,6 +356,11 @@ class FiveMeterAvoidanceTest {
       ROS_ERROR("Five-metre test start rejected: PX4 is not connected and armed");
       return;
     }
+    if (!have_alignment_) {
+      publishStatus("IDLE", "START_REJECTED_ALIGNMENT_NOT_READY");
+      ROS_ERROR("Five-metre test start rejected: alignment is not ready");
+      return;
+    }
     if (!have_odometry_ ||
         ageSeconds(last_odometry_time_, now) > odometry_timeout_) {
       publishStatus("IDLE", "START_REJECTED_ODOMETRY_NOT_FRESH");
@@ -351,7 +408,8 @@ class FiveMeterAvoidanceTest {
     const auto& pose = odometry_.pose.pose;
     const double yaw = yawFromQuaternion(pose.orientation);
     goal_ = mine_uav_control::makeForwardGoal(
-        pose.position.x, pose.position.y, pose.position.z, yaw, goal_distance_);
+        pose.position.x, pose.position.y, pose.position.z, yaw,
+        goal_distance_);
     activation_time_ = now;
     last_cloud_time_ = ros::Time();
     warmup_cloud_count_ = 0;
@@ -360,7 +418,10 @@ class FiveMeterAvoidanceTest {
     settled_since_ = ros::Time();
     phase_ = Phase::kWarmup;
     publishFinished(false);
-    publishAuthority(true);
+    // Perception must run during map warmup, but automatic flight authority
+    // remains inhibited until the newly published goal is accepted.
+    publishMissionSelection(true);
+    publishAutomaticControl(false);
     publishStatus("WAIT_DATA", "warming SUPER map with fresh gated clouds");
     ROS_INFO("Five-metre test armed at (%.2f, %.2f, %.2f), yaw %.1f deg; "
              "target (%.2f, %.2f, %.2f)",
@@ -468,9 +529,19 @@ class FiveMeterAvoidanceTest {
   }
 
   void publishAuthority(bool enabled) {
+    publishMissionSelection(enabled);
+    publishAutomaticControl(enabled);
+  }
+
+  void publishMissionSelection(bool enabled) {
     std_msgs::Bool message;
     message.data = enabled;
     goaf_enable_publisher_.publish(message);
+  }
+
+  void publishAutomaticControl(bool enabled) {
+    std_msgs::Bool message;
+    message.data = enabled;
     auto_enable_publisher_.publish(message);
   }
 
@@ -501,8 +572,10 @@ class FiveMeterAvoidanceTest {
   ros::Subscriber state_subscriber_;
   ros::Subscriber odometry_subscriber_;
   ros::Subscriber cloud_subscriber_;
+  ros::Subscriber alignment_subscriber_;
   ros::Subscriber accepted_subscriber_;
   ros::Subscriber rejected_subscriber_;
+  ros::Subscriber command_fault_subscriber_;
   ros::Publisher goal_publisher_;
   ros::Publisher auto_enable_publisher_;
   ros::Publisher goaf_enable_publisher_;
@@ -516,6 +589,7 @@ class FiveMeterAvoidanceTest {
   std::string odometry_topic_;
   std::string cloud_topic_;
   std::string goal_topic_;
+  std::string alignment_topic_;
   std::string world_frame_;
   int trigger_channel_{6};
   int low_threshold_{1300};
@@ -550,6 +624,8 @@ class FiveMeterAvoidanceTest {
   bool have_mavros_state_{false};
   bool mavros_connected_{false};
   bool mavros_armed_{false};
+
+  bool have_alignment_{false};
 
   nav_msgs::Odometry odometry_;
   bool have_odometry_{false};

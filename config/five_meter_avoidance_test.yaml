@@ -2,10 +2,11 @@
 # super_exploration_decider only in the dedicated five-metre launch files.
 rc_topic: /mavros/rc/in
 state_topic: /mavros/state
-odometry_topic: /Odometry
+odometry_topic: /mine_uav/task1/odometry
 cloud_topic: /mine_uav/task1/cloud_registered
 goal_topic: /mine_uav/super/goal_command
-world_frame: camera_init
+alignment_topic: /mine_uav/task1/planning_to_px4_alignment
+world_frame: task1_planning
 
 # MAVROS RC channel indexes are zero based: 6 is physical CH7.
 trigger_channel: 6
@@ -22,13 +23,16 @@ map_warmup_clouds: 5
 
 # A CH7 rising edge only requests the test. Keep task authority disabled until
 # the armed aircraft has held a genuinely stable hover for this full interval.
-start_max_speed: 0.20
+start_max_speed: 0.25
 start_max_vertical_speed: 0.10
 start_stable_time: 1.0
 start_check_timeout: 15.0
 
 goal_distance: 5.0
-goal_timeout: 25.0
+# At the 0.6 m/s nominal speed, the obstacle detour is longer
+# than the five-metre straight-line goal. Preserve safety limits while giving
+# the route enough time to finish.
+goal_timeout: 60.0
 goal_accept_timeout: 4.0
 position_tolerance: 0.35
 speed_tolerance: 0.20

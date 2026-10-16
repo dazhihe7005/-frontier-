@@ -10,6 +10,14 @@ readonly LOG_ROOT=/home/nuc/flight_logs/five_meter
 readonly RADAR_INTERFACE=enp89s0
 readonly RADAR_ADDRESS=192.168.1.10/24
 readonly MIN_FREE_KIB=$((100 * 1024 * 1024))
+GOAL_DISTANCE=${MINE_UAV_GOAL_DISTANCE:-5.0}
+if [[ ! "${GOAL_DISTANCE}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
+   ! awk -v value="${GOAL_DISTANCE}" \
+       'BEGIN { exit !(value >= 0.5 && value <= 5.0) }'; then
+  echo "MINE_UAV_GOAL_DISTANCE must be between 0.5 and 5.0 metres" >&2
+  exit 2
+fi
+readonly GOAL_DISTANCE
 
 find_px4_serial() {
   local candidate name resolved
@@ -116,6 +124,7 @@ mkdir -p "${run_dir}/config"
   echo "px4_serial=${PX4_SERIAL}"
   echo "radar_interface=${RADAR_INTERFACE}"
   echo "radar_address=${RADAR_ADDRESS}"
+  echo "goal_distance=${GOAL_DISTANCE}"
   df -h "${LOG_ROOT}"
   git -C "${PROJECT_DIR}" status --short 2>/dev/null || true
 } >"${run_dir}/startup_metadata.txt"
@@ -146,4 +155,5 @@ exec roslaunch "${PROJECT_DIR}/launch/five_meter_avoidance_real.launch" \
   rviz:=false \
   record_flight:=true \
   px4_device:="${PX4_SERIAL}" \
-  flight_log_dir:="${run_dir}"
+  flight_log_dir:="${run_dir}" \
+  goal_distance:="${GOAL_DISTANCE}"
