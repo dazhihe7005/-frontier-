@@ -18,6 +18,7 @@
 #include <sensor_msgs/BatteryState.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Empty.h>
 #include <std_msgs/String.h>
 #include <std_msgs/UInt64.h>
 #include <std_srvs/SetBool.h>
@@ -123,6 +124,7 @@ class SuperExplorationDecider {
   void decisionTimerCallback(const ros::TimerEvent& event);
   void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
+  void obstacleReplanCallback(const std_msgs::Empty::ConstPtr& msg);
   void rejectedGoalCallback(const std_msgs::UInt64::ConstPtr& msg);
   void acceptedGoalCallback(const std_msgs::UInt64::ConstPtr& msg);
   void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
@@ -225,6 +227,7 @@ class SuperExplorationDecider {
   std::unique_ptr<Synchronizer> synchronizer_;
 
   ros::Subscriber return_request_subscriber_;
+  ros::Subscriber obstacle_replan_subscriber_;
   ros::Subscriber rejected_goal_subscriber_;
   ros::Subscriber accepted_goal_subscriber_;
   ros::Subscriber mission_enable_subscriber_;
@@ -349,6 +352,7 @@ class SuperExplorationDecider {
   std::string goal_command_topic_;
   std::string world_frame_;
   std::string return_request_topic_;
+  std::string obstacle_replan_topic_;
   std::string mission_enable_topic_;
   std::string battery_topic_;
   std::string status_topic_;

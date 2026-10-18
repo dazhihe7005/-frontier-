@@ -57,11 +57,16 @@ live_horizontal_clearance: 0.65
 # measured-pose hold immediately. It is not a hard-fault radius: a transient
 # leaf/rock may clear and the current task then resumes smoothly.
 obstacle_monitor_horizontal_clearance: 0.8
-# Persistence in the 0.65--0.8 m monitored caution zone remains held while the map and
-# planner update; it does not exit OFFBOARD. If the persistent obstacle is
-# currently inside 0.65 m, the bridge exits.
+# Persistence in the 0.65--0.8 m monitored caution zone requests a fresh
+# frontier/SUPER route instead of waiting forever; it does not exit OFFBOARD.
+# The fixed hold is released only by a newly numbered trajectory. If the
+# persistent obstacle is currently inside 0.65 m, the bridge still exits.
 # A cloud timeout remains an immediate exit because monitoring is unavailable.
 obstacle_persistence_duration: 3.0
+obstacle_replan_topic: /mine_uav/exploration/obstacle_replan
+# Bounded time for the newly verified trajectory to leave the old soft zone.
+# Hard 0.65 m collision protection remains active throughout this window.
+obstacle_replan_escape_duration: 4.0
 obstacle_clear_confirm_frames: 3
 # Vertical cylinder measured from the aircraft centre: obstacle returns up to
 # 0.5 m below and above remain horizontally protected.

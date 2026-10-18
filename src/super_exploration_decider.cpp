@@ -96,6 +96,9 @@ SuperExplorationDecider::SuperExplorationDecider(
   return_request_subscriber_ = nh_.subscribe(
       return_request_topic_, 1,
       &SuperExplorationDecider::returnRequestCallback, this);
+  obstacle_replan_subscriber_ = nh_.subscribe(
+      obstacle_replan_topic_, 1,
+      &SuperExplorationDecider::obstacleReplanCallback, this);
   rejected_goal_subscriber_ = nh_.subscribe(
       "/mine_uav/super/rejected_goal_id", 10,
       &SuperExplorationDecider::rejectedGoalCallback, this);
@@ -144,6 +147,8 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("world_frame", world_frame_, std::string("world"));
   private_nh_.param("return_request_topic", return_request_topic_,
                     std::string("/mine_uav/exploration/return_home"));
+  private_nh_.param("obstacle_replan_topic", obstacle_replan_topic_,
+                    std::string("/mine_uav/exploration/obstacle_replan"));
   private_nh_.param("mission_enable_topic", mission_enable_topic_,
                     std::string("/mine_uav/mission/goaf_enable"));
   private_nh_.param("battery_topic", battery_topic_,
@@ -4032,6 +4037,27 @@ void SuperExplorationDecider::returnRequestCallback(
   if (message->data) {
     return_requested_ = true;
   }
+}
+
+void SuperExplorationDecider::obstacleReplanCallback(
+    const std_msgs::Empty::ConstPtr&) {
+  if (!enabled_ || !have_home_ || mission_finished_) return;
+
+  if (have_active_goal_) {
+    if (returning_home_ || dead_end_backtracking_) {
+      rejected_return_point_ = current_goal_.pose.position;
+      rejected_return_point_stamp_ = ros::Time::now();
+    } else {
+      // Do not immediately select the same endpoint that led into the
+      // persistent soft-obstacle hold. The next decision cycle first tries a
+      // verified lateral detour, then a fresh rolling-horizon segment.
+      rememberFailedGoal(current_goal_.pose.position);
+    }
+    cancelActiveGoal("persistent_obstacle_replan");
+  }
+  rejected_goal_retry_after_ = ros::Time();
+  publishStatus("OBSTACLE_REPLAN",
+                "persistent soft obstacle; selecting a fresh verified route");
 }
 
 void SuperExplorationDecider::rejectedGoalCallback(

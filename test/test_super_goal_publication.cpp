@@ -1677,6 +1677,21 @@ class SuperExplorationDeciderTestPeer {
     return decider.initial_accepted_goal_id_ == 42;
   }
 
+  static bool persistentObstacleReplanInvalidatesCurrentEndpoint(
+      SuperExplorationDecider& decider) {
+    decider.enabled_ = true;
+    decider.have_home_ = true;
+    decider.have_active_goal_ = true;
+    decider.active_goal_id_ = 17;
+    decider.current_goal_.pose.position.x = 4.0;
+    decider.current_goal_.pose.position.y = 1.0;
+    const std::size_t failed_before = decider.failed_goals_.size();
+    decider.obstacleReplanCallback(boost::make_shared<std_msgs::Empty>());
+    return !decider.have_active_goal_ && decider.active_goal_id_ == 0 &&
+           decider.failed_goals_.size() == failed_before + 1 &&
+           decider.rejected_goal_retry_after_.isZero();
+  }
+
   static void reset(SuperExplorationDecider& decider) {
     std_srvs::Trigger::Request request;
     std_srvs::Trigger::Response response;
@@ -2307,6 +2322,14 @@ TEST(SuperGoalPublication, InitialGoalHandshakeIsBoundToEachMissionEpoch) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   initialGoalHandshakeIsBoundToEachMissionEpoch(decider));
+}
+
+TEST(SuperGoalPublication, PersistentObstacleReplanInvalidatesCurrentEndpoint) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~obstacle_replan");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  persistentObstacleReplanInvalidatesCurrentEndpoint(decider));
 }
 
 }  // namespace mine_uav_control

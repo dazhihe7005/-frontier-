@@ -260,6 +260,7 @@ return_home_height_offset: 0.0
 return_max_height_above_home: 0.20
 battery_topic: "/mavros/battery"
 return_request_topic: "/mine_uav/exploration/return_home"
+obstacle_replan_topic: "/mine_uav/exploration/obstacle_replan"
 
 status_topic: "/mine_uav/exploration/status"
 finished_topic: "/mine_uav/exploration/finished"
