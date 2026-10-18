@@ -88,6 +88,8 @@ SuperExplorationDecider::SuperExplorationDecider(
       nh_.advertise<std_msgs::Bool>(model_complete_topic_, 1, true);
   coverage_status_publisher_ =
       nh_.advertise<std_msgs::String>(coverage_status_topic_, 1, true);
+  initial_goal_accepted_publisher_ =
+      nh_.advertise<std_msgs::UInt64>(initial_goal_accepted_topic_, 1, true);
   visualization_publisher_ =
       nh_.advertise<visualization_msgs::MarkerArray>(visualization_topic_, 1);
 
@@ -127,6 +129,7 @@ SuperExplorationDecider::SuperExplorationDecider(
   finished_publisher_.publish(false_msg);
   returning_publisher_.publish(false_msg);
   model_complete_publisher_.publish(false_msg);
+  publishInitialGoalAccepted(0);
   publishStatus("WAIT_DATA", "waiting for synchronized Fast-LIO2 data");
 }
 
@@ -155,6 +158,9 @@ bool SuperExplorationDecider::loadParameters() {
                     std::string("/mine_uav/exploration/model_complete"));
   private_nh_.param("coverage_status_topic", coverage_status_topic_,
                     std::string("/mine_uav/exploration/model_coverage"));
+  private_nh_.param(
+      "initial_goal_accepted_topic", initial_goal_accepted_topic_,
+      std::string("/mine_uav/exploration/accepted_initial_goal_id"));
   private_nh_.param("visualization_topic", visualization_topic_,
                     std::string("/mine_uav/exploration/frontiers"));
   private_nh_.param("require_mission_enable_edge",
@@ -194,10 +200,18 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("min_data_duration", min_data_duration_, min_data_duration_);
   private_nh_.param("candidate_spacing", candidate_spacing_, candidate_spacing_);
   private_nh_.param("vehicle_radius", vehicle_radius_, vehicle_radius_);
+  private_nh_.param("preferred_vehicle_radius", preferred_vehicle_radius_,
+                    vehicle_radius_);
   private_nh_.param("max_outbound_backtrack", max_outbound_backtrack_,
                     max_outbound_backtrack_);
   private_nh_.param("vertical_vehicle_radius", vertical_vehicle_radius_,
                     vertical_vehicle_radius_);
+  private_nh_.param("vertical_vehicle_clearance_below",
+                    vertical_vehicle_clearance_below_,
+                    vertical_vehicle_clearance_below_);
+  private_nh_.param("vertical_vehicle_clearance_above",
+                    vertical_vehicle_clearance_above_,
+                    vertical_vehicle_clearance_above_);
   private_nh_.param("min_observation_height_above_home",
                     min_observation_height_above_home_,
                     min_observation_height_above_home_);
@@ -211,6 +225,12 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("sync_slop", sync_slop_, sync_slop_);
   private_nh_.param("battery_return_threshold", battery_return_threshold_,
                     battery_return_threshold_);
+  private_nh_.param("battery_return_confirm_duration",
+                    battery_return_confirm_duration_,
+                    battery_return_confirm_duration_);
+  private_nh_.param("battery_return_hysteresis",
+                    battery_return_hysteresis_,
+                    battery_return_hysteresis_);
   private_nh_.param("battery_return_voltage", battery_return_voltage_,
                     battery_return_voltage_);
   private_nh_.param("return_home_height_offset", return_home_height_offset_,
@@ -262,6 +282,61 @@ bool SuperExplorationDecider::loadParameters() {
                     side_wall_min_range_);
   private_nh_.param("side_wall_max_range", side_wall_max_range_,
                     side_wall_max_range_);
+  private_nh_.param("corridor_centering_enabled",
+                    corridor_centering_enabled_,
+                    corridor_centering_enabled_);
+  private_nh_.param("corridor_centering_min_wall_points",
+                    corridor_centering_min_wall_points_,
+                    corridor_centering_min_wall_points_);
+  private_nh_.param("corridor_centering_confirm_frames",
+                    corridor_centering_confirm_frames_,
+                    corridor_centering_confirm_frames_);
+  private_nh_.param("corridor_centering_release_frames",
+                    corridor_centering_release_frames_,
+                    corridor_centering_release_frames_);
+  private_nh_.param("corridor_centering_max_width",
+                    corridor_centering_max_width_,
+                    corridor_centering_max_width_);
+  private_nh_.param("corridor_centering_filter_gain",
+                    corridor_centering_filter_gain_,
+                    corridor_centering_filter_gain_);
+  private_nh_.param("corridor_centering_max_center_jump",
+                    corridor_centering_max_center_jump_,
+                    corridor_centering_max_center_jump_);
+  private_nh_.param("corridor_centering_max_goal_shift",
+                    corridor_centering_max_goal_shift_,
+                    corridor_centering_max_goal_shift_);
+  private_nh_.param("corridor_preview_enabled", corridor_preview_enabled_,
+                    corridor_preview_enabled_);
+  private_nh_.param("corridor_preview_start_distance",
+                    corridor_preview_start_distance_,
+                    corridor_preview_start_distance_);
+  private_nh_.param("corridor_preview_distance", corridor_preview_distance_,
+                    corridor_preview_distance_);
+  private_nh_.param("corridor_preview_longitudinal_step",
+                    corridor_preview_longitudinal_step_,
+                    corridor_preview_longitudinal_step_);
+  private_nh_.param("corridor_preview_lateral_half_width",
+                    corridor_preview_lateral_half_width_,
+                    corridor_preview_lateral_half_width_);
+  private_nh_.param("corridor_preview_lateral_step",
+                    corridor_preview_lateral_step_,
+                    corridor_preview_lateral_step_);
+  private_nh_.param("corridor_preview_max_lateral_slope",
+                    corridor_preview_max_lateral_slope_,
+                    corridor_preview_max_lateral_slope_);
+  private_nh_.param("corridor_preview_min_slices",
+                    corridor_preview_min_slices_,
+                    corridor_preview_min_slices_);
+  private_nh_.param("corridor_preview_min_center_shift",
+                    corridor_preview_min_center_shift_,
+                    corridor_preview_min_center_shift_);
+  private_nh_.param("corridor_preview_min_width_contraction",
+                    corridor_preview_min_width_contraction_,
+                    corridor_preview_min_width_contraction_);
+  private_nh_.param("corridor_preview_max_goal_shift",
+                    corridor_preview_max_goal_shift_,
+                    corridor_preview_max_goal_shift_);
   private_nh_.param("front_obstacle_range", front_obstacle_range_,
                     front_obstacle_range_);
   private_nh_.param("front_obstacle_min_progress",
@@ -283,6 +358,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("forward_goal_lateral_search_width",
                     forward_goal_lateral_search_width_,
                     forward_goal_lateral_search_width_);
+  private_nh_.param("lateral_route_switch_clearance_advantage",
+                    lateral_route_switch_clearance_advantage_,
+                    lateral_route_switch_clearance_advantage_);
   private_nh_.param("max_task_lateral_offset", max_task_lateral_offset_,
                     max_task_lateral_offset_);
   private_nh_.param("forward_progress_weight", forward_progress_weight_,
@@ -420,10 +498,17 @@ bool SuperExplorationDecider::loadParameters() {
     throw std::invalid_argument("invalid occupancy evidence thresholds");
   }
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
+      !std::isfinite(vehicle_radius_) || vehicle_radius_ <= 0.0 ||
+      !std::isfinite(preferred_vehicle_radius_) ||
+      preferred_vehicle_radius_ < vehicle_radius_ ||
       !std::isfinite(mission_heading_offset_) ||
       !std::isfinite(max_outbound_backtrack_) || max_outbound_backtrack_ < 0.0 ||
       !std::isfinite(vertical_vehicle_radius_) ||
       (vertical_vehicle_radius_ != -1.0 && vertical_vehicle_radius_ <= 0.0) ||
+      !std::isfinite(vertical_vehicle_clearance_below_) ||
+      vertical_vehicle_clearance_below_ <= 0.0 ||
+      !std::isfinite(vertical_vehicle_clearance_above_) ||
+      vertical_vehicle_clearance_above_ <= 0.0 ||
       !std::isfinite(decision_rate_) || decision_rate_ <= 0.0 ||
       !std::isfinite(data_timeout_) || data_timeout_ <= 0.0 ||
       !std::isfinite(active_goal_data_grace_) ||
@@ -450,6 +535,39 @@ bool SuperExplorationDecider::loadParameters() {
       !std::isfinite(side_wall_min_range_) || side_wall_min_range_ <= 0.0 ||
       !std::isfinite(side_wall_max_range_) ||
       side_wall_max_range_ <= side_wall_min_range_ ||
+      corridor_centering_min_wall_points_ < 1 ||
+      corridor_centering_confirm_frames_ < 1 ||
+      corridor_centering_release_frames_ < 1 ||
+      !std::isfinite(corridor_centering_max_width_) ||
+      corridor_centering_max_width_ <= 2.0 * vehicle_radius_ ||
+      !std::isfinite(corridor_centering_filter_gain_) ||
+      corridor_centering_filter_gain_ <= 0.0 ||
+      corridor_centering_filter_gain_ > 1.0 ||
+      !std::isfinite(corridor_centering_max_center_jump_) ||
+      corridor_centering_max_center_jump_ <= 0.0 ||
+      !std::isfinite(corridor_centering_max_goal_shift_) ||
+      corridor_centering_max_goal_shift_ <= 0.0 ||
+      corridor_centering_max_goal_shift_ > forward_goal_lateral_search_width_ ||
+      !std::isfinite(corridor_preview_start_distance_) ||
+      corridor_preview_start_distance_ <= 0.0 ||
+      !std::isfinite(corridor_preview_distance_) ||
+      corridor_preview_distance_ < corridor_preview_start_distance_ ||
+      !std::isfinite(corridor_preview_longitudinal_step_) ||
+      corridor_preview_longitudinal_step_ <= 0.0 ||
+      !std::isfinite(corridor_preview_lateral_half_width_) ||
+      corridor_preview_lateral_half_width_ <= vehicle_radius_ ||
+      !std::isfinite(corridor_preview_lateral_step_) ||
+      corridor_preview_lateral_step_ <= 0.0 ||
+      !std::isfinite(corridor_preview_max_lateral_slope_) ||
+      corridor_preview_max_lateral_slope_ <= 0.0 ||
+      corridor_preview_min_slices_ < 2 ||
+      !std::isfinite(corridor_preview_min_center_shift_) ||
+      corridor_preview_min_center_shift_ < 0.0 ||
+      !std::isfinite(corridor_preview_min_width_contraction_) ||
+      corridor_preview_min_width_contraction_ < 0.0 ||
+      !std::isfinite(corridor_preview_max_goal_shift_) ||
+      corridor_preview_max_goal_shift_ <= 0.0 ||
+      corridor_preview_max_goal_shift_ > forward_goal_lateral_search_width_ ||
       !std::isfinite(front_obstacle_range_) || front_obstacle_range_ <= 0.0 ||
       !std::isfinite(front_obstacle_min_progress_) ||
       front_obstacle_min_progress_ < 0.0 ||
@@ -466,6 +584,8 @@ bool SuperExplorationDecider::loadParameters() {
       !std::isfinite(forward_goal_lateral_search_width_) ||
       forward_goal_lateral_search_width_ < 0.0 ||
       forward_goal_lateral_search_width_ > forward_corridor_half_width_ ||
+      !std::isfinite(lateral_route_switch_clearance_advantage_) ||
+      lateral_route_switch_clearance_advantage_ < 0.0 ||
       !std::isfinite(max_task_lateral_offset_) ||
       max_task_lateral_offset_ < forward_corridor_half_width_ ||
       !std::isfinite(forward_progress_weight_) ||
@@ -519,9 +639,12 @@ bool SuperExplorationDecider::loadParameters() {
       wall_coverage_end_standoff_distance_ >= wall_coverage_min_depth_ ||
       !std::isfinite(min_observation_height_above_home_) ||
       !std::isfinite(max_observation_height_above_home_) ||
-      min_observation_height_above_home_ < 0.0 ||
       max_observation_height_above_home_ <=
           min_observation_height_above_home_ ||
+      !std::isfinite(battery_return_confirm_duration_) ||
+      battery_return_confirm_duration_ < 0.0 ||
+      !std::isfinite(battery_return_hysteresis_) ||
+      battery_return_hysteresis_ < 0.0 ||
       side_wall_missing_confirm_frames_ < 1 ||
       front_obstacle_confirm_frames_ < 1 ||
       wall_coverage_max_gap_bins_ < 0 || three_wall_confirm_cycles_ < 1 ||
@@ -923,6 +1046,10 @@ void SuperExplorationDecider::updateDirectionalEvidence(
       front_obstacle_sector_deg_ * M_PI / 360.0;
   bool left_seen = false;
   bool right_seen = false;
+  std::vector<double> left_wall_laterals;
+  std::vector<double> right_wall_laterals;
+  left_wall_laterals.reserve(input.size() / 4);
+  right_wall_laterals.reserve(input.size() / 4);
   int front_point_count = 0;
   double front_min_lateral = std::numeric_limits<double>::infinity();
   double front_max_lateral = -std::numeric_limits<double>::infinity();
@@ -946,13 +1073,19 @@ void SuperExplorationDecider::updateDirectionalEvidence(
     }
 
     const double relative_angle = normalizeAngle(std::atan2(dy, dx) - yaw);
+    const double point_lateral = have_home_
+        ? -std::sin(yaw) * (point.x - home_pose_.pose.position.x) +
+              std::cos(yaw) * (point.y - home_pose_.pose.position.y)
+        : -std::sin(yaw) * dx + std::cos(yaw) * dy;
     if (std::abs(normalizeAngle(relative_angle - M_PI_2)) <=
         side_half_angle) {
       left_seen = true;
+      left_wall_laterals.push_back(point_lateral);
     }
     if (std::abs(normalizeAngle(relative_angle + M_PI_2)) <=
         side_half_angle) {
       right_seen = true;
+      right_wall_laterals.push_back(point_lateral);
     }
     if (horizontal_range <= front_obstacle_range_ &&
         std::abs(relative_angle) <= front_half_angle) {
@@ -1008,6 +1141,17 @@ void SuperExplorationDecider::updateDirectionalEvidence(
   left_wall_visible_ = left_seen;
   right_wall_visible_ = right_seen;
   front_obstacle_visible_ = front_seen;
+  double vehicle_lateral = 0.0;
+  if (have_home_) {
+    const double vehicle_dx =
+        pose.pose.position.x - home_pose_.pose.position.x;
+    const double vehicle_dy =
+        pose.pose.position.y - home_pose_.pose.position.y;
+    vehicle_lateral = -std::sin(mission_heading_yaw_) * vehicle_dx +
+                      std::cos(mission_heading_yaw_) * vehicle_dy;
+  }
+  updateCorridorCentering(left_wall_laterals, right_wall_laterals,
+                          vehicle_lateral, front_seen);
   if (!left_seen && !right_seen) {
     side_wall_missing_streak_ = std::min(
         side_wall_missing_streak_ + 1, side_wall_missing_confirm_frames_);
@@ -1020,6 +1164,150 @@ void SuperExplorationDecider::updateDirectionalEvidence(
   } else {
     front_obstacle_streak_ = 0;
   }
+}
+
+void SuperExplorationDecider::updateCorridorCentering(
+    const std::vector<double>& left_wall_laterals,
+    const std::vector<double>& right_wall_laterals,
+    double vehicle_lateral,
+    bool front_obstacle_visible) {
+  if (!corridor_centering_enabled_ || !have_home_) {
+    resetCorridorCentering();
+    return;
+  }
+
+  const CorridorCenterEstimate estimate = estimateCorridorCenter(
+      left_wall_laterals, right_wall_laterals, vehicle_lateral,
+      static_cast<std::size_t>(corridor_centering_min_wall_points_),
+      2.0 * vehicle_radius_, corridor_centering_max_width_);
+  const bool measurement_valid = estimate.valid && !front_obstacle_visible;
+  const bool was_valid = corridor_center_valid_;
+
+  if (!measurement_valid) {
+    corridor_center_confirm_streak_ = 0;
+    corridor_center_missing_streak_ = std::min(
+        corridor_center_missing_streak_ + 1,
+        corridor_centering_release_frames_);
+    if (corridor_center_missing_streak_ >=
+        corridor_centering_release_frames_) {
+      corridor_center_valid_ = false;
+    }
+  } else {
+    corridor_center_missing_streak_ = 0;
+    if (corridor_center_valid_ &&
+        std::abs(estimate.center_lateral - corridor_center_lateral_) >
+            corridor_centering_max_center_jump_) {
+      // A discontinuous medial-axis jump usually means a turn, branch or
+      // temporary structure. Release the old center immediately and demand a
+      // fresh confirmation instead of steering toward stale geometry.
+      corridor_center_valid_ = false;
+      corridor_center_confirm_streak_ = 0;
+    }
+
+    if (corridor_center_confirm_streak_ == 0 ||
+        std::abs(estimate.center_lateral -
+                 pending_corridor_center_lateral_) >
+            corridor_centering_max_center_jump_) {
+      pending_corridor_center_lateral_ = estimate.center_lateral;
+      pending_corridor_width_ = estimate.width;
+      corridor_center_confirm_streak_ = 1;
+    } else {
+      pending_corridor_center_lateral_ +=
+          corridor_centering_filter_gain_ *
+          (estimate.center_lateral - pending_corridor_center_lateral_);
+      pending_corridor_width_ += corridor_centering_filter_gain_ *
+          (estimate.width - pending_corridor_width_);
+      corridor_center_confirm_streak_ = std::min(
+          corridor_center_confirm_streak_ + 1,
+          corridor_centering_confirm_frames_);
+    }
+
+    if (corridor_center_valid_) {
+      corridor_center_lateral_ += corridor_centering_filter_gain_ *
+          (estimate.center_lateral - corridor_center_lateral_);
+      corridor_center_width_ += corridor_centering_filter_gain_ *
+          (estimate.width - corridor_center_width_);
+    } else if (corridor_center_confirm_streak_ >=
+               corridor_centering_confirm_frames_) {
+      corridor_center_valid_ = true;
+      corridor_center_lateral_ = pending_corridor_center_lateral_;
+      corridor_center_width_ = pending_corridor_width_;
+    }
+  }
+
+  if (!was_valid && corridor_center_valid_) {
+    ROS_INFO("Corridor centering enabled: center lateral %.2f m, width %.2f m",
+             corridor_center_lateral_, corridor_center_width_);
+  } else if (was_valid && !corridor_center_valid_) {
+    ROS_INFO("Corridor centering released; using clearance-only planning");
+  }
+}
+
+bool SuperExplorationDecider::corridorCenteringActive() const {
+  return corridor_centering_enabled_ && corridor_center_valid_ &&
+      left_wall_visible_ && right_wall_visible_ &&
+      !front_obstacle_visible_ &&
+      exploration_phase_ == ExplorationPhase::kForwardPriority;
+}
+
+void SuperExplorationDecider::resetCorridorCentering() {
+  corridor_center_valid_ = false;
+  corridor_center_lateral_ = 0.0;
+  corridor_center_width_ = 0.0;
+  pending_corridor_center_lateral_ = 0.0;
+  pending_corridor_width_ = 0.0;
+  corridor_center_confirm_streak_ = 0;
+  corridor_center_missing_streak_ = 0;
+}
+
+CorridorPreviewEstimate
+SuperExplorationDecider::estimateForwardCorridorPreview(
+    const VoxelSet& reachable, double current_progress,
+    double current_lateral) const {
+  CorridorPreviewEstimate invalid;
+  if (!corridor_preview_enabled_ || !have_home_ || reachable.empty()) {
+    return invalid;
+  }
+  const double lateral_min = std::max(
+      -max_task_lateral_offset_,
+      current_lateral - corridor_preview_lateral_half_width_);
+  const double lateral_max = std::min(
+      max_task_lateral_offset_,
+      current_lateral + corridor_preview_lateral_half_width_);
+  if (lateral_max < lateral_min) return invalid;
+  const std::size_t columns = static_cast<std::size_t>(std::floor(
+      (lateral_max - lateral_min) / corridor_preview_lateral_step_ + 1e-9)) +
+      1;
+  const std::size_t rows = static_cast<std::size_t>(std::floor(
+      (corridor_preview_distance_ - corridor_preview_start_distance_) /
+          corridor_preview_longitudinal_step_ + 1e-9)) + 1;
+  if (columns == 0 || rows == 0) return invalid;
+
+  const double c = std::cos(mission_heading_yaw_);
+  const double s = std::sin(mission_heading_yaw_);
+  const double z = home_pose_.pose.position.z + cruise_height_above_home_;
+  std::vector<std::vector<bool>> passable(
+      rows, std::vector<bool>(columns, false));
+  for (std::size_t row = 0; row < rows; ++row) {
+    const double progress = current_progress +
+        corridor_preview_start_distance_ +
+        row * corridor_preview_longitudinal_step_;
+    for (std::size_t column = 0; column < columns; ++column) {
+      const double lateral = lateral_min +
+          column * corridor_preview_lateral_step_;
+      const VoxelKey key = positionToKey(
+          home_pose_.pose.position.x + c * progress - s * lateral,
+          home_pose_.pose.position.y + s * progress + c * lateral, z);
+      passable[row][column] =
+          reachable.count(key) != 0 && isClearForVehicle(key);
+    }
+  }
+  return estimateCorridorPreview(
+      passable, corridor_preview_start_distance_,
+      corridor_preview_longitudinal_step_, lateral_min,
+      corridor_preview_lateral_step_, current_lateral,
+      corridor_preview_max_lateral_slope_,
+      static_cast<std::size_t>(corridor_preview_min_slices_));
 }
 
 SuperExplorationDecider::ThreeWallCoverage
@@ -1235,12 +1523,12 @@ SuperExplorationDecider::evaluateMapClosure(
     result.max_reachable_progress =
         std::max(result.max_reachable_progress, progress);
   }
-  // The front-wall sensor range is not the minimum useful flight segment.
-  // A wall can be visible at six metres while a shorter, vehicle-clear
-  // observation step remains available before it.
-  result.reachable_forward_passage =
-      result.max_reachable_progress >
-      result.vehicle_progress + min_goal_distance_;
+  // Diagnostic reachability may extend through a winding component or end in
+  // a cell which cannot produce a straight, observed, SUPER-clear local leg.
+  // Closure must stay open only for a route we could actually publish now.
+  LocalRouteCandidate executable_forward_route;
+  result.reachable_forward_passage = selectForwardLookaheadGoal(
+      reachable, false, &executable_forward_route);
 
   for (const auto& entry : voxels_) {
     if (entry.second == kOccupied) {
@@ -1378,11 +1666,16 @@ void SuperExplorationDecider::carveTraversedVehicleEnvelope(
   // keep the option disabled because localization error could otherwise
   // erase a genuine wall from the task-level map.
   const VoxelKey center = positionToKey(position.x, position.y, position.z);
-  if (vertical_vehicle_radius_ > 0.0) {
+  const double vertical_below = vertical_vehicle_clearance_below_ > 0.0
+      ? vertical_vehicle_clearance_below_ : vertical_vehicle_radius_;
+  const double vertical_above = vertical_vehicle_clearance_above_ > 0.0
+      ? vertical_vehicle_clearance_above_ : vertical_vehicle_radius_;
+  if (vertical_below > 0.0 && vertical_above > 0.0) {
     const double search_xy =
         vehicle_radius_ + voxel_resolution_ * 0.7071067811865476;
     const double search_z =
-        vertical_vehicle_radius_ + voxel_resolution_ * 0.5;
+        std::max(vertical_below, vertical_above) +
+        voxel_resolution_ * 0.5;
     const int xy_cells =
         static_cast<int>(std::ceil(search_xy / voxel_resolution_));
     const int z_cells =
@@ -1392,7 +1685,7 @@ void SuperExplorationDecider::carveTraversedVehicleEnvelope(
         for (int dz = -z_cells; dz <= z_cells; ++dz) {
           if (insideAnisotropicClearance(
                   dx, dy, dz, voxel_resolution_, vehicle_radius_,
-                  vertical_vehicle_radius_)) {
+                  vertical_below, vertical_above)) {
             voxels_[{center.x + dx, center.y + dy, center.z + dz}] = kFree;
           }
         }
@@ -1473,18 +1766,28 @@ void SuperExplorationDecider::protectTraversedCenterline(
   last_centerline_position_ = position;
 }
 
-bool SuperExplorationDecider::isClearForVehicle(const VoxelKey& key) const {
-  if (vertical_vehicle_radius_ > 0.0) {
-    const double search_xy = vehicle_radius_ + voxel_resolution_ * 0.7071067811865476;
-    const double search_z = vertical_vehicle_radius_ + voxel_resolution_ * 0.5;
+bool SuperExplorationDecider::isClearForVehicle(
+    const VoxelKey& key, double horizontal_radius) const {
+  const double required_radius = horizontal_radius > 0.0
+      ? horizontal_radius : vehicle_radius_;
+  const double vertical_below = vertical_vehicle_clearance_below_ > 0.0
+      ? vertical_vehicle_clearance_below_ : vertical_vehicle_radius_;
+  const double vertical_above = vertical_vehicle_clearance_above_ > 0.0
+      ? vertical_vehicle_clearance_above_ : vertical_vehicle_radius_;
+  if (vertical_below > 0.0 && vertical_above > 0.0) {
+    const double search_xy = required_radius +
+                             voxel_resolution_ * 0.7071067811865476;
+    const double search_z =
+        std::max(vertical_below, vertical_above) +
+        voxel_resolution_ * 0.5;
     const int xy_cells = static_cast<int>(std::ceil(search_xy / voxel_resolution_));
     const int z_cells = static_cast<int>(std::ceil(search_z / voxel_resolution_));
     for (int dx = -xy_cells; dx <= xy_cells; ++dx) {
       for (int dy = -xy_cells; dy <= xy_cells; ++dy) {
         for (int dz = -z_cells; dz <= z_cells; ++dz) {
           if (insideAnisotropicClearance(
-                  dx, dy, dz, voxel_resolution_, vehicle_radius_,
-                  vertical_vehicle_radius_) &&
+                  dx, dy, dz, voxel_resolution_, required_radius,
+                  vertical_below, vertical_above) &&
               isOccupied({key.x + dx, key.y + dy, key.z + dz})) {
             return false;
           }
@@ -1494,7 +1797,7 @@ bool SuperExplorationDecider::isClearForVehicle(const VoxelKey& key) const {
     return true;
   }
   const int radius = std::max(
-      1, static_cast<int>(std::ceil(vehicle_radius_ / voxel_resolution_)));
+      1, static_cast<int>(std::ceil(required_radius / voxel_resolution_)));
   for (int dx = -radius; dx <= radius; ++dx) {
     for (int dy = -radius; dy <= radius; ++dy) {
       for (int dz = -radius; dz <= radius; ++dz) {
@@ -1625,6 +1928,8 @@ SuperExplorationDecider::findFrontiers(VoxelSet& reachable) const {
                                         current_pose_.pose.position.x - point.x);
     candidate.goal.pose.orientation = yawQuaternion(yaw);
     candidate.unknown_neighbors = unknown_neighbors;
+    candidate.preferred_clearance =
+        isClearForVehicle(entry.first, preferred_vehicle_radius_);
     candidate.score = information_weight_ * unknown_neighbors -
                       distance_weight_ * std::sqrt(distance_squared);
     candidates.push_back(candidate);
@@ -1632,7 +1937,11 @@ SuperExplorationDecider::findFrontiers(VoxelSet& reachable) const {
 
   std::sort(candidates.begin(), candidates.end(),
             [](const FrontierCandidate& left, const FrontierCandidate& right) {
-              return left.score > right.score;
+              if (std::abs(left.score - right.score) > 1e-9) {
+                return left.score > right.score;
+              }
+              return left.preferred_clearance &&
+                     !right.preferred_clearance;
             });
   std::vector<FrontierCandidate> representatives;
   const double spacing_squared = candidate_spacing_ * candidate_spacing_;
@@ -1707,6 +2016,7 @@ SuperExplorationDecider::selectForwardCandidate(
     const std::vector<FrontierCandidate>& candidates) const {
   const FrontierCandidate* best = nullptr;
   double best_score = -std::numeric_limits<double>::infinity();
+  double best_center_error = std::numeric_limits<double>::infinity();
   const double current_dx =
       current_pose_.pose.position.x - home_pose_.pose.position.x;
   const double current_dy =
@@ -1719,15 +2029,20 @@ SuperExplorationDecider::selectForwardCandidate(
              max_observation_height_above_home_);
   const bool side_structure_visible =
       left_wall_visible_ || right_wall_visible_;
+  const bool center_on_medial_axis = corridorCenteringActive();
+  const double preferred_lateral = center_on_medial_axis
+      ? corridor_center_lateral_ : 0.0;
   for (const auto& candidate : candidates) {
     if (!isForwardCandidate(candidate)) {
       continue;
     }
     const double progress = candidateMissionProgress(candidate);
     const double progress_ahead = progress - current_progress;
-    const double lateral = std::abs(candidateMissionLateral(candidate));
+    const double mission_lateral = candidateMissionLateral(candidate);
+    const double lateral = std::abs(mission_lateral - preferred_lateral);
     if (progress_ahead < min_goal_distance_ ||
-        (side_structure_visible && lateral > forward_corridor_half_width_)) {
+        (side_structure_visible &&
+         std::abs(mission_lateral) > forward_corridor_half_width_)) {
       continue;
     }
     const double height_error =
@@ -1738,8 +2053,18 @@ SuperExplorationDecider::selectForwardCandidate(
         forward_height_penalty_ * height_error +
         heading_priority_weight_ * candidateHeadingAlignment(candidate) +
         0.05 * static_cast<double>(candidate.unknown_neighbors);
-    if (score > best_score) {
+    const bool better = best == nullptr ||
+        (center_on_medial_axis &&
+         (lateral < best_center_error - 1e-9 ||
+          (std::abs(lateral - best_center_error) <= 1e-9 &&
+           score > best_score + 1e-9))) ||
+        (!center_on_medial_axis &&
+         ((candidate.preferred_clearance && !best->preferred_clearance) ||
+          (candidate.preferred_clearance == best->preferred_clearance &&
+           score > best_score + 1e-9)));
+    if (better) {
       best_score = score;
+      best_center_error = lateral;
       best = &candidate;
     }
   }
@@ -1841,8 +2166,14 @@ void SuperExplorationDecider::publishGoal(
   current_goal_ = goal;
   current_goal_.header.frame_id = world_frame_;
   current_goal_.header.stamp = ros::Time::now();
-  active_goal_is_lateral_detour_ = reason == "lateral_detour";
-  active_goal_is_forward_lookahead_ = reason == "forward_lookahead";
+  active_goal_is_lateral_detour_ =
+      reason.compare(0, std::string("lateral_detour").size(),
+                     "lateral_detour") == 0;
+  // Diagnostic suffixes must not change the handover semantics of this whole
+  // short-segment goal family.
+  active_goal_is_forward_lookahead_ =
+      reason.compare(0, std::string("forward_lookahead").size(),
+                     "forward_lookahead") == 0;
   active_goal_is_blocked_frontier_route_ =
       reason == "blocked_frontier_route";
   super_planner::GoalCommand command;
@@ -1925,8 +2256,9 @@ bool SuperExplorationDecider::publishEndApproachGoal(
   return true;
 }
 
-bool SuperExplorationDecider::publishForwardLookaheadGoal(
-    const VoxelSet& reachable, bool require_successor) {
+bool SuperExplorationDecider::selectForwardLookaheadGoal(
+    const VoxelSet& reachable, bool require_successor,
+    LocalRouteCandidate* selected) const {
   // Frontier fallback controls how unstructured frontier candidates are
   // ranked; it must not suppress a directly observed, vehicle-clear forward
   // segment. Side-wall visibility can disappear in a surveyed junction while
@@ -1958,13 +2290,39 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
     return false;
   }
 
-  std::vector<double> lateral_offsets{0.0};
-  for (double offset = voxel_resolution_;
-       offset <= forward_goal_lateral_search_width_ + 1e-6;
-       offset += voxel_resolution_) {
-    lateral_offsets.push_back(offset);
-    lateral_offsets.push_back(-offset);
+  const double current_lateral = -s * current_dx + c * current_dy;
+  const bool center_on_medial_axis = corridorCenteringActive();
+  double preferred_lateral = 0.0;
+  if (center_on_medial_axis) {
+    preferred_lateral = std::max(
+        current_lateral - corridor_centering_max_goal_shift_,
+        std::min(corridor_center_lateral_,
+                 current_lateral + corridor_centering_max_goal_shift_));
   }
+  const CorridorPreviewEstimate preview = estimateForwardCorridorPreview(
+      reachable, current_progress, current_lateral);
+  const bool preview_active = preview.valid &&
+      (std::abs(preview.center_shift) >=
+           corridor_preview_min_center_shift_ ||
+       preview.near_width - preview.minimum_width >=
+           corridor_preview_min_width_contraction_);
+  if (preview_active) {
+    preferred_lateral = std::max(
+        current_lateral - corridor_preview_max_goal_shift_,
+        std::min(preview.target_lateral,
+                 current_lateral + corridor_preview_max_goal_shift_));
+    ROS_INFO_THROTTLE(
+        1.0,
+        "Corridor preview: %.1f m connected, width %.2f->%.2f m, "
+        "lateral %.2f->%.2f m",
+        preview.lookahead, preview.near_width, preview.minimum_width,
+        current_lateral, preferred_lateral);
+  }
+  const bool use_geometric_preference =
+      preview_active || center_on_medial_axis;
+  std::vector<double> lateral_offsets = centeredLateralOffsets(
+      preferred_lateral, forward_goal_lateral_search_width_,
+      voxel_resolution_);
   std::vector<double> height_offsets{0.0};
   for (double offset = voxel_resolution_;
        cruise_height_above_home_ - offset >=
@@ -1981,18 +2339,18 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
       height_offsets.push_back(offset);
     }
   }
+  bool have_hard_fallback = false;
+  LocalRouteCandidate hard_fallback;
 
-  // Search all centerline distances at the cruise height before considering
-  // a vertical offset, and exhaust those choices before trying a side offset.
-  // Otherwise one noisy voxel at the farthest level target can command an
-  // unnecessary climb even though a slightly shorter, level segment is free.
-  // Keeping the task-level goal level also gives SUPER a much better chance
-  // of retaining a feasible corridor around surveyed pipes and machinery.
-  for (const double lateral : lateral_offsets) {
-    for (const double height_offset : height_offsets) {
-      for (double lookahead = maximum_lookahead;
-           lookahead >= minimum_lookahead - 1e-6;
-           lookahead -= forward_lookahead_step_) {
+  // Preserve the task intent of preferring a level, longer observation step,
+  // but evaluate every lateral alternative at that distance before choosing.
+  // This avoids the old centre,+left,+right first-feasible bias.
+  for (const double height_offset : height_offsets) {
+    for (double lookahead = maximum_lookahead;
+         lookahead >= minimum_lookahead - 1e-6;
+         lookahead -= forward_lookahead_step_) {
+      std::vector<LocalRouteCandidate> feasible;
+      for (const double lateral : lateral_offsets) {
         const double target_progress = current_progress + lookahead;
         if (require_successor &&
             target_progress <=
@@ -2032,6 +2390,8 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
             1, static_cast<int>(std::ceil(
                    segment_distance / (0.5 * voxel_resolution_))));
         bool segment_clear = true;
+        bool preferred_segment_clear = isClearForVehicle(
+            target_key, preferred_vehicle_radius_);
         for (int sample = 1; sample <= segment_samples; ++sample) {
           const double ratio =
               static_cast<double>(sample) / segment_samples;
@@ -2044,27 +2404,178 @@ bool SuperExplorationDecider::publishForwardLookaheadGoal(
             segment_clear = false;
             break;
           }
+          if (preferred_segment_clear &&
+              !isClearForVehicle(sample_key, preferred_vehicle_radius_)) {
+            preferred_segment_clear = false;
+          }
         }
         if (!segment_clear ||
-            !returnSegmentClear(start, target, 0.05, false)) {
+            !returnSegmentClear(start, target, 0.0, false)) {
           continue;
         }
-        geometry_msgs::PoseStamped goal;
-        goal.header.frame_id = world_frame_;
-        goal.pose.position = target;
-        goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
-        publishGoal(goal, "forward_lookahead", true);
+        LocalRouteCandidate route;
+        route.goal.header.frame_id = world_frame_;
+        route.goal.pose.position = target;
+        const double route_dx = target.x - start.x;
+        const double route_dy = target.y - start.y;
+        const double route_yaw = std::hypot(route_dx, route_dy) > 1e-6
+            ? std::atan2(route_dy, route_dx) : mission_heading_yaw_;
+        route.goal.pose.orientation = yawQuaternion(route_yaw);
+        const double preferred_extra_clearance = std::max(
+            0.0, preferred_vehicle_radius_ -
+                     (std::max(vehicle_radius_, return_super_radius_) +
+                      return_clearance_margin_));
+        route.preferred_clearance =
+            preferred_segment_clear &&
+            returnSegmentClear(start, target,
+                               preferred_extra_clearance, false);
+        route.mission_lateral = lateral;
+        route.lookahead = lookahead;
+        route.minimum_clearance = minimumSuperSegmentClearance(start, target);
+        feasible.push_back(route);
+      }
+
+      if (feasible.empty()) {
+        continue;
+      }
+
+      auto side_of = [this](double lateral) {
+        if (lateral > 0.5 * voxel_resolution_) return 1;
+        if (lateral < -0.5 * voxel_resolution_) return -1;
+        return 0;
+      };
+      auto clearance_better = [](double lhs, double rhs) {
+        if (!std::isfinite(lhs)) return std::isfinite(rhs);
+        if (!std::isfinite(rhs)) return false;
+        return lhs > rhs + 1e-9;
+      };
+      const auto center_error = [preferred_lateral](
+                                    const LocalRouteCandidate& route) {
+        return std::abs(route.mission_lateral - preferred_lateral);
+      };
+
+      // Stable two-sided wall evidence makes the measured medial axis the
+      // primary geometric preference. Comfort clearance only breaks a tie;
+      // it must not pull a hard-safe route away from the corridor centre.
+      if (use_geometric_preference) {
+        const LocalRouteCandidate* centered = &feasible.front();
+        for (const auto& route : feasible) {
+          const double route_error = center_error(route);
+          const double best_error = center_error(*centered);
+          if (route_error < best_error - 1e-9 ||
+              (std::abs(route_error - best_error) <= 1e-9 &&
+               route.preferred_clearance &&
+               !centered->preferred_clearance) ||
+              (std::abs(route_error - best_error) <= 1e-9 &&
+               route.preferred_clearance == centered->preferred_clearance &&
+               clearance_better(route.minimum_clearance,
+                                centered->minimum_clearance))) {
+            centered = &route;
+          }
+        }
+        *selected = *centered;
         return true;
+      }
+
+      // Without a reliable two-wall centre (including one-sided wall
+      // observations), prefer a complete 1.1 m-clear path. Only after every
+      // height and look-ahead candidate has failed that envelope may the
+      // 0.8--1.1 m hard-safe band be used.
+      const bool preferred_available = std::any_of(
+          feasible.begin(), feasible.end(),
+          [](const LocalRouteCandidate& route) {
+            return route.preferred_clearance;
+          });
+      const auto eligible = [preferred_available](
+                                const LocalRouteCandidate& route) {
+        return !preferred_available || route.preferred_clearance;
+      };
+      auto tie_better = [](const LocalRouteCandidate& lhs,
+                           const LocalRouteCandidate& rhs) {
+        return std::abs(lhs.mission_lateral) <
+               std::abs(rhs.mission_lateral) - 1e-9;
+      };
+
+      const LocalRouteCandidate* clearest = nullptr;
+      for (const auto& route : feasible) {
+        if (!eligible(route)) continue;
+        if (clearest == nullptr ||
+            clearance_better(route.minimum_clearance,
+                             clearest->minimum_clearance) ||
+            (!clearance_better(clearest->minimum_clearance,
+                               route.minimum_clearance) &&
+             tie_better(route, *clearest))) {
+          clearest = &route;
+        }
+      }
+
+      // Side holding is a clearance hysteresis, not a permanent preference:
+      // retain the previous side only while its worst point is within the
+      // configured margin of the globally clearest eligible path.
+      const LocalRouteCandidate* held = nullptr;
+      if (held_route_side_ != 0) {
+        for (const auto& route : feasible) {
+          if (!eligible(route) ||
+              side_of(route.mission_lateral) != held_route_side_) continue;
+          const bool close_enough =
+              (!std::isfinite(clearest->minimum_clearance) &&
+               !std::isfinite(route.minimum_clearance)) ||
+              (std::isfinite(clearest->minimum_clearance) &&
+               route.minimum_clearance +
+                       lateral_route_switch_clearance_advantage_ >=
+                   clearest->minimum_clearance);
+          if (!close_enough) continue;
+          if (held == nullptr ||
+              clearance_better(route.minimum_clearance,
+                               held->minimum_clearance) ||
+              (!clearance_better(held->minimum_clearance,
+                                 route.minimum_clearance) &&
+               tie_better(route, *held))) {
+            held = &route;
+          }
+        }
+      }
+      *selected = held != nullptr ? *held : *clearest;
+      if (preferred_available) return true;
+      if (!have_hard_fallback) {
+        hard_fallback = *selected;
+        have_hard_fallback = true;
       }
     }
   }
+  if (have_hard_fallback) {
+    *selected = hard_fallback;
+    return true;
+  }
   return false;
+}
+
+bool SuperExplorationDecider::publishForwardLookaheadGoal(
+    const VoxelSet& reachable, bool require_successor) {
+  LocalRouteCandidate selected;
+  if (!selectForwardLookaheadGoal(reachable, require_successor, &selected)) {
+    return false;
+  }
+  if (selected.mission_lateral > 0.5 * voxel_resolution_) {
+    held_route_side_ = 1;
+  } else if (selected.mission_lateral < -0.5 * voxel_resolution_) {
+    held_route_side_ = -1;
+  }
+  const bool centered = corridorCenteringActive();
+  publishGoal(selected.goal,
+              selected.preferred_clearance
+                  ? (centered ? "forward_lookahead_centered_preferred"
+                              : "forward_lookahead_preferred")
+                  : (centered ? "forward_lookahead_centered_hard_fallback"
+                              : "forward_lookahead_hard_fallback"),
+              true);
+  return true;
 }
 
 bool SuperExplorationDecider::publishLateralDetourGoal(
     const VoxelSet& reachable,
     const std::vector<FrontierCandidate>& candidates) {
-  if (!have_home_ || candidates.empty() ||
+  if (!have_home_ ||
       front_obstacle_streak_ < front_obstacle_confirm_frames_) return false;
   const double c = std::cos(mission_heading_yaw_);
   const double s = std::sin(mission_heading_yaw_);
@@ -2073,9 +2584,7 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
   const double progress = c * dx + s * dy;
   const double lateral = -s * dx + c * dy;
   const double target_progress = std::max(0.0, progress - 0.25);
-  double best_score = -std::numeric_limits<double>::infinity();
-  geometry_msgs::PoseStamped best_goal;
-  bool found = false;
+  std::vector<LocalRouteCandidate> feasible;
 
   for (const auto& candidate : candidates) {
     const double candidate_progress = candidateMissionProgress(candidate);
@@ -2097,7 +2606,9 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
     goal.pose.position.y =
         home_pose_.pose.position.y + s * target_progress + c * (lateral + step);
     goal.pose.position.z = current_pose_.pose.position.z;
-    goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
+    goal.pose.orientation = yawQuaternion(std::atan2(
+        goal.pose.position.y - current_pose_.pose.position.y,
+        goal.pose.position.x - current_pose_.pose.position.x));
     const VoxelKey goal_key = positionToKey(
         goal.pose.position.x, goal.pose.position.y, goal.pose.position.z);
     if (reachable.count(goal_key) == 0 || !isClearForVehicle(goal_key)) continue;
@@ -2111,6 +2622,8 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
     const int samples = std::max(
         1, static_cast<int>(std::ceil(distance / (0.5 * voxel_resolution_))));
     bool direct_clear = true;
+    bool preferred_direct_clear = isClearForVehicle(
+        goal_key, preferred_vehicle_radius_);
     for (int i = 1; i <= samples; ++i) {
       const double t = static_cast<double>(i) / samples;
       const auto& start = current_pose_.pose.position;
@@ -2122,20 +2635,180 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
         direct_clear = false;
         break;
       }
+      if (preferred_direct_clear &&
+          !isClearForVehicle(key, preferred_vehicle_radius_)) {
+        preferred_direct_clear = false;
+      }
     }
     if (!direct_clear ||
         !returnSegmentClear(current_pose_.pose.position,
-                            goal.pose.position, 0.05, false)) continue;
+                            goal.pose.position, 0.0, false)) continue;
+    const double preferred_extra_clearance = std::max(
+        0.0, preferred_vehicle_radius_ -
+                 (std::max(vehicle_radius_, return_super_radius_) +
+                  return_clearance_margin_));
+    const bool has_preferred_clearance =
+        preferred_direct_clear &&
+        returnSegmentClear(current_pose_.pose.position, goal.pose.position,
+                           preferred_extra_clearance, false);
     const double score = candidate_progress - 0.1 * distance +
                          0.01 * candidate.unknown_neighbors;
-    if (!found || score > best_score) {
-      found = true;
-      best_score = score;
-      best_goal = goal;
+    LocalRouteCandidate route;
+    route.goal = goal;
+    route.mission_lateral = lateral + step;
+    route.minimum_clearance = minimumSuperSegmentClearance(
+        current_pose_.pose.position, goal.pose.position);
+    route.selection_score = score;
+    route.preferred_clearance = has_preferred_clearance;
+    feasible.push_back(route);
+  }
+
+  if (feasible.empty()) {
+    // A wide, fully observed side passage can have no usable frontier inside
+    // the mission band: every ray may terminate on the far side wall, placing
+    // the free/unknown boundary too close to that wall for the vehicle-radius
+    // filter.  The 2026-10-18 real flight had exactly this geometry on the
+    // right: six metres of clear lateral space, but the only retained
+    // frontier was behind the aircraft.  Before declaring a dead end, sample
+    // both lateral directions directly and accept only a complete segment
+    // that is reachable, known free, body-clear, and clear in SUPER's live
+    // occupancy map.
+    for (const double direction : {-1.0, 1.0}) {
+      for (double displacement = 4.0;
+           displacement >= voxel_resolution_ - 1e-6;
+           displacement -= voxel_resolution_) {
+        const double step = direction * displacement;
+        const double target_lateral = lateral + step;
+        if (std::abs(target_lateral) > max_task_lateral_offset_ + 1e-6) {
+          continue;
+        }
+
+        geometry_msgs::PoseStamped goal;
+        goal.header.frame_id = world_frame_;
+        goal.pose.position.x =
+            home_pose_.pose.position.x + c * target_progress -
+            s * target_lateral;
+        goal.pose.position.y =
+            home_pose_.pose.position.y + s * target_progress +
+            c * target_lateral;
+        goal.pose.position.z = current_pose_.pose.position.z;
+        goal.pose.orientation = yawQuaternion(std::atan2(
+            goal.pose.position.y - current_pose_.pose.position.y,
+            goal.pose.position.x - current_pose_.pose.position.x));
+        const VoxelKey goal_key = positionToKey(
+            goal.pose.position.x, goal.pose.position.y,
+            goal.pose.position.z);
+        if (reachable.count(goal_key) == 0 ||
+            !isClearForVehicle(goal_key)) {
+          continue;
+        }
+
+        const auto& start = current_pose_.pose.position;
+        const double distance = std::sqrt(squaredDistance(start,
+                                                           goal.pose.position));
+        const int samples = std::max(
+            1, static_cast<int>(std::ceil(
+                   distance / (0.5 * voxel_resolution_))));
+        bool direct_clear = true;
+        bool preferred_direct_clear =
+            isClearForVehicle(goal_key, preferred_vehicle_radius_);
+        for (int i = 1; i <= samples; ++i) {
+          const double t = static_cast<double>(i) / samples;
+          const VoxelKey key = positionToKey(
+              start.x + t * (goal.pose.position.x - start.x),
+              start.y + t * (goal.pose.position.y - start.y), start.z);
+          if (reachable.count(key) == 0 || !isClearForVehicle(key)) {
+            direct_clear = false;
+            break;
+          }
+          if (preferred_direct_clear &&
+              !isClearForVehicle(key, preferred_vehicle_radius_)) {
+            preferred_direct_clear = false;
+          }
+        }
+        if (!direct_clear ||
+            !returnSegmentClear(start, goal.pose.position, 0.0, false)) {
+          continue;
+        }
+        const double preferred_extra_clearance = std::max(
+            0.0, preferred_vehicle_radius_ -
+                     (std::max(vehicle_radius_, return_super_radius_) +
+                      return_clearance_margin_));
+        LocalRouteCandidate route;
+        route.goal = goal;
+        route.mission_lateral = target_lateral;
+        route.minimum_clearance =
+            minimumSuperSegmentClearance(start, goal.pose.position);
+        route.selection_score = displacement;
+        route.preferred_clearance =
+            preferred_direct_clear &&
+            returnSegmentClear(start, goal.pose.position,
+                               preferred_extra_clearance, false);
+        feasible.push_back(route);
+        // Only the farthest verified point on each side is needed. The
+        // clearance comparison below still chooses the safer side.
+        break;
+      }
     }
   }
-  if (!found) return false;
-  publishGoal(best_goal, "lateral_detour");
+  if (feasible.empty()) return false;
+
+  auto side_of = [this](double value) {
+    if (value > 0.5 * voxel_resolution_) return 1;
+    if (value < -0.5 * voxel_resolution_) return -1;
+    return 0;
+  };
+  auto better = [](const LocalRouteCandidate& lhs,
+                   const LocalRouteCandidate& rhs) {
+    if (!std::isfinite(lhs.minimum_clearance)) {
+      if (std::isfinite(rhs.minimum_clearance)) return true;
+    } else if (!std::isfinite(rhs.minimum_clearance)) {
+      return false;
+    } else if (lhs.minimum_clearance > rhs.minimum_clearance + 1e-9) {
+      return true;
+    } else if (rhs.minimum_clearance > lhs.minimum_clearance + 1e-9) {
+      return false;
+    }
+    return lhs.selection_score > rhs.selection_score + 1e-9;
+  };
+  const bool preferred_available = std::any_of(
+      feasible.begin(), feasible.end(),
+      [](const LocalRouteCandidate& route) {
+        return route.preferred_clearance;
+      });
+  const auto eligible = [preferred_available](
+                            const LocalRouteCandidate& route) {
+    return !preferred_available || route.preferred_clearance;
+  };
+  const LocalRouteCandidate* clearest = nullptr;
+  for (const auto& route : feasible) {
+    if (!eligible(route)) continue;
+    if (clearest == nullptr || better(route, *clearest)) clearest = &route;
+  }
+  const LocalRouteCandidate* selected = clearest;
+  if (held_route_side_ != 0) {
+    const LocalRouteCandidate* held = nullptr;
+    for (const auto& route : feasible) {
+      if (!eligible(route) ||
+          side_of(route.mission_lateral) != held_route_side_) continue;
+      const bool close_enough =
+          (!std::isfinite(clearest->minimum_clearance) &&
+           !std::isfinite(route.minimum_clearance)) ||
+          (std::isfinite(clearest->minimum_clearance) &&
+           route.minimum_clearance +
+                   lateral_route_switch_clearance_advantage_ >=
+               clearest->minimum_clearance);
+      if (close_enough && (held == nullptr || better(route, *held))) {
+        held = &route;
+      }
+    }
+    if (held != nullptr) selected = held;
+  }
+  const int selected_side = side_of(selected->mission_lateral);
+  if (selected_side != 0) held_route_side_ = selected_side;
+  publishGoal(selected->goal, selected->preferred_clearance
+                             ? "lateral_detour_preferred"
+                             : "lateral_detour_hard_fallback");
   return true;
 }
 
@@ -2153,6 +2826,7 @@ bool SuperExplorationDecider::reverseMissionHeadingAtDeadEnd(
 
   const double previous_heading = mission_heading_yaw_;
   mission_heading_yaw_ = normalizeAngle(mission_heading_yaw_ + M_PI);
+  resetCorridorCentering();
   ++dead_end_heading_reversal_count_;
   exploration_phase_ = ExplorationPhase::kForwardPriority;
   front_obstacle_streak_ = 0;
@@ -2174,6 +2848,10 @@ bool SuperExplorationDecider::reverseMissionHeadingAtDeadEnd(
         "Dead-end return has no fresh, SUPER-map-clear first leg; holding for new sensor data");
     return false;
   }
+  // Left/right signs are defined in the mission-heading frame. A 180-degree
+  // reversal swaps those signs, so carrying the old hold into the opposite
+  // exploration leg would bias the first new route toward the wrong side.
+  held_route_side_ = 0;
   ROS_WARN(
       "Dead end has no vehicle-clear detour; reversing mission heading "
       "%.1f -> %.1f deg (%d/%d); return goals use the live map",
@@ -2245,7 +2923,11 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
       const double score =
           candidate.score + fallback_heading_weight_ *
                                 candidateHeadingAlignment(candidate);
-      if (selected == nullptr || score > best_score) {
+      if (selected == nullptr ||
+          (candidate.preferred_clearance &&
+           !selected->preferred_clearance) ||
+          (candidate.preferred_clearance == selected->preferred_clearance &&
+           score > best_score + 1e-9)) {
         selected = &candidate;
         best_score = score;
       }
@@ -2327,7 +3009,7 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
     // corridor, so validate this local target in the current occupancy map
     // without imposing a straight line through the inside of the bend.
     if (isNearFailedGoal(candidate_goal) ||
-        !returnSegmentClear(candidate_goal, candidate_goal, 0.05)) continue;
+        !returnSegmentClear(candidate_goal, candidate_goal, 0.0)) continue;
     selected_goal.pose.position = candidate_goal;
     found_local_goal = true;
   }
@@ -2339,18 +3021,12 @@ bool SuperExplorationDecider::selectAndPublishFrontier(
     return false;
   }
 
-  if (exploration_phase_ == ExplorationPhase::kForwardPriority) {
-    // Keep the commanded yaw aligned with the latched entry mission heading. SUPER may
-    // apply its own yaw policy, but this preserves the task-level intent.
-    selected_goal.pose.orientation = yawQuaternion(mission_heading_yaw_);
-  } else {
-    // At a branch the remote cluster's bearing may point through the inside
-    // of a corner. Face the next verified local route segment instead. This
-    // avoids simultaneous translation and a large unrelated yaw sweep.
-    selected_goal.pose.orientation = yawQuaternion(std::atan2(
-        selected_goal.pose.position.y - start.y,
-        selected_goal.pose.position.x - start.x));
-  }
+  // The remote frontier only chooses a branch. Face the verified local route
+  // segment in both exploration phases; keeping the entry heading here made
+  // oblique heading-priority legs translate sideways without turning the nose.
+  selected_goal.pose.orientation = yawQuaternion(std::atan2(
+      selected_goal.pose.position.y - start.y,
+      selected_goal.pose.position.x - start.x));
   if (horizontal_distance > max_frontier_goal_distance_) {
     ROS_INFO("Localized %.2f m frontier to connected %.2f m segment",
              horizontal_distance,
@@ -2381,6 +3057,33 @@ double SuperExplorationDecider::outboundSeparation(
     nearest = std::min(nearest, std::sqrt(squaredDistance(point, projection)));
   }
   return std::isfinite(nearest) ? nearest : 0.0;
+}
+
+double SuperExplorationDecider::minimumSuperSegmentClearance(
+    const geometry_msgs::Point& from,
+    const geometry_msgs::Point& to) const {
+  if (super_occupied_points_->empty()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double distance = std::sqrt(squaredDistance(from, to));
+  const int steps = std::max(1, static_cast<int>(std::ceil(
+      distance / (0.5 * voxel_resolution_))));
+  double minimum = std::numeric_limits<double>::infinity();
+  for (int i = 0; i <= steps; ++i) {
+    const double t = static_cast<double>(i) / steps;
+    pcl::PointXYZ query(
+        from.x + t * (to.x - from.x),
+        from.y + t * (to.y - from.y),
+        from.z + t * (to.z - from.z));
+    std::vector<int> indices(1);
+    std::vector<float> distances(1);
+    if (super_occupied_tree_.nearestKSearch(
+            query, 1, indices, distances) > 0) {
+      minimum = std::min(minimum,
+                         std::sqrt(static_cast<double>(distances.front())));
+    }
+  }
+  return minimum;
 }
 
 bool SuperExplorationDecider::returnSegmentClear(
@@ -2453,6 +3156,13 @@ bool SuperExplorationDecider::publishFreshReturnGoal(
   geometry_msgs::Point home = home_pose_.pose.position;
   if (returning_home_) home.z += return_home_height_offset_;
   const double home_distance = std::sqrt(squaredDistance(start, home));
+  // A return transition may happen while dead-end recovery is already moving
+  // toward home. Never let a stale/folded breadcrumb or a graph detour reverse
+  // that progress. This also protects the first return goal, for which there
+  // is no meaningful previous return goal to compare against.
+  const auto makes_home_progress = [&](const geometry_msgs::Point& point) {
+    return std::sqrt(squaredDistance(point, home)) + 1e-3 < home_distance;
+  };
   const double home_arrival_radius = return_home_arrival_radius_ > 0.0
       ? std::min(goal_reached_distance_, return_home_arrival_radius_)
       : std::min(goal_reached_distance_, 0.5 * voxel_resolution_);
@@ -2525,7 +3235,8 @@ bool SuperExplorationDecider::publishFreshReturnGoal(
       }
     }
   }
-  if (found && (!require_successor ||
+  if (found && makes_home_progress(selected) &&
+               (!require_successor ||
                 std::sqrt(squaredDistance(selected, home)) <
                     std::sqrt(squaredDistance(current_goal_.pose.position,
                                               home)) -
@@ -2707,6 +3418,7 @@ bool SuperExplorationDecider::publishFreshReturnGoal(
     }
   }
   if (!found) return false;
+  if (!makes_home_progress(selected)) return false;
   if (require_successor &&
       std::sqrt(squaredDistance(selected, home)) >=
           std::sqrt(squaredDistance(current_goal_.pose.position, home)) -
@@ -2731,7 +3443,14 @@ void SuperExplorationDecider::beginReturnHome(
   prefer_outbound_breadcrumbs_ = prefer_outbound_breadcrumbs;
   if (prefer_outbound_breadcrumbs_ && !outbound_breadcrumbs_.empty() &&
       squaredDistance(outbound_breadcrumbs_.back().pose.position,
-                      current_pose_.pose.position) > 0.25) {
+                      current_pose_.pose.position) > 0.25 &&
+      squaredDistance(current_pose_.pose.position,
+                      home_pose_.pose.position) >
+          squaredDistance(outbound_breadcrumbs_.back().pose.position,
+                          home_pose_.pose.position) + 1e-3) {
+    // Append only while the vehicle is still extending the outbound trace.
+    // Appending an already-backtracking pose to the old outbound tail folds
+    // the polyline and makes reverse traversal command an outward leg.
     outbound_breadcrumbs_.push_back(current_pose_);
   }
   returning_home_ = true;
@@ -2772,17 +3491,32 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     publishStatus("WAIT_DATA", "Fast-LIO2 synchronized data is stale or absent");
     return;
   }
-
-  if ((have_battery_ && battery_percentage_ >= 0.0 &&
-       battery_percentage_ <= battery_return_threshold_) ||
-      low_voltage_return_requested_) {
+  const ros::Time now = ros::Time::now();
+  if (have_battery_ && battery_percentage_ >= 0.0) {
+    // BatteryState.percentage is float32. Treat its representation of an
+    // exact configured threshold (for example 0.20) as equal.
+    if (battery_percentage_ <= battery_return_threshold_ + 1e-6) {
+      if (low_battery_since_.isZero()) low_battery_since_ = now;
+      if ((now - low_battery_since_).toSec() >=
+          battery_return_confirm_duration_) {
+        low_percentage_return_requested_ = true;
+      }
+    } else if (!low_percentage_return_requested_ &&
+               battery_percentage_ >=
+                   battery_return_threshold_ + battery_return_hysteresis_) {
+      low_battery_since_ = ros::Time();
+    }
+  }
+  if (low_percentage_return_requested_ || low_voltage_return_requested_) {
     return_requested_ = true;
   }
   if (return_requested_) {
-    beginReturnHome(low_voltage_return_requested_
-                        ? "battery voltage below return threshold"
-                        : "external request or low battery",
-                    true);
+    const char* reason = low_voltage_return_requested_
+        ? "battery voltage below return threshold"
+        : (low_percentage_return_requested_
+               ? "battery percentage below return threshold"
+               : "external return request");
+    beginReturnHome(reason, true);
   }
 
   // The occupancy map can reveal a roof or wall after a command has been
@@ -2815,23 +3549,12 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     }
   }
 
-  // An apparent frontier is not a flyable route when SUPER repeatedly
-  // rejects its safety corridor. Map-closure mode previously waited forever
-  // because visible candidate voxels kept resetting the frontier timer even
-  // though the vehicle had made no progress. Return along the live map after
-  // a bounded stationary interval, without claiming that the model closed.
-  if (!returning_home_ && !dead_end_backtracking_ &&
-      !mission_finished_ && exploration_started_ && !have_active_goal_ &&
-      // Once closure has started confirming, allow the remaining decision
-      // cycles to finish before the generic stalled-route return can win.
-      !(use_map_closure_completion_ && map_closure_complete_streak_ > 0) &&
-      !last_motion_progress_time_.isZero() &&
-      (ros::Time::now() - last_motion_progress_time_).toSec() >=
-          no_frontier_timeout_) {
-    publishStatus("FORWARD_ROUTE_STALLED",
-                  "no vehicle-clear forward progress; returning on the live map");
-    beginReturnHome("forward safety corridor remained unavailable");
-  }
+  // Preserve an in-progress closure confirmation for this entire decision
+  // cycle. evaluateMapClosure() below may reset the streak on one noisy scan;
+  // that scan must not immediately turn a pending confirmation into a generic
+  // stalled-route return.
+  const bool closure_confirmation_pending =
+      use_map_closure_completion_ && map_closure_complete_streak_ > 0;
 
   if (returning_home_) {
     // New return legs are checked against the current SUPER occupancy map
@@ -3118,7 +3841,7 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const bool active_goal_is_forward = isForwardCandidate(
         FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
     const bool forward_goal_handover =
-        !front_obstacle_confirmed && active_goal_is_forward_lookahead_ &&
+        active_goal_is_forward_lookahead_ &&
         accepted_goal_id_ == active_goal_id_ &&
         !active_goal_is_end_approach_ &&
         distance <= forward_goal_handover_distance_ &&
@@ -3130,6 +3853,10 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
         !active_goal_is_blocked_frontier_route_ &&
         isForwardCandidate(
             FrontierCandidate{VoxelKey{}, current_goal_, 0.0, 0});
+    // A confirmed obstacle is not itself a reason to force a stop. The
+    // handover search only succeeds for a farther, fully observed and clear
+    // successor, so a wall still holds the current goal when no such leg
+    // exists while a genuine side passage stays trajectory-continuous.
     if (forward_goal_handover && tryForwardHandover(reachable)) {
       publishStatus("GOAL_HANDOVER", "verified successor sent while previous goal remains active");
       return;
@@ -3193,27 +3920,40 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       return;
     }
     rejected_goal_retry_after_ = ros::Time(0);
-    if (publishLateralDetourGoal(reachable, candidates) ||
+    const bool retry_route_published =
+        publishLateralDetourGoal(reachable, candidates) ||
         publishForwardLookaheadGoal(reachable) ||
-        selectAndPublishFrontier(candidates, reachable)) {
+        selectAndPublishFrontier(candidates, reachable);
+    if (retry_route_published) {
       publishStatus("EXPLORING", "retrying a reachable goal after SUPER rejection");
       return;
     }
   }
 
-  if (!have_active_goal_ && require_three_wall_completion_ &&
-      publishEndApproachGoal(coverage)) {
+  bool executable_route_published_this_cycle = false;
+  if (!have_active_goal_ && require_three_wall_completion_) {
+    executable_route_published_this_cycle = publishEndApproachGoal(coverage);
+  }
+  if (executable_route_published_this_cycle) {
     publishStatus("APPROACHING_END_WALL",
                   "three-wall map seen; moving to configured stand-off");
     return;
   }
 
-  if (!have_active_goal_ && publishLateralDetourGoal(reachable, candidates)) {
+  if (!have_active_goal_) {
+    executable_route_published_this_cycle =
+        publishLateralDetourGoal(reachable, candidates);
+  }
+  if (executable_route_published_this_cycle) {
     publishStatus("EXPLORING", "known-free lateral transition toward side opening");
     return;
   }
 
-  if (!have_active_goal_ && publishForwardLookaheadGoal(reachable)) {
+  if (!have_active_goal_) {
+    executable_route_published_this_cycle =
+        publishForwardLookaheadGoal(reachable);
+  }
+  if (executable_route_published_this_cycle) {
     publishStatus("EXPLORING",
                   "continuous forward look-ahead goal sent to SUPER");
     return;
@@ -3243,8 +3983,29 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
-  if (!have_active_goal_ && selectAndPublishFrontier(candidates, reachable)) {
+  if (!have_active_goal_) {
+    executable_route_published_this_cycle =
+        selectAndPublishFrontier(candidates, reachable);
+  }
+  if (executable_route_published_this_cycle) {
     publishStatus("EXPLORING", "new frontier goal sent to SUPER");
+    return;
+  }
+
+  // Reaching here means every hard-safe publisher was evaluated this cycle.
+  // Raw frontier presence is not evidence of an executable route: a frontier
+  // can be behind the vehicle, outside the mission band, or fail the local
+  // segment check. Stall on the publication outcome instead.
+  if (!have_active_goal_ && !executable_route_published_this_cycle &&
+      exploration_started_ &&
+      !closure_confirmation_pending &&
+      !(use_map_closure_completion_ && map_closure_complete_streak_ > 0) &&
+      !last_motion_progress_time_.isZero() &&
+      (ros::Time::now() - last_motion_progress_time_).toSec() >=
+          no_frontier_timeout_) {
+    publishStatus("FORWARD_ROUTE_STALLED",
+                  "no hard-safe exploration route; returning on the live map");
+    beginReturnHome("no hard-safe unexplored route remained available");
     return;
   }
 
@@ -3296,6 +4057,13 @@ void SuperExplorationDecider::acceptedGoalCallback(
     const std_msgs::UInt64::ConstPtr& message) {
   if (have_active_goal_ && message->data == active_goal_id_) {
     accepted_goal_id_ = message->data;
+    if (enabled_ && initial_accepted_goal_id_ == 0) {
+      initial_accepted_goal_id_ = message->data;
+      publishInitialGoalAccepted(initial_accepted_goal_id_);
+      ROS_INFO("Task-one initial SUPER goal %llu accepted; scheduler may "
+               "enable automatic authority",
+               static_cast<unsigned long long>(initial_accepted_goal_id_));
+    }
   }
 }
 
@@ -3306,6 +4074,8 @@ void SuperExplorationDecider::missionEnableCallback(
   }
   enabled_ = message->data;
   if (!enabled_) {
+    initial_accepted_goal_id_ = 0;
+    publishInitialGoalAccepted(0);
     cancelActiveGoal("mission_disabled", true);
     publishStatus("DISABLED", "task scheduler selected another task");
     ROS_INFO("SUPER exploration paused by mission scheduler");
@@ -3347,6 +4117,12 @@ void SuperExplorationDecider::publishStatus(const std::string& state,
   status_publisher_.publish(message);
 }
 
+void SuperExplorationDecider::publishInitialGoalAccepted(uint64_t goal_id) {
+  std_msgs::UInt64 message;
+  message.data = goal_id;
+  initial_goal_accepted_publisher_.publish(message);
+}
+
 void SuperExplorationDecider::clearMissionState() {
   voxels_.clear();
   occupancy_evidence_.clear();
@@ -3365,6 +4141,8 @@ void SuperExplorationDecider::clearMissionState() {
   current_goal_ = geometry_msgs::PoseStamped();
   active_goal_initial_distance_ = 0.0;
   accepted_goal_id_ = 0;
+  initial_accepted_goal_id_ = 0;
+  publishInitialGoalAccepted(0);
   rejected_goal_retry_after_ = ros::Time();
   have_data_ = false;
   have_home_ = false;
@@ -3381,7 +4159,9 @@ void SuperExplorationDecider::clearMissionState() {
   have_battery_ = false;
   battery_percentage_ = -1.0;
   battery_voltage_ = -1.0;
+  low_percentage_return_requested_ = false;
   low_voltage_return_requested_ = false;
+  low_battery_since_ = ros::Time();
   prefer_outbound_breadcrumbs_ = false;
   reached_goal_count_ = 0;
   three_wall_complete_streak_ = 0;
@@ -3395,6 +4175,8 @@ void SuperExplorationDecider::clearMissionState() {
   front_obstacle_visible_ = false;
   side_wall_missing_streak_ = 0;
   front_obstacle_streak_ = 0;
+  held_route_side_ = 0;
+  resetCorridorCentering();
   first_data_time_ = ros::Time();
   last_frontier_time_ = ros::Time();
   last_motion_progress_time_ = ros::Time();

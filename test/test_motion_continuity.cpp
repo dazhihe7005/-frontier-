@@ -48,6 +48,53 @@ TEST(TrackingSpeedGovernor, ProjectsTheCombinedThreeDimensionalVector) {
   EXPECT_LT(result.scale, 1.0);
 }
 
+TEST(TrackingSpeedGovernor, MeasuredSpeedFeedbackOnlyActsAboveSoftThreshold) {
+  EXPECT_NEAR(measuredSpeedRequestLimit(.50, .65, 1.0, .70, .35), .70,
+              1e-12);
+  EXPECT_NEAR(measuredSpeedRequestLimit(.65, .65, 1.0, .70, .35), .70,
+              1e-12);
+  EXPECT_NEAR(measuredSpeedRequestLimit(.70, .65, 1.0, .70, .35), .65,
+              1e-12);
+  EXPECT_NEAR(measuredSpeedRequestLimit(.80, .65, 1.0, .70, .35), .55,
+              1e-12);
+  EXPECT_NEAR(measuredSpeedRequestLimit(1.00, .65, 1.0, .70, .35), .35,
+              1e-12);
+}
+
+TEST(TrackingSpeedGovernor, AdaptiveLimitSlewsDownAndRecoversMoreSlowly) {
+  EXPECT_NEAR(slewMeasuredSpeedRequestLimit(.70, .10, .02, 1.25, .35),
+              .675, 1e-12);
+  EXPECT_NEAR(slewMeasuredSpeedRequestLimit(.30, .70, .02, 1.25, .35),
+              .307, 1e-12);
+}
+
+TEST(TrackingSpeedGovernor, LatestFlightTraceReducesRequestBeforeHardLimit) {
+  double limit = .70;
+  const double measured[] = {.643, .711, .770, .814};
+  for (double speed : measured) {
+    const double target = measuredSpeedRequestLimit(
+        speed, .65, 1.0, .70, .35);
+    limit = slewMeasuredSpeedRequestLimit(limit, target, .10, .80, .50);
+  }
+  EXPECT_LE(limit, .55);
+  EXPECT_GE(limit, .35);
+}
+
+TEST(TrackingSpeedGovernor, OverspeedGetsOnePointFiveSecondsToRecover) {
+  EXPECT_EQ(OverspeedRecoveryAction::kReduceSpeed,
+            overspeedRecoveryAction(.81, .80, 0.0, 1.5));
+  EXPECT_EQ(OverspeedRecoveryAction::kReduceSpeed,
+            overspeedRecoveryAction(.81, .80, 1.499, 1.5));
+  EXPECT_EQ(OverspeedRecoveryAction::kExitOffboard,
+            overspeedRecoveryAction(.81, .80, 1.5, 1.5));
+}
+
+TEST(TrackingSpeedGovernor, RecoveredSpeedContinuesNormalFlight) {
+  EXPECT_EQ(OverspeedRecoveryAction::kNormalFlight,
+            overspeedRecoveryAction(.80, .80, 1.4, 1.5));
+  EXPECT_EQ(OverspeedRecoveryAction::kNormalFlight,
+            overspeedRecoveryAction(.72, .80, 1.4, 1.5));
+}
 
 TEST(MotionContinuity, QuinticOffsetMatchesBothBoundaryStates) {
   const auto q=QuinticOffset1D::make(.11,-.08,.25,3.5);

@@ -6,7 +6,10 @@
   <arg name="allow_auto_arm" default="true"/>
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_strict_clearance_probe.yaml"/>
   <arg name="decider_vehicle_radius" default="1.8"/>
+  <arg name="decider_preferred_vehicle_radius" default="1.8"/>
   <arg name="decider_vertical_vehicle_radius" default="0.4"/>
+  <arg name="decider_vertical_vehicle_clearance_below" default="0.4"/>
+  <arg name="decider_vertical_vehicle_clearance_above" default="0.4"/>
 
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -14,7 +17,13 @@
     <arg name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <arg name="super_config_path" value="$(arg super_config_path)"/>
     <arg name="decider_vehicle_radius" value="$(arg decider_vehicle_radius)"/>
+    <arg name="decider_preferred_vehicle_radius"
+         value="$(arg decider_preferred_vehicle_radius)"/>
     <arg name="decider_vertical_vehicle_radius" value="$(arg decider_vertical_vehicle_radius)"/>
+    <arg name="decider_vertical_vehicle_clearance_below"
+         value="$(arg decider_vertical_vehicle_clearance_below)"/>
+    <arg name="decider_vertical_vehicle_clearance_above"
+         value="$(arg decider_vertical_vehicle_clearance_above)"/>
     <arg name="world_geometry_filter" value="true"/>
     <arg name="global_cloud_voxel_size" value="0.30"/>
     <arg name="world" value="$(find mine_uav_control)/worlds/goaf_serpentine_maze.world"/>

@@ -3,13 +3,23 @@
         name="mission_scheduler" output="screen" required="true">
     <param name="rc_topic" value="/test/mission/rc"/>
     <param name="odometry_topic" value="/test/mission/odom"/>
+    <param name="alignment_topic" value="/test/mission/alignment"/>
+    <param name="expected_planning_frame" value="task1_planning"/>
     <param name="mavros_state_topic" value="/test/mission/mavros_state"/>
+    <param name="command_fault_topic" value="/test/mission/command_fault"/>
+    <param name="initial_goal_accepted_topic"
+           value="/test/mission/accepted_initial_goal_id"/>
     <param name="switch_stable_time" value="0.12"/>
     <param name="rc_timeout" value="0.5"/>
     <param name="odometry_timeout" value="0.5"/>
     <param name="mavros_state_timeout" value="0.45"/>
     <param name="shaft_status_timeout" value="0.35"/>
     <param name="shaft_start_timeout" value="0.8"/>
+    <param name="start_max_speed" value="0.25"/>
+    <param name="start_max_vertical_speed" value="0.10"/>
+    <param name="start_stable_time" value="0.20"/>
+    <param name="start_check_timeout" value="1.0"/>
+    <param name="initial_goal_accept_timeout" value="1.2"/>
     <param name="shaft_task_available" value="true"/>
     <param name="require_mavros_connection" value="true"/>
     <param name="decision_rate" value="30.0"/>

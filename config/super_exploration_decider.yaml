@@ -10,6 +10,10 @@ world_frame: "task1_planning"
 # backward-compatible default enabled=true; a latched scheduler message will
 # override it when mission_scheduler is started.
 mission_enable_topic: "/mine_uav/mission/goaf_enable"
+# Reset to zero on every new mission epoch; publish the exact first goal ID
+# only after SUPER accepts it. mission_scheduler uses this handshake before it
+# raises auto_enable, so map warmup can never start OFFBOARD by itself.
+initial_goal_accepted_topic: "/mine_uav/exploration/accepted_initial_goal_id"
 
 # task1_perception_gate 已把 Fast-LIO2 点云和位姿调平到 task1_planning。
 # 本节点仍严格拒绝其他坐标系，避免把原始倾斜点云写进地图。
@@ -21,10 +25,14 @@ max_map_radius: 40.0
 raycast_max_range: 30.0
 raycast_enable: true
 max_points_per_cloud: 5000
-# Unified centre-to-obstacle safety radius supplied for the real aircraft.
-# Scenario launch files may retain a separate physical vertical envelope only
-# when explicitly requested; the canonical task-one default is spherical.
-vehicle_radius: 1.0
+# Task-one reachability keeps the 0.8 m planning floor so a narrow passage
+# is still usable. Goal selection exhausts 1.1 m-clear candidates and
+# segments before falling back to the 0.8--1.1 m band, matching SUPER.
+# The command bridge independently enforces the smaller 0.65 m hard cylinder.
+vehicle_radius: 0.8
+preferred_vehicle_radius: 1.1
+vertical_vehicle_clearance_below: 0.5
+vertical_vehicle_clearance_above: 0.5
 # Simulation-only recovery for accumulated-map pose/voxel jitter. A
 # collision-enabled simulated aircraft proves its current swept envelope is
 # free. Keep false for real localization, where pose error must never erase a
@@ -41,15 +49,17 @@ occupancy_evidence_min: -6
 occupancy_evidence_max: 8
 
 # Real/SITL-safe persistence for the path actually traversed by the vehicle.
-# This protects only the centerline, not the full 1 m collision envelope.
+# This protects only the centerline, not the full 0.65 m collision envelope.
 protect_traversed_centerline: true
 traversed_centerline_radius: 0.35
 traversed_centerline_step: 0.25
 
-# Home在CH7允许任务时的空中悬停点捕获。默认保持该高度，只允许小幅向上
-# 调整；不得把“相对home高度”误当成“相对地面高度”再叠加一次起飞高度。
-min_observation_height_above_home: 0.0
-max_observation_height_above_home: 0.3
+# Home在CH7允许任务时的空中悬停点捕获。无障碍时，任务级观察目标限于
+# home -0.30 m 到 +0.20 m，并优先使用 cruise_height_above_home=0。
+# 这只约束任务级普通目标；SUPER 遇障时仍可在三维安全走廊内上下绕行。
+# 这是相对 home 的高度，不得再叠加起飞高度。
+min_observation_height_above_home: -0.30
+max_observation_height_above_home: 0.20
 
 # 观察点选择与覆盖策略。
 frontier_search_radius: 30.0
@@ -74,6 +84,35 @@ forward_sector_deg: 70.0
 side_wall_sector_deg: 50.0
 side_wall_min_range: 1.0
 side_wall_max_range: 12.0
+# Conditional medial-axis guidance. Both wall slices must remain stable for
+# three scans; a missing wall, frontal blockage or discontinuous center jump
+# releases the preference so turns, branches and local detours remain free.
+corridor_centering_enabled: true
+corridor_centering_min_wall_points: 12
+corridor_centering_confirm_frames: 3
+corridor_centering_release_frames: 3
+corridor_centering_max_width: 6.0
+corridor_centering_filter_gain: 0.25
+corridor_centering_max_center_jump: 0.75
+# Move a short goal toward the measured medial axis by at most 0.5 m per
+# handover. With stable two-wall evidence this medial axis outranks comfort
+# clearance for goal/path selection. If centering is unavailable, exhaust the
+# 1.1 m comfort envelope before falling back to the 0.8 m planning floor.
+corridor_centering_max_goal_shift: 0.5
+# Build a distance-indexed free-space profile instead of collapsing all wall
+# returns into one median. A connected narrowing up to 8 m ahead can bias the
+# next short goal by 1 m, so yaw and lateral alignment begin before the throat.
+corridor_preview_enabled: true
+corridor_preview_start_distance: 1.0
+corridor_preview_distance: 8.0
+corridor_preview_longitudinal_step: 0.5
+corridor_preview_lateral_half_width: 4.0
+corridor_preview_lateral_step: 0.25
+corridor_preview_max_lateral_slope: 1.0
+corridor_preview_min_slices: 6
+corridor_preview_min_center_shift: 0.25
+corridor_preview_min_width_contraction: 0.5
+corridor_preview_max_goal_shift: 1.0
 front_obstacle_range: 6.0
 # Side-wall relief can fill the narrow forward cone near the entrance. It may
 # remain a local SUPER obstacle, but cannot be classified as the terminal wall
@@ -89,25 +128,32 @@ front_obstacle_min_lateral_span: 1.0
 front_obstacle_min_vertical_span: 0.8
 # While either side wall is visible, keep task-level goals in the entry-axis
 # corridor. SUPER may still deviate locally around an obstacle.
-forward_corridor_half_width: 2.0
-# Width searched by ordinary forward look-ahead goals. Set to zero in a
-# surveyed centerline mission; confirmed obstacles use the separate lateral
-# detour path instead of silently turning a forward goal into a side step.
-forward_goal_lateral_search_width: 2.0
+forward_corridor_half_width: 4.0
+# Width searched by ordinary forward look-ahead goals.
+forward_goal_lateral_search_width: 4.0
+# Do not flip between left/right routes for small scan-to-scan clearance
+# changes. Switch sides only when the alternative complete path gains at
+# least this much minimum clearance.
+lateral_route_switch_clearance_advantage: 0.25
 # All task-level frontier goals, including fallback goals, must stay inside
-# this corridor measured from the mission-start heading axis.
-max_task_lateral_offset: 4.0
+# this corridor measured from the mission-start heading axis. The latest real
+# flight reached lateral=-2 m before seeing a right-hand passage about 6 m
+# wide; the former +/-4 m band discarded that opening before the verified
+# lateral-detour check could use it.
+max_task_lateral_offset: 10.0
 forward_progress_weight: 2.0
 forward_lateral_penalty: 2.0
 forward_height_penalty: 1.0
-# Hand the next look-ahead goal to SUPER before reaching a full stop.
-forward_goal_handover_distance: 3.0
-# Forward mode samples a known-free task-level target this far ahead. The
-# planner remains responsible for collision-free local deviations.
-forward_lookahead_distance: 8.0
+# Hand the next short segment to SUPER with two metres still available, so a
+# successful handover preserves motion without replacing the goal too early.
+forward_goal_handover_distance: 2.0
+# Keep task-level planning local. A remote frontier still selects the branch,
+# while SUPER receives at most a four-metre, currently verified segment and
+# remains responsible for collision-free local deviations within that segment.
+forward_lookahead_distance: 4.0
 # A remote frontier expresses a direction, not a single long trajectory.
 # Convert it to a short, directly verified segment before handing it to SUPER.
-max_frontier_goal_distance: 8.0
+max_frontier_goal_distance: 4.0
 max_frontier_goal_vertical_step: 0.5
 forward_lookahead_step: 0.5
 cruise_height_above_home: 0.0
@@ -120,10 +166,10 @@ return_goal_handover_distance: 2.0
 # Return goals stay below the observation ceiling by default. A scenario can
 # set a smaller cap to leave room below its bridge flight-volume limit.
 return_map_timeout: 2.0
-# Keep the required 1.0 m radius on the live SUPER cloud. The extra 0.1 m
-# blocked the only surveyed return lane near the tunnel roof.
+# Return-path proximity screening uses the 0.8 m planning floor. The live
+# command bridge remains the final 0.65 m cylindrical hard-clearance authority.
 return_clearance_margin: 0.0
-return_super_radius: 1.0
+return_super_radius: 0.8
 # Only points near the vehicle height count as wall-direction evidence. This
 # prevents a low-flying vehicle from classifying the mine ceiling as a frontal
 # obstacle while preserving side-wall returns around the lidar horizon.
@@ -149,9 +195,12 @@ map_closure_require_front_boundary: true
 # Optional scenario recovery: after a confirmed dead end with no body-clear
 # detour, reverse the task heading and backtrack through already observed free
 # space. If the other direction also closes with no actionable frontier, the
-# bidirectional connected component is complete. Disabled by default so
-# existing single-ended missions are unchanged.
-max_dead_end_heading_reversals: 0
+# bidirectional connected component is complete. Task one enables one such
+# recovery attempt; further dead ends still use the normal closure/return path.
+# When the live map confirms that the current branch has no forward passage or
+# lateral frontier, backtrack on the verified map and try the opposite heading
+# once instead of waiting stationary for final map-closure timeout.
+max_dead_end_heading_reversals: 1
 dead_end_reversal_delay: 4.0
 # Reachability flood-fill and candidate clustering are safety/CPU limits, not
 # assumptions about mine dimensions.
@@ -199,10 +248,16 @@ active_goal_data_grace: 6.0
 sync_queue_size: 20
 sync_slop: 0.08
 battery_return_threshold: 0.20
+# Percentage estimates are quantized and can touch exactly 20% for one sample.
+# Require a sustained low reading; the independent voltage threshold below
+# remains an immediate, latched return trigger.
+battery_return_confirm_duration: 3.0
+battery_return_hysteresis: 0.03
 battery_return_voltage: 21.6
 # Real and SITL missions capture home after reaching an airborne hover, so
 # return to the same task-start altitude.
 return_home_height_offset: 0.0
+return_max_height_above_home: 0.20
 battery_topic: "/mavros/battery"
 return_request_topic: "/mine_uav/exploration/return_home"
 

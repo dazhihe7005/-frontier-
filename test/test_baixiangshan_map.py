@@ -66,7 +66,7 @@ class BaiXiangShanMapTest(unittest.TestCase):
         self.assertIn("baixianshan_tunnel_sitl.world", args["world"])
         self.assertEqual(args["spawn_x"], "-7.0")
         self.assertEqual(args["spawn_y"], "0.5")
-        self.assertEqual(args["spawn_z"], "-0.0334")
+        self.assertEqual(args["spawn_z"], "0.0512")
         self.assertEqual(args["spawn_yaw"], "0.0")
         self.assertEqual(args["takeoff_yaw_offset"], "0.0")
         self.assertEqual(args["mission_heading_offset"], "0.0")
@@ -78,16 +78,21 @@ class BaiXiangShanMapTest(unittest.TestCase):
         self.assertEqual(args["max_frontier_goal_distance"], "4.0")
         self.assertEqual(args["max_frontier_goal_vertical_step"], "0.35")
         self.assertEqual(args["max_task_lateral_offset"], "8.0")
-        self.assertEqual(args["decider_vehicle_radius"], "1.0")
+        self.assertEqual(args["decider_vehicle_radius"], "0.8")
+        self.assertEqual(args["decider_preferred_vehicle_radius"], "1.1")
         self.assertEqual(args["decider_vertical_vehicle_radius"], "1.0")
-        self.assertEqual(args["carve_traversed_vehicle_envelope"], "true")
+        self.assertEqual(
+            args["decider_vertical_vehicle_clearance_below"], "1.0")
+        self.assertEqual(
+            args["decider_vertical_vehicle_clearance_above"], "1.0")
+        self.assertEqual(args["carve_traversed_vehicle_envelope"], "false")
         self.assertEqual(
             launch.find("./arg[@name='takeoff_height']").attrib["default"],
             "1.5",
         )
         self.assertEqual(args["map_closure_min_progress"], "80.0")
         self.assertEqual(args["use_map_closure_completion"], "true")
-        self.assertEqual(args["max_dead_end_heading_reversals"], "1")
+        self.assertEqual(args["max_dead_end_heading_reversals"], "0")
         self.assertEqual(args["dead_end_reversal_delay"], "4.0")
         self.assertEqual(args["max_exploration_radius"], "180.0")
         self.assertEqual(args["decider_max_map_radius"], "220.0")
@@ -101,9 +106,12 @@ class BaiXiangShanMapTest(unittest.TestCase):
         }
         self.assertEqual(
             generic_defaults["carve_traversed_vehicle_envelope"], "false")
-        self.assertEqual(generic_defaults["decider_vehicle_radius"], "1.0")
         self.assertEqual(
-            generic_defaults["decider_vertical_vehicle_radius"], "1.0")
+            generic_defaults["decider_vehicle_radius"], "0.8")
+        self.assertEqual(
+            generic_defaults["decider_preferred_vehicle_radius"], "1.1")
+        self.assertEqual(
+            generic_defaults["decider_vertical_vehicle_radius"], "0.3")
 
         operator = generic.find("./node[@name='sitl_task_operator']")
         operator_params = {
@@ -115,8 +123,13 @@ class BaiXiangShanMapTest(unittest.TestCase):
             operator_params["ground_z_stability_tolerance"], "0.15")
 
         super_config = (ROOT / "config" / "super_task1.yaml").read_text()
-        self.assertIn("robot_r: 1.0", super_config)
-        self.assertIn("inflation_step: 0", super_config)
+        self.assertIn("robot_r: 0.3", super_config)
+        self.assertIn("horizontal_clearance_extra: 0.5", super_config)
+        self.assertIn(
+            "horizontal_preferred_clearance: 1.1", super_config)
+        self.assertIn("inflation_step: 8", super_config)
+        self.assertIn("inflation_vertical_below_step: 5", super_config)
+        self.assertIn("inflation_vertical_above_step: 5", super_config)
 
 
 if __name__ == "__main__":

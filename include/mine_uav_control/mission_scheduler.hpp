@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include <geometry_msgs/TransformStamped.h>
 #include <mavros_msgs/RCIn.h>
 #include <mavros_msgs/State.h>
 #include <nav_msgs/Odometry.h>
@@ -10,6 +11,7 @@
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>
 #include <std_msgs/UInt8.h>
+#include <std_msgs/UInt64.h>
 
 namespace mine_uav_control {
 
@@ -25,6 +27,7 @@ class MissionScheduler {
   };
 
   enum class RcLevel : uint8_t { kInvalid = 0, kLow = 1, kHigh = 2 };
+  enum class RcEvent : uint8_t { kNone = 0, kRising = 1, kFalling = 2 };
 
   struct RcEdge {
     RcLevel stable{RcLevel::kInvalid};
@@ -35,13 +38,23 @@ class MissionScheduler {
 
   void rcCallback(const mavros_msgs::RCIn::ConstPtr& message);
   void odometryCallback(const nav_msgs::Odometry::ConstPtr& message);
+  void alignmentCallback(
+      const geometry_msgs::TransformStamped::ConstPtr& message);
   void mavrosStateCallback(const mavros_msgs::State::ConstPtr& message);
+  void commandFaultCallback(const std_msgs::String::ConstPtr& message);
+  void initialGoalAcceptedCallback(
+      const std_msgs::UInt64::ConstPtr& message);
   void goafFinishedCallback(const std_msgs::Bool::ConstPtr& message);
   void shaftStatusCallback(const std_msgs::String::ConstPtr& message);
   void timerCallback(const ros::TimerEvent& event);
 
   RcLevel classifyRc(uint16_t value) const;
-  bool updateEdge(RcEdge* edge, RcLevel level, const ros::Time& now);
+  RcEvent updateEdge(RcEdge* edge, RcLevel level, const ros::Time& now);
+  void requestGoafStart(const ros::Time& now, bool odometry_fresh,
+                        bool mavros_state_fresh);
+  void updateGoafStartCheck(const ros::Time& now, bool odometry_fresh,
+                            bool mavros_state_fresh);
+  void cancelGoafStart(const std::string& reason);
   void applyTask(Task task, const std::string& reason, bool request_return);
   void publishOutputs(const std::string& reason);
   std::string taskName(Task task) const;
@@ -52,7 +65,10 @@ class MissionScheduler {
 
   ros::Subscriber rc_subscriber_;
   ros::Subscriber odometry_subscriber_;
+  ros::Subscriber alignment_subscriber_;
   ros::Subscriber mavros_state_subscriber_;
+  ros::Subscriber command_fault_subscriber_;
+  ros::Subscriber initial_goal_accepted_subscriber_;
   ros::Subscriber goaf_finished_subscriber_;
   ros::Subscriber shaft_status_subscriber_;
 
@@ -68,7 +84,11 @@ class MissionScheduler {
 
   std::string rc_topic_;
   std::string odometry_topic_;
+  std::string alignment_topic_;
+  std::string expected_planning_frame_;
   std::string mavros_state_topic_;
+  std::string command_fault_topic_;
+  std::string initial_goal_accepted_topic_;
   std::string active_task_topic_;
   std::string auto_enable_topic_;
   std::string goaf_enable_topic_;
@@ -88,12 +108,20 @@ class MissionScheduler {
   double shaft_status_timeout_{0.6};
   double shaft_start_timeout_{4.0};
   double decision_rate_{10.0};
+  double start_max_speed_{0.25};
+  double start_max_vertical_speed_{0.10};
+  double start_stable_time_{1.0};
+  double start_check_timeout_{15.0};
+  double initial_goal_accept_timeout_{30.0};
   bool require_odometry_{true};
   bool require_mavros_connection_{false};
   bool shaft_task_available_{false};
 
   bool have_rc_{false};
   bool have_odometry_{false};
+  bool odometry_frame_valid_{false};
+  bool have_speed_estimate_{false};
+  bool alignment_ready_{false};
   bool have_mavros_state_{false};
   bool have_shaft_status_{false};
   bool mavros_connected_{false};
@@ -104,6 +132,8 @@ class MissionScheduler {
   bool goaf_channel_available_{false};
   bool shaft_channel_available_{false};
   bool auto_enabled_{false};
+  bool goaf_start_pending_{false};
+  bool task_ready_reset_seen_{false};
   RcEdge goaf_edge_;
   RcEdge shaft_edge_;
   bool rearm_pending_{false};
@@ -115,10 +145,18 @@ class MissionScheduler {
   bool offboard_seen_for_task_{false};
   bool external_mode_exit_pending_{false};
   bool return_home_requested_{false};
+  double estimated_speed_{0.0};
+  double estimated_vertical_speed_{0.0};
+  nav_msgs::Odometry latest_odometry_;
+  uint64_t initial_goal_accepted_id_{0};
+  std::string command_fault_;
   std::string last_reason_{"startup"};
 
   ros::Time last_rc_time_;
   ros::Time last_odometry_time_;
+  ros::Time goaf_start_check_started_;
+  ros::Time goaf_stable_since_;
+  ros::Time goaf_activation_time_;
   ros::Time last_mavros_state_time_;
   ros::Time last_shaft_status_time_;
   ros::Time shaft_activation_time_;

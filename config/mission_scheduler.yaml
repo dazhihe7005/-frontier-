@@ -3,8 +3,11 @@ rc_topic: "/mavros/rc/in"
 goaf_trigger_channel: 6
 shaft_trigger_channel: 10
 
-# Both stable low->high and high->low changes are start events. The first
-# stable reading after startup only establishes a baseline.
+# CH7 and CH11 are direction-independent edge triggers. The first stable
+# reading after startup only establishes a baseline. Either low->high or
+# high->low starts Task 1 while idle; another CH7 edge cancels a pending or
+# active Task 1. Simultaneous task edges are rejected and tasks remain mutual
+# exclusive.
 low_threshold: 1300
 high_threshold: 1700
 switch_stable_time: 0.5
@@ -19,10 +22,28 @@ shaft_task_available: false
 shaft_status_timeout: 0.6
 shaft_start_timeout: 4.0
 
-# Task-one Fast-LIO2 gate. Task two uses its own depth and range validation.
-odometry_topic: "/Odometry"
-odometry_timeout: 1.0
+# Task-one start gate uses the levelled planning odometry, not the raw tilted
+# Fast-LIO frame. A CH7 edge only requests Task 1; the scheduler waits
+# for a continuously stable, armed hover before opening the planning gate.
+odometry_topic: "/mine_uav/task1/odometry"
+alignment_topic: "/mine_uav/task1/planning_to_px4_alignment"
+expected_planning_frame: "task1_planning"
+odometry_timeout: 0.5
 require_odometry: true
+start_max_speed: 0.25
+start_max_vertical_speed: 0.10
+start_stable_time: 1.0
+start_check_timeout: 15.0
+
+# Task 1 is a two-stage handoff. The exploration decider publishes zero at the
+# beginning of every mission epoch and the exact first goal ID only after SUPER
+# accepts it. Until then auto_enable remains false.
+initial_goal_accepted_topic: "/mine_uav/exploration/accepted_initial_goal_id"
+initial_goal_accept_timeout: 30.0
+
+# Any command-bridge safety fault revokes both planning and automatic authority,
+# including faults raised before PX4 ever enters OFFBOARD.
+command_fault_topic: "/mine_uav/task1/command_fault"
 
 mavros_state_topic: "/mavros/state"
 require_mavros_connection: true

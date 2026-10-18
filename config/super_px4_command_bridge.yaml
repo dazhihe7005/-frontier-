@@ -20,6 +20,18 @@ max_measured_speed: 0.8
 # MPC_Z_P values. Routine limiting continues the task; a much larger tracking
 # error remains a fault instead of being hidden by an extreme counter-command.
 max_predicted_speed: 0.7
+# The latest real flight showed that regulating around the nominal 0.6 m/s
+# planner speed repeatedly cut and restored feed-forward velocity. Keep the
+# full 0.7 m/s closed-loop request allowance through normal cruise, then apply
+# a smooth proportional ceiling only above 0.65 m/s. If measured speed crosses
+# the independent 0.8 m/s hard limit, keep governing for 1.5 continuous
+# seconds; recover normally if speed returns to the safe range in that window.
+measured_speed_target: 0.65
+measured_speed_feedback_gain: 1.0
+measured_speed_governor_floor: 0.35
+measured_speed_governor_reduction_rate: 0.80
+measured_speed_governor_recovery_rate: 0.50
+overspeed_duration: 1.5
 tracking_position_gain_xy: 0.9
 tracking_position_gain_z: 1.0
 max_governor_tracking_error: 0.65
@@ -31,35 +43,50 @@ max_horizontal_radius: 40.0
 min_height: -0.5
 max_height: 1.8
 height_clamp_tolerance: 0.25
-
 # Independent live obstacle guard. The cloud and task odometry share the
 # gravity-aligned planning frame. Horizontal clearance and vertical relevance
-# are evaluated separately, so height cannot be added through a 3-D norm to
-# disguise an XY violation. A violation publishes an immediate measured-pose
-# stop and requests POSCTL instead of extrapolating the previous trajectory.
+# are evaluated separately. An intrusion immediately freezes a measured-pose
+# hold. Only a persistent intrusion inside the independent 0.65 m hard radius
+# may be promoted to an OFFBOARD exit.
 obstacle_safety_enabled: true
 obstacle_cloud_topic: /mine_uav/task1/cloud_registered
 task_odometry_topic: /mine_uav/task1/odometry
 obstacle_cloud_timeout: 0.35
-live_horizontal_clearance: 0.8
-live_vertical_half_height: 0.5
+live_horizontal_clearance: 0.65
+# Planning-floor monitoring radius. Any current return inside 0.8 m freezes one
+# measured-pose hold immediately. It is not a hard-fault radius: a transient
+# leaf/rock may clear and the current task then resumes smoothly.
+obstacle_monitor_horizontal_clearance: 0.8
+# Persistence in the 0.65--0.8 m monitored caution zone remains held while the map and
+# planner update; it does not exit OFFBOARD. If the persistent obstacle is
+# currently inside 0.65 m, the bridge exits.
+# A cloud timeout remains an immediate exit because monitoring is unavailable.
+obstacle_persistence_duration: 3.0
+obstacle_clear_confirm_frames: 3
+# Vertical cylinder measured from the aircraft centre: obstacle returns up to
+# 0.5 m below and above remain horizontally protected.
+live_vertical_clearance_below: 0.5
+live_vertical_clearance_above: 0.5
 # Remove only the task-frame ground support plane from obstacle-cylinder and
 # surface-coverage checks. Real obstacle returns at/above z=0 stay protected.
 obstacle_min_z: 0.0
-
 # Do not approach a newly seen obstacle on a sparse edge/handful of returns.
 # Three consecutive 10 Hz frames must describe a surface with the configured
-# point count and horizontal/vertical extent. Two incomplete frames while
-# already in OFFBOARD trigger the same immediate stop and mode exit.
+# point count and horizontal extent. Coverage uses the same aircraft-relative
+# vertical cylinder as collision monitoring plus a small estimator-drift
+# margin; ceiling/floor returns outside that band cannot hold the aircraft.
+# Incomplete evidence joins the
+# same bounded hover-and-monitor state instead of causing an immediate exit.
 coverage_guard_distance: 2.5
 coverage_lateral_half_width: 2.5
-coverage_vertical_half_height: 1.5
+coverage_vertical_uncertainty_margin: 0.2
 coverage_min_points: 30
 coverage_min_horizontal_span: 0.6
-coverage_min_vertical_span: 0.6
+# A wall edge, post or low obstacle need not span 0.6 m vertically to be a
+# complete surface. Point population and horizontal extent reject speckles.
+coverage_min_vertical_span: 0.0
 coverage_confirm_frames: 3
 coverage_reject_frames: 2
-obstacle_voxel_resolution: 0.10
 max_obstacle_points: 100000
 
 # Continuity guard: reject discontinuous planner output before it can reach PX4.

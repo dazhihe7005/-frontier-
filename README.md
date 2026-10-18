@@ -138,7 +138,7 @@ nmcli connection up mid360-static
 不发送飞行目标、不切换模式，也不会解锁飞机：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+source /home/nuc/frontier-upload/scripts/setup_fastlio2_super_env.sh
 export ROS_MASTER_URI=http://localhost:11312
 roslaunch mine_uav_control px4_fastlio_localization.launch rviz:=false
 ```
@@ -150,7 +150,7 @@ roslaunch mine_uav_control px4_fastlio_localization.launch rviz:=false
 如需同时查看点云，把最后一项改为 `rviz:=true`。保持上述终端运行，在另一个终端检查：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+source /home/nuc/frontier-upload/scripts/setup_fastlio2_super_env.sh
 export ROS_MASTER_URI=http://localhost:11312
 rostopic hz /livox/imu
 rostopic hz /Odometry
@@ -172,22 +172,28 @@ IMU 200 Hz、Odometry 10 Hz、发送给 PX4 的 vision pose 30 Hz。
 若前者正在运行，先在它的终端按 `Ctrl+C`，再执行：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
-export ROS_MASTER_URI=http://localhost:11312
-roslaunch mine_uav_control task1_real.launch rviz:=true
+/home/nuc/frontier-upload/scripts/start_task1_real.sh
 ```
 
-当前任务调度忽略 CH6；CH7/CH11 的首次稳定电平只建立基线。确认定位健康后，
-由飞手手动解锁、起飞并稳定悬停，再拨动 CH7 到另一稳定位置并保持约 0.5 秒。
-任务一随后以当前位姿建立 home，开始向 SUPER 发布探索目标，指令桥预发送悬停目标后
-自动请求 OFFBOARD。节点不会自动解锁或自动起飞。**任务运行期间再次拨动 CH7/CH11
-会被忽略，CH7 拨回低位不是中止键。**人工接管应使用已拆桨验证的 CH5 飞行模式切换；
+截至 2026-10-17，本机已停止并禁用 `mine-uav-five-meter.service`，正式
+`mine-uav-task1.service` 已注册并设为开机启用。服务当前没有被手工启动；下次 NUC
+开机后会运行同一个 `start_task1_real.sh`，等待 PX4 串口和雷达网口就绪。自启动只拉起
+ROS/记录链，不会解锁、起飞或自动开始任务，仍必须由飞手完成起飞稳定后拨动 CH7。
+可用 `systemctl status mine-uav-task1.service` 核对实际状态。
+
+生产包装器会解析唯一的 PX4 `/dev/serial/by-id` 设备、检查日志磁盘并自动记录 ROS bag、
+PX4 ULog 和配置快照；它不会自动解锁或起飞。当前任务调度忽略 CH6；CH7/CH11 的首次
+稳定电平只建立基线。确认定位健康后，由飞手手动解锁、起飞并稳定悬停，再把 CH7 拨到
+另一稳定位置并保持约 0.5 秒，方向不限。调度器还会验证速度低于 `0.25 m/s` 且垂直速度低于
+`0.10 m/s` 连续 1 秒，然后打开规划门；SUPER 接受本任务首个目标后才开放自动权限并
+请求 OFFBOARD。**任务等待或运行期间再次改变 CH7 电平会取消任务并撤销自动权限。**人工接管仍
+应使用已拆桨验证的 CH5 飞行模式切换；
 真实定位丢失时不能假设 `POSCTL` 一定能够悬停。
 
 任务一运行状态可在第二个终端查看：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+source /home/nuc/frontier-upload/scripts/setup_fastlio2_super_env.sh
 export ROS_MASTER_URI=http://localhost:11312
 rostopic echo /mine_uav/mission/status
 rostopic echo /mine_uav/exploration/status
@@ -195,9 +201,21 @@ rostopic echo /mine_uav/task1/command_status
 rostopic echo /goal
 ```
 
-首次带飞前仍应拆桨验证 CH7、定位中断保护和人工接管；当前任务一SUPER名义轨迹速度
-上限为 `1.0 m/s`，指令异常保护阈值为 `1.1 m/s`，PX4 本地高度硬上限为
-`1.8 m`（不是相对任务 home）。PX4实际速度仍可能存在短时跟踪误差，不能把规划上限当成实测速度保证。
+首次带飞前仍应拆桨验证 CH7、定位中断保护和人工接管。当前任务一速度合同为 SUPER
+名义 `0.6 m/s`、预测闭环治理 `0.7 m/s`、规划与实测三维速度硬上限 `0.8 m/s`；
+PX4 本地高度硬上限为 `1.8 m`（不是相对任务 home）。
+所有允许提交的规划轨迹都必须通过水平 `1.2 m` 障碍净距复查；选点、A*/ROG 前端和
+轨迹安全走廊也统一使用该 `1.2 m` 半径。独立的 OFFBOARD 退出硬几何仍为水平
+`0.8 m`，两者以飞机参考中心计向上、向下各 `0.5 m`（圆柱总高 `1.0 m`）。候选目标
+在同时观测到左右障碍时按两侧净距差优先选择通道中点，
+仅有单侧观测时不推测虚假中线。点云表面完整性所需的 `0.6 m` 垂直跨度是观测证据门，
+不是圆柱半高。
+
+当前扫描在 `1.2 m` 避障区内发现突发障碍时，指令桥立即锁定同一实测位置悬停并继续
+更新点云；连续三个清空扫描后平滑恢复当前任务。若障碍连续存在满 `3.0 s`，位于
+`0.8--1.2 m` 的障碍只保持悬停并等待地图/规划更新，不能导致退出 OFFBOARD；只有障碍
+已连续存在三秒且当前侵入 `0.8 m` 硬半径时才锁存 `PERSISTENT_HARD_OBSTACLE_3S`
+并退出。点云超时或无效不等待三秒，直接执行原有失明保护退出。
 
 ### 实验室临时测试启动逻辑（手动起飞后 CH7 启动）
 
@@ -207,13 +225,13 @@ rostopic echo /goal
 1. 确认 CH7、CH11 的 MAVROS 通道映射；启动时保持任一稳定位置，供调度器建立基线。
 2. 启动任务一链路，确认 Fast-LIO2 点云/位姿、MAVROS 连接和 PX4 状态正常。
 3. 拆桨完成手动解锁、起飞并悬停，在 POSCTL/手动模式下稳定飞机。
-4. 将 CH7 拨到另一位置。调度器对该变化去抖约 0.5 s；任务一收到
+4. 将 CH7 拨到另一稳定位置，低到高或高到低均可。调度器对该变化去抖约 0.5 s，并确认稳定悬停；任务一收到
    `goaf_enable: false -> true` 后，在下一帧同步的点云+位姿处捕获当前位姿为 home，
    然后才开始发布探索目标给 SUPER。
-5. 任务运行中再次拨动 CH7 或 CH11 会被忽略。任务完成或飞手切出 OFFBOARD 后，
-   再次拨动 CH7 可启动新一轮任务一。该逻辑不会自动起飞。
+5. CH7 的下一次稳定电平变化会取消等待中或活动中的任务一。任务完成、故障或飞手切出
+   OFFBOARD 后，先让当前电平重新稳定，再次向任意方向改变 CH7 才能启动下一轮。该逻辑不会自动起飞。
 
-当前任务调度以 CH7 的任一稳定电平变化启动任务一；CH6 不参与任务选择。
+当前任务调度以 CH7 任意方向的稳定电平变化请求任务一，活动期间的下一次变化用于取消；CH6 不参与任务选择。
 必须避免在实验室同时运行两个
 调度器、两个 SUPER 或两个 PX4 setpoint 发布节点。SUPER 当前具备已知障碍膨胀、A*/安全
 走廊、轨迹碰撞复查和备份轨迹等避障环节；高层决策器还会把墙后及当前不可达自由空间之外
@@ -245,9 +263,7 @@ OFFBOARD。真机默认退出到 `POSCTL`，必须保证遥控器和 PX4 失效�
 统一启动文件（首次实机必须拆桨）：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
-export ROS_MASTER_URI=http://localhost:11312
-roslaunch mine_uav_control task1_real.launch
+/home/nuc/frontier-upload/scripts/start_task1_real.sh
 ```
 
 真机入口包含 `task1_real_time_guard.py`：若共用曾运行 SITL 的 ROS master，
@@ -359,7 +375,7 @@ git apply /path/to/frontier-upload/patches/super_geometric_time_lower_bound.patc
 启动：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+source /home/nuc/frontier-upload/scripts/setup_fastlio2_super_env.sh
 roslaunch mine_uav_control super_exploration_decider.launch
 ```
 
@@ -400,9 +416,10 @@ rostopic pub -1 /mine_uav/exploration/return_home std_msgs/Bool "data: true"
 `mission_scheduler` 通过 MAVROS 的 `/mavros/rc/in` 读取 CH7 与 CH11，并发布唯一的任务选择结果：
 
 - 上电默认手动；首次稳定 RC 读数只建立基线，不启动任务；
-- CH7 稳定电平变化（两个方向均可）：启动任务一 `goaf_exploration`；
+- CH7 任意方向稳定变化：空闲时请求任务一，满足稳定悬停门后启动 `goaf_exploration`；
+- CH7 再次稳定变化：取消等待中或活动中的任务一并撤销自动权限；
 - CH11 稳定电平变化（两个方向均可）：在任务二可用时启动 `shaft_exploration`；
-- 任务运行中忽略两个通道的新变化。完成或飞手退出 OFFBOARD 后回到 `hold`，新的变化可再次启动任务；
+- 任务一活动时仍处理 CH7 取消；CH11 等其他忙碌期边沿不会排队到任务结束后误启动；
 - 遥控器或 MAVROS 断链会撤销当前任务；任务一还要求 Fast-LIO2 位姿新鲜。任务二由自身的相对深度与测距逻辑检查传感器，生产开关仍为禁用。
 
 启动：
@@ -619,7 +636,7 @@ Frame为 `world`，而仿真没有发布 `world -> camera_init` TF，因此话�
 为了不和真雷达使用的 ROS Master 冲突，建议使用独立端口：
 
 ```bash
-source /home/nuc/super_ws/src/mine_uav_control/scripts/setup_fastlio2_super_env.sh
+source /home/nuc/frontier-upload/scripts/setup_fastlio2_super_env.sh
 export ROS_MASTER_URI=http://127.0.0.1:11312
 roslaunch mine_uav_control goaf_algorithm_sim.launch
 ```

@@ -123,6 +123,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sitl_shaft_optical_flow_depth.py)
   catkin_add_nosetests(test/test_task1_sitl_downward_range_filter.py)
   catkin_add_nosetests(test/test_px4_ulog_downloader.py)
+  catkin_add_nosetests(test/test_task1_safety_config.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
     test/test_super_goal_publication.cpp

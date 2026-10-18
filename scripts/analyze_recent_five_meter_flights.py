@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rosbag
 import sensor_msgs.point_cloud2 as point_cloud2
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401; registers "3d" projection
 from pyulog import ULog
 
 
@@ -125,6 +126,7 @@ def read_ros_flight(path):
 
     altitude = float(np.median(actual[:, 3]))
     obstacle_voxels = {}
+    full_cloud_voxels = {}
     cloud_index = 0
     with rosbag.Bag(path) as bag:
         for _, cloud, stamp in bag.read_messages(
@@ -137,6 +139,10 @@ def read_ros_flight(path):
                 continue
             for x, y, z in point_cloud2.read_points(
                     cloud, field_names=("x", "y", "z"), skip_nans=True):
+                full_key = (int(math.floor(x / 0.15)),
+                            int(math.floor(y / 0.15)),
+                            int(math.floor(z / 0.15)))
+                full_cloud_voxels[full_key] = (x, y, z)
                 if z < 0.0 or abs(z - altitude) >= 0.5:
                     continue
                 key = (int(math.floor(x / 0.10)),
@@ -144,6 +150,7 @@ def read_ros_flight(path):
                        int(math.floor(z / 0.10)))
                 obstacle_voxels[key] = (x, y, z)
     obstacles = np.asarray(list(obstacle_voxels.values()), dtype=float)
+    full_cloud = np.asarray(list(full_cloud_voxels.values()), dtype=float)
     return {
         "active_time": active_time,
         "complete_time": complete_time,
@@ -154,6 +161,7 @@ def read_ros_flight(path):
         "bridge": bridge,
         "actual": actual,
         "obstacles": obstacles,
+        "full_cloud": full_cloud,
     }
 
 
@@ -270,7 +278,7 @@ def plot_routes(flights, labels, output_path):
         obstacles = flight["obstacles"]
         if obstacles.size:
             axis.scatter(obstacles[:, 0], obstacles[:, 1], s=4,
-                         color="0.55", alpha=0.32,
+                         color="#d32f2f", alpha=0.32,
                          label="Obstacle points (relevant height)")
         planned = flight["planner"]
         actual = flight["actual"]
@@ -289,9 +297,42 @@ def plot_routes(flights, labels, output_path):
         axis.grid(True, alpha=0.25)
         axis.axis("equal")
         axis.legend(loc="best", fontsize=8)
-    figure.suptitle("Latest two real flights: SUPER route vs actual route")
+    figure.suptitle("Real flight: red obstacle cloud, SUPER and actual route")
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
     figure.savefig(output_path, dpi=180)
+    plt.close(figure)
+
+
+def plot_full_cloud_routes(flights, labels, output_path):
+    figure = plt.figure(figsize=(8 * len(flights), 7))
+    for index, (flight, label) in enumerate(zip(flights, labels), start=1):
+        axis = figure.add_subplot(1, len(flights), index, projection="3d")
+        cloud = flight["full_cloud"]
+        if cloud.size:
+            axis.scatter(cloud[:, 0], cloud[:, 1], cloud[:, 2], s=0.7,
+                         color="#d32f2f", alpha=0.16,
+                         label="Registered obstacle cloud")
+        planned = flight["planner"]
+        actual = flight["actual"]
+        axis.plot(planned[:, 1], planned[:, 2], planned[:, 3],
+                  color="#1565c0", linewidth=2.2, label="SUPER command")
+        axis.plot(actual[:, 1], actual[:, 2], actual[:, 3],
+                  color="#111111", linewidth=2.0, label="Actual odometry")
+        axis.scatter([planned[0, 1]], [planned[0, 2]], [planned[0, 3]],
+                     marker="o", s=60, color="#2e7d32", label="Start")
+        if flight["goal"] is not None:
+            axis.scatter([flight["goal"][0]], [flight["goal"][1]],
+                         [flight["goal"][2]], marker="*", s=120,
+                         color="#6a1b9a", label="Goal")
+        axis.set_title(label)
+        axis.set_xlabel("Task-frame x / m")
+        axis.set_ylabel("Task-frame y / m")
+        axis.set_zlabel("Task-frame z / m")
+        axis.legend(loc="best", fontsize=8)
+        axis.view_init(elev=25, azim=-68)
+    figure.suptitle("Full registered point cloud (red) and flight trajectory")
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    figure.savefig(output_path, dpi=200)
     plt.close(figure)
 
 
@@ -356,6 +397,9 @@ def main():
     ulog_flights = [read_ulog_flight(path) for path in args.ulog]
     plot_routes(ros_flights, args.label,
                 os.path.join(args.output_dir, "latest_two_routes.png"))
+    plot_full_cloud_routes(
+        ros_flights, args.label,
+        os.path.join(args.output_dir, "full_pointcloud_trajectory.png"))
     plot_yaw(ros_flights, ulog_flights, args.label,
              os.path.join(args.output_dir, "latest_two_yaw.png"))
     summaries = []

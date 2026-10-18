@@ -6,6 +6,31 @@
   <arg name="start_mavros" default="true"/>
   <arg name="start_super" default="true"/>
   <arg name="rviz" default="false"/>
+  <!-- The production wrapper resolves an unambiguous /dev/serial/by-id path.
+       Manual launches must provide it explicitly; never guess a tty. -->
+  <arg name="px4_device"/>
+  <arg name="record_flight" default="false"/>
+  <arg name="flight_log_dir"
+       default="/home/nuc/flight_logs/task1/manual"/>
+  <arg name="download_px4_ulog" default="true"/>
+
+  <group if="$(arg record_flight)">
+    <!-- Raw Livox packets and IMU are retained, so the two duplicate
+         Fast-LIO registered clouds can be reconstructed. Keep planner input,
+         odometry, commands, task state and all MAVROS topics. -->
+    <node pkg="rosbag" type="record" name="task1_flight_recorder"
+          output="screen" required="false"
+          args="--all --exclude=^/(cloud_registered|cloud_registered_body)$ --lz4 --split --duration=5m --repeat-latched --publish --buffsize=256 --min-space=100G --output-name=$(arg flight_log_dir)/ros_all"/>
+    <node if="$(arg download_px4_ulog)"
+          pkg="mine_uav_control" type="px4_ulog_downloader.py"
+          name="task1_px4_ulog_downloader" output="screen" required="false">
+      <param name="output_directory" value="$(arg flight_log_dir)"/>
+      <param name="post_disarm_delay_s" value="5.0"/>
+      <param name="request_block_bytes" value="46080"/>
+      <param name="request_timeout_s" value="4.0"/>
+      <param name="max_retries" value="8"/>
+    </node>
+  </group>
 
   <!-- A stale SITL /use_sim_time without /clock freezes freshness timers.
        Exit the complete real-aircraft launch instead of silently proceeding. -->
@@ -25,7 +50,9 @@
   </group>
 
   <group if="$(arg start_mavros)">
-    <include file="$(find mine_uav_control)/launch/px4_serial.launch"/>
+    <include file="$(find mine_uav_control)/launch/px4_serial.launch">
+      <arg name="device" value="$(arg px4_device)"/>
+    </include>
   </group>
 
   <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>

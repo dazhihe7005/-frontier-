@@ -27,6 +27,8 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
+#include "mine_uav_control/corridor_centering.hpp"
+
 namespace mine_uav_control {
 
 struct VoxelKey {
@@ -77,6 +79,7 @@ class SuperExplorationDecider {
     geometry_msgs::PoseStamped goal;
     double score{0.0};
     int unknown_neighbors{0};
+    bool preferred_clearance{false};
   };
 
   struct ThreeWallCoverage {
@@ -104,6 +107,15 @@ class SuperExplorationDecider {
     std::size_t occupied_voxels{0};
   };
 
+  struct LocalRouteCandidate {
+    geometry_msgs::PoseStamped goal;
+    double mission_lateral{0.0};
+    double lookahead{0.0};
+    double minimum_clearance{0.0};
+    double selection_score{0.0};
+    bool preferred_clearance{false};
+  };
+
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
   void freeRayCallback(const Cloud::ConstPtr& cloud);
@@ -125,6 +137,16 @@ class SuperExplorationDecider {
                  const geometry_msgs::PoseStamped& pose);
   void updateDirectionalEvidence(const sensor_msgs::PointCloud2& cloud,
                                  const geometry_msgs::PoseStamped& pose);
+  void updateCorridorCentering(
+      const std::vector<double>& left_wall_laterals,
+      const std::vector<double>& right_wall_laterals,
+      double vehicle_lateral,
+      bool front_obstacle_visible);
+  bool corridorCenteringActive() const;
+  void resetCorridorCentering();
+  CorridorPreviewEstimate estimateForwardCorridorPreview(
+      const VoxelSet& reachable, double current_progress,
+      double current_lateral) const;
   ThreeWallCoverage evaluateThreeWallCoverage() const;
   MapClosureStatus evaluateMapClosure(
       const std::vector<FrontierCandidate>& candidates,
@@ -141,7 +163,8 @@ class SuperExplorationDecider {
   VoxelKey positionToKey(double x, double y, double z) const;
   geometry_msgs::Point keyToPoint(const VoxelKey& key) const;
   bool isOccupied(const VoxelKey& key) const;
-  bool isClearForVehicle(const VoxelKey& key) const;
+  bool isClearForVehicle(const VoxelKey& key,
+                         double horizontal_radius = -1.0) const;
   bool isKnownFree(const VoxelKey& key) const;
   VoxelSet reachableFreeVoxels() const;
   std::vector<FrontierCandidate> findFrontiers(VoxelSet& reachable) const;
@@ -153,6 +176,9 @@ class SuperExplorationDecider {
       const VoxelSet& reachable);
   bool publishForwardLookaheadGoal(const VoxelSet& reachable,
                                    bool require_successor = false);
+  bool selectForwardLookaheadGoal(const VoxelSet& reachable,
+                                  bool require_successor,
+                                  LocalRouteCandidate* selected) const;
   bool publishLateralDetourGoal(
       const VoxelSet& reachable,
       const std::vector<FrontierCandidate>& candidates);
@@ -181,9 +207,13 @@ class SuperExplorationDecider {
                           const geometry_msgs::Point& to,
                           double extra_clearance = 0.0,
                           bool require_known_start = true) const;
+  double minimumSuperSegmentClearance(
+      const geometry_msgs::Point& from,
+      const geometry_msgs::Point& to) const;
   double outboundSeparation(const geometry_msgs::Point& point) const;
   void publishStatus(const std::string& state,
                      const std::string& detail = std::string());
+  void publishInitialGoalAccepted(uint64_t goal_id);
   void publishVisualization(const std::vector<FrontierCandidate>& candidates);
   void clearMissionState();
 
@@ -207,6 +237,7 @@ class SuperExplorationDecider {
   ros::Publisher returning_publisher_;
   ros::Publisher model_complete_publisher_;
   ros::Publisher coverage_status_publisher_;
+  ros::Publisher initial_goal_accepted_publisher_;
   ros::Publisher visualization_publisher_;
   ros::ServiceServer enable_service_;
   ros::ServiceServer reset_service_;
@@ -237,6 +268,7 @@ class SuperExplorationDecider {
   uint64_t next_goal_id_{1};
   uint64_t active_goal_id_{0};
   uint64_t accepted_goal_id_{0};
+  uint64_t initial_accepted_goal_id_{0};
   double active_goal_initial_distance_{0.0};
   ros::Time last_sync_time_;
   ros::Time first_data_time_;
@@ -278,7 +310,9 @@ class SuperExplorationDecider {
   bool have_battery_{false};
   double battery_percentage_{-1.0};
   double battery_voltage_{-1.0};
+  bool low_percentage_return_requested_{false};
   bool low_voltage_return_requested_{false};
+  ros::Time low_battery_since_;
   bool prefer_outbound_breadcrumbs_{false};
   int reached_goal_count_{0};
   int three_wall_complete_streak_{0};
@@ -299,6 +333,16 @@ class SuperExplorationDecider {
   bool front_obstacle_visible_{false};
   int side_wall_missing_streak_{0};
   int front_obstacle_streak_{0};
+  bool corridor_center_valid_{false};
+  double corridor_center_lateral_{0.0};
+  double corridor_center_width_{0.0};
+  double pending_corridor_center_lateral_{0.0};
+  double pending_corridor_width_{0.0};
+  int corridor_center_confirm_streak_{0};
+  int corridor_center_missing_streak_{0};
+  // -1/right and +1/left in mission coordinates. Keep the current side while
+  // its complete path remains almost as clear as the opposite alternative.
+  int held_route_side_{0};
 
   std::string cloud_topic_;
   std::string odom_topic_;
@@ -312,6 +356,7 @@ class SuperExplorationDecider {
   std::string returning_topic_;
   std::string model_complete_topic_;
   std::string coverage_status_topic_;
+  std::string initial_goal_accepted_topic_;
   std::string visualization_topic_;
 
   double voxel_resolution_{0.5};
@@ -326,14 +371,23 @@ class SuperExplorationDecider {
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
   double vehicle_radius_{0.4};
+  double preferred_vehicle_radius_{0.4};
   double vertical_vehicle_radius_{-1.0};
-  double min_observation_height_above_home_{0.0};
+  // Keep the compiled fallback identical to the real-flight contract.  Unit
+  // tests and diagnostic tools sometimes construct the decider without first
+  // loading the launch YAML; an invalid sentinel here made those paths behave
+  // differently from the autostarted node.
+  double vertical_vehicle_clearance_below_{0.5};
+  double vertical_vehicle_clearance_above_{0.5};
+  double min_observation_height_above_home_{-0.25};
   double max_observation_height_above_home_{0.3};
   double data_timeout_{1.0};
   double active_goal_data_grace_{2.0};
   double decision_rate_{2.0};
   double sync_slop_{0.08};
   double battery_return_threshold_{0.20};
+  double battery_return_confirm_duration_{3.0};
+  double battery_return_hysteresis_{0.03};
   double battery_return_voltage_{21.6};
   double return_home_height_offset_{0.0};
   double return_max_height_above_home_{0.3};
@@ -343,7 +397,7 @@ class SuperExplorationDecider {
   double return_goal_handover_distance_{2.0};
   double return_map_timeout_{2.0};
   double return_clearance_margin_{0.15};
-  double return_super_radius_{1.0};
+  double return_super_radius_{0.8};
   double min_forward_super_clearance_{0.0};
   double min_clearance_return_progress_{0.0};
   std::string super_occupied_topic_{"/fsm_node/rog_map/occ"};
@@ -355,6 +409,25 @@ class SuperExplorationDecider {
   double side_wall_sector_deg_{50.0};
   double side_wall_min_range_{1.0};
   double side_wall_max_range_{12.0};
+  bool corridor_centering_enabled_{true};
+  int corridor_centering_min_wall_points_{12};
+  int corridor_centering_confirm_frames_{3};
+  int corridor_centering_release_frames_{3};
+  double corridor_centering_max_width_{6.0};
+  double corridor_centering_filter_gain_{0.25};
+  double corridor_centering_max_center_jump_{0.75};
+  double corridor_centering_max_goal_shift_{0.5};
+  bool corridor_preview_enabled_{true};
+  double corridor_preview_start_distance_{1.0};
+  double corridor_preview_distance_{8.0};
+  double corridor_preview_longitudinal_step_{0.5};
+  double corridor_preview_lateral_half_width_{4.0};
+  double corridor_preview_lateral_step_{0.25};
+  double corridor_preview_max_lateral_slope_{1.0};
+  int corridor_preview_min_slices_{6};
+  double corridor_preview_min_center_shift_{0.25};
+  double corridor_preview_min_width_contraction_{0.5};
+  double corridor_preview_max_goal_shift_{1.0};
   double front_obstacle_range_{6.0};
   double front_obstacle_min_progress_{8.0};
   double front_obstacle_sector_deg_{24.0};
@@ -362,13 +435,14 @@ class SuperExplorationDecider {
   double front_obstacle_min_vertical_span_{0.8};
   double forward_corridor_half_width_{2.0};
   double forward_goal_lateral_search_width_{2.0};
+  double lateral_route_switch_clearance_advantage_{0.25};
   double max_task_lateral_offset_{4.0};
   double forward_progress_weight_{2.0};
   double forward_lateral_penalty_{2.0};
   double forward_height_penalty_{1.0};
-  double forward_goal_handover_distance_{1.2};
-  double forward_lookahead_distance_{8.0};
-  double max_frontier_goal_distance_{8.0};
+  double forward_goal_handover_distance_{2.0};
+  double forward_lookahead_distance_{4.0};
+  double max_frontier_goal_distance_{4.0};
   double max_frontier_goal_vertical_step_{0.5};
   double max_outbound_backtrack_{2.0};
   double forward_lookahead_step_{0.5};

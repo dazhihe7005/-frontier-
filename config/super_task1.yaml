@@ -10,6 +10,10 @@ fsm:
   goal_snap_max_distance: 0.50
   click_yaw_en: true
   replan_rate: 6.0
+  # Six consecutive failures at 6 Hz indicate that the active target cannot
+  # be repaired from the live map. Hand it back to the explorer instead of
+  # silently holding the old trajectory until the 30 s task-level timeout.
+  replan_failure_reject_count: 6
   cmd_topic: "/planning/pos_cmd"
   mpc_cmd_topic: "/planning_cmd/poly_traj"
   timer_en: true
@@ -24,31 +28,35 @@ super_planner:
   frontend_in_known_free: false
   goal_yaw_en: true
   goal_vel_en: false
-  corridor_bound_dis: 1.5
+  corridor_bound_dis: 2.0
   corridor_line_max_length: 1.2
   safe_corridor_line_max_length: 5.0
   iris_iter_num: 2
   obs_skip_num: 2
-  # A* can use 0.8 s and corridor optimization needs additional time. At
-  # 0.1 s valid return replans were discarded after searching.
-  replan_forward_dt: 2.0
+  # The latest real-flight replans took 22 ms on average and 80 ms worst case.
+  # A 0.5 s splice horizon retains ample compute margin without inheriting a
+  # near-terminal zero-speed state from the previous look-ahead goal.
+  replan_forward_dt: 0.5
   planning_horizon: 7.0
   sensing_horizon: -1
-  receding_dis: 4.0
-  # Anisotropic safety contract: 0.8 m horizontal and 0.5 m vertical.
-  # CIRI starts from the 0.5 m base sphere, then attempts a horizontal-only
-  # 0.3 m inset. The front-end map is one 0.1 m grid cell stricter at 0.9 m
-  # horizontally. Every optimized result is independently checked against
-  # the exact 0.8 m hard
-  # cylinder, so a locally infeasible CIRI inset cannot weaken acceptance.
-  robot_r: 0.5
-  horizontal_clearance_extra: 0.3
-  clearance_vertical_band: 0.5
-  # Independent finite-height cylinder checked against raw occupied voxels
-  # after optimization. XY and Z are tested separately: while vertical
-  # separation is below 0.5 m, it cannot reduce the required 0.8 m XY gap.
-  horizontal_hard_clearance: 0.8
-  horizontal_hard_vertical_half_height: 0.5
+  # On a new/blocked goal, retain only a short certified prefix beyond the
+  # splice point; normal same-goal replans still reuse the whole safe path.
+  receding_dis: 0.5
+  # The 0.8 m value is the non-negotiable planning floor. The preferred
+  # 1.1 m radius is a bounded comfort reward. Two-wall medial-axis goals and
+  # the maximum-inscribed corridor attractor remain the higher-level centering
+  # principle; one-sided/no-centre operation relies on this comfort reward.
+  robot_r: 0.3
+  horizontal_clearance_extra: 0.5
+  horizontal_planning_clearance: 0.8
+  horizontal_preferred_clearance: 1.1
+  preferred_clearance_penalty: 0.25
+  clearance_vertical_band: 0.3
+  # This separate 0.65 m value is the hard/runtime radius mirrored by the PX4
+  # bridge; it remains an independent last-resort runtime threshold.
+  horizontal_hard_clearance: 0.65
+  horizontal_hard_vertical_below: 0.5
+  horizontal_hard_vertical_above: 0.5
   # Task-frame ground returns are near z=-0.05 m. Keep their support plane
   # out of the vertical obstacle cylinders while retaining obstacle top/face
   # returns at z>=0.0 m (the latest real low obstacle reached z=0.065 m).
@@ -66,6 +74,10 @@ super_planner:
   flight_min_z: -5.0
   flight_max_z: 8.0
   yaw_dot_max: 0.6
+  # Flight 20261018_205128 showed visible ~1 s yaw acceleration/deceleration
+  # pulses. At 0.6 m/s, 0.5 s samples the path tangent about every 0.3 m and
+  # still leaves 25 setpoints per yaw segment at the 50 Hz PX4 bridge rate.
+  yaw_tracking_sample_period: 0.5
   yaw_mode: 1
   mpc_horizon: 15
 
@@ -75,7 +87,7 @@ traj_opt:
     print_optimizer_log: false
   boundary:
     # Current flight contract: 0.6 m/s nominal planning, 0.7 m/s predicted
-    # closed-loop governance, and 0.8 m/s planner/measured hard limits.
+  # closed-loop governance, and 0.8 m/s planner/measured hard limits.
     max_vel: 0.6
     max_acc: 1.0
     max_jerk: 4.0
@@ -97,6 +109,9 @@ traj_opt:
     penna_acc: 5.0e+5
     penna_jerk: 5.0e+5
     penna_attract: 1.0e+3
+    # Keep optimized junctions near the maximum-inscribed center of adjacent
+    # safe corridors. This remains a soft cost and yields to corridor safety.
+    attractor_dead_distance_ratio: 0.35
     penna_omg: 5.0e+5
     penna_thr: 1.0e+5
   backup_traj:
@@ -144,20 +159,20 @@ astar:
   vertical_bypass_up_only: true
   downward_bypass_last: true
   vertical_motion_cost: 2.0
-
 rog_map:
   resolution: 0.1
   inflation_resolution: 0.1
-  # The primary A* search reads the inflated map directly. Its neighbour
-  # radius is used only by a fallback search, so zero inflation admitted
-  # paths whose CIRI seed lines were under 0.8 m from obstacles. Nine 0.1 m
-  # cells add one grid cell beyond the 0.8 m final hard radius. It is
-  # not the acceptance limit: optimized trajectories are still checked
-  # independently against the exact 0.8 m cylinder.
-  # Vertical inflation implements the independent 0.5 m vertical clearance.
+  # The 0.1 m voxel grid exactly realizes the 0.8 m planning floor.
+  # Continuous corridor/trajectory validation uses the same 0.8 m value.
+  # A* adds only a bounded comfort cost up to the 1.1 m envelope.
+  # OFFBOARD exit remains a separate exact 0.65 m limit.
+  # Five vertical cells retain the 0.5 m half-height.
   # The former 0.2 m grid snapped some return targets more than 1 m away.
-  inflation_step: 9
-  inflation_vertical_step: 5
+  inflation_step: 8
+  # Vehicle-centric vertical envelope: an obstacle is inflated 0.5 m both
+  # upward and downward for the lower/upper body clearance.
+  inflation_vertical_below_step: 5
+  inflation_vertical_above_step: 5
   unk_inflation_en: false
   unk_inflation_step: 1
   map_size: [50, 50, 6]

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# systemd uses SIGINT for a graceful ROS shutdown.  Before roslaunch is exec'd
+# this wrapper may still be waiting for hardware, so handle both stop signals
+# here instead of letting the prerequisite loop continue until TimeoutStopSec.
+trap 'exit 0' INT TERM
+
 # Boot entry point for the physical five-metre test.  Starting this script does
 # not arm PX4, take off, or generate a goal.  The test node still requires a
 # fresh, debounced CH7 low-to-high edge after launch and all normal safety gates.
@@ -65,9 +70,9 @@ find_px4_serial() {
   return 1
 }
 
-exec 9>/run/lock/mine-uav-five-meter.lock
+exec 9>/run/lock/mine-uav-flight-stack.lock
 if ! flock -n 9; then
-  echo "five-metre stack is already running; refusing a duplicate launch" >&2
+  echo "another physical Mine-UAV flight stack is already running" >&2
   exit 1
 fi
 

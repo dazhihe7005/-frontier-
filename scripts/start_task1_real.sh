@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# systemd uses SIGINT for a graceful ROS shutdown.  Before roslaunch is exec'd
+# this wrapper may still be waiting for hardware, so handle both stop signals
+# here instead of letting the prerequisite loop continue until TimeoutStopSec.
+trap 'exit 0' INT TERM
+
+# Production entry point for the physical Task-1 stack. This script records a
+# complete run but never arms PX4; CH7, stable-hover, goal-acceptance and bridge
+# safety gates remain responsible for granting autonomous authority.
+
+readonly PROJECT_DIR=/home/nuc/frontier-upload
+readonly LOG_ROOT=/home/nuc/flight_logs/task1
+readonly RADAR_INTERFACE=enp89s0
+readonly RADAR_ADDRESS=192.168.1.10/24
+readonly MIN_FREE_KIB=$((100 * 1024 * 1024))
+
+find_px4_serial() {
+  local candidate name resolved
+  local -a serial_candidates=()
+  local -a px4_candidates=()
+
+  shopt -s nullglob
+  for candidate in /dev/serial/by-id/*; do
+    resolved=$(readlink -f "${candidate}" 2>/dev/null || true)
+    case "${resolved}" in
+      /dev/ttyACM*|/dev/ttyUSB*) ;;
+      *) continue ;;
+    esac
+    serial_candidates+=("${candidate}")
+    name=${candidate##*/}
+    name=${name,,}
+    case "${name}" in
+      *px4*|*pixhawk*|*auterion*|*holybro*|*cube*)
+        px4_candidates+=("${candidate}")
+        ;;
+    esac
+  done
+  shopt -u nullglob
+
+  if (( ${#px4_candidates[@]} == 1 )); then
+    printf '%s\n' "${px4_candidates[0]}"
+    return 0
+  fi
+  if (( ${#px4_candidates[@]} > 1 )); then
+    printf 'multiple PX4 serial devices found: %s\n' \
+      "${px4_candidates[*]}" >&2
+    return 1
+  fi
+  if (( ${#serial_candidates[@]} == 1 )); then
+    printf '%s\n' "${serial_candidates[0]}"
+    return 0
+  fi
+  if (( ${#serial_candidates[@]} > 1 )); then
+    printf 'multiple generic serial devices found: %s\n' \
+      "${serial_candidates[*]}" >&2
+  else
+    echo 'waiting for a PX4 serial device under /dev/serial/by-id' >&2
+  fi
+  return 1
+}
+
+# One physical aircraft must never run the five-metre and formal Task-1 graphs
+# together, even if both systemd units were accidentally enabled.
+exec 9>/run/lock/mine-uav-flight-stack.lock
+if ! flock -n 9; then
+  echo 'another physical Mine-UAV flight stack is already running' >&2
+  exit 1
+fi
+
+set +u
+source /opt/ros/noetic/setup.bash
+source /home/nuc/fastlio2_ws/devel/setup.bash --extend
+source /home/nuc/super_ws/devel/setup.bash --extend
+source /home/nuc/frontier_runtime_ws/devel/setup.bash --extend
+set -u
+
+export CMAKE_PREFIX_PATH=/home/nuc/frontier_runtime_ws/devel:/home/nuc/super_ws/devel:/home/nuc/fastlio2_ws/devel:/opt/ros/noetic
+export ROS_PACKAGE_PATH=/home/nuc/frontier_runtime_ws/src:/home/nuc/super_ws/src/SUPER:/home/nuc/fastlio2_ws/src:/opt/ros/noetic/share
+export PYTHONPATH=/home/nuc/frontier_runtime_ws/devel/lib/python3/dist-packages:/home/nuc/super_ws/devel/lib/python3/dist-packages:/home/nuc/fastlio2_ws/devel/lib/python3/dist-packages:/opt/ros/noetic/lib/python3/dist-packages
+export LD_LIBRARY_PATH=/home/nuc/frontier_runtime_ws/devel/lib:/home/nuc/super_ws/devel/lib:/home/nuc/fastlio2_ws/devel/lib:/opt/ros/noetic/lib
+export ROS_MASTER_URI=http://127.0.0.1:11312
+export ROS_HOSTNAME=127.0.0.1
+
+PX4_SERIAL=
+until PX4_SERIAL=$(find_px4_serial); do
+  sleep 2
+done
+readonly PX4_SERIAL
+echo "using PX4 serial device ${PX4_SERIAL} -> $(readlink -f "${PX4_SERIAL}")"
+until ip -4 address show dev "${RADAR_INTERFACE}" 2>/dev/null | \
+    grep -Fq "${RADAR_ADDRESS}"; do
+  echo "waiting for ${RADAR_INTERFACE} address ${RADAR_ADDRESS}"
+  sleep 2
+done
+
+mkdir -p "${LOG_ROOT}"
+available_kib=$(df -Pk "${LOG_ROOT}" | awk 'NR == 2 {print $4}')
+if [[ ! "${available_kib}" =~ ^[0-9]+$ ]] ||
+   (( available_kib < MIN_FREE_KIB )); then
+  echo 'less than 100 GiB is available for Task-1 logs; refusing to start' >&2
+  exit 1
+fi
+
+run_stamp=$(date +%Y%m%d_%H%M%S)
+run_dir=${LOG_ROOT}/${run_stamp}
+mkdir -p "${run_dir}/config"
+
+{
+  echo "start_time=$(date --iso-8601=seconds)"
+  echo "hostname=$(hostname)"
+  echo "kernel=$(uname -srmo)"
+  echo "ros_master_uri=${ROS_MASTER_URI}"
+  echo "project_commit=$(git -C "${PROJECT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "px4_serial=${PX4_SERIAL}"
+  echo "radar_interface=${RADAR_INTERFACE}"
+  echo "radar_address=${RADAR_ADDRESS}"
+  echo 'speed_contract=measured_soft_threshold_0.65_predicted_max_0.7_hard_0.8_mps'
+  df -h "${LOG_ROOT}"
+  git -C "${PROJECT_DIR}" status --short 2>/dev/null || true
+  git -C /home/nuc/super_ws/src/SUPER status --short 2>/dev/null || true
+} >"${run_dir}/startup_metadata.txt"
+
+cp -a "${PROJECT_DIR}/config/fastlio_px4_vision_bridge.yaml" \
+      "${PROJECT_DIR}/config/mission_scheduler.yaml" \
+      "${PROJECT_DIR}/config/super_exploration_decider.yaml" \
+      "${PROJECT_DIR}/config/super_task1.yaml" \
+      "${PROJECT_DIR}/config/super_px4_command_bridge.yaml" \
+      "${PROJECT_DIR}/launch/task1_real.launch" \
+      "${run_dir}/config/"
+
+(
+  for _ in $(seq 1 60); do
+    if rosparam list >/dev/null 2>&1; then
+      sleep 10
+      rosparam dump "${run_dir}/rosparams.yaml" >/dev/null 2>&1 || true
+      rostopic list -v >"${run_dir}/topics.txt" 2>&1 || true
+      rosnode list >"${run_dir}/nodes.txt" 2>&1 || true
+      # Keep the FCU-side parameter set beside the ROS configuration. This is
+      # diagnostic only and must never make the flight/control graph exit.
+      rosrun mavros mavparam dump -f "${run_dir}/px4_params.yaml" \
+        >"${run_dir}/px4_param_dump.log" 2>&1 || true
+      exit 0
+    fi
+    sleep 1
+  done
+) &
+
+cd "${PROJECT_DIR}"
+exec roslaunch "${PROJECT_DIR}/launch/task1_real.launch" \
+  rviz:=false \
+  record_flight:=true \
+  px4_device:="${PX4_SERIAL}" \
+  flight_log_dir:="${run_dir}"

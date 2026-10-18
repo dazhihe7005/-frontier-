@@ -1,9 +1,13 @@
 # 任务一代码职责与数据流
 
-> 2026-10-14 提醒：五米实飞暴露出的旧目标复用、速度余量和故障未闭环问题尚未全部
-> 迁移到正式任务一调度器。切换 `task1_real.launch` 前，必须完成
-> `docs/five_meter_to_task1_change_ledger_2026-10-14.md` 中的 P0 清单；本页只说明模块
-> 职责，不能作为当前真机放飞许可。
+> 2026-10-17 状态：五米测试中已验证的调度器故障闭环、稳定悬停启动门、首目标接受后
+> 才开放自动权限以及独立记录链，已经迁移到正式任务一并通过隔离自动回归。当前速度合同
+> 为名义规划/预测治理/规划与实测硬上限 `0.6/0.7/0.8 m/s`。水平几何合同为
+> `1.2 m` 轨迹生成/最终验收净距和 `0.8 m` 独立 OFFBOARD 退出硬保护；突发障碍先固定
+> 悬停监测，连续存在 `3.0 s` 后只有当前侵入 `0.8 m` 才退出，`0.8--1.2 m` 只保持
+> 悬停等待地图/规划更新，消失则平滑恢复。这只是代码迁移完成，
+> 仍须按 `docs/five_meter_to_task1_change_ledger_2026-10-14.md` 第8节完成正式任务一 SITL、
+> 拆桨和分级真机验收；本页不能作为当前真机放飞许可。
 
 ## 结论
 
@@ -30,9 +34,9 @@
 
 ```text
 原始 /Odometry ──> fastlio_px4_vision_bridge ──> MAVROS ──> PX4 EKF2
-      └──────────> mission_scheduler
+      └─> task1_perception_gate（持续输出调平里程计）─> mission_scheduler
 
-原始点云/里程计 ──> task1_perception_gate(CH7 && vision healthy)
+原始点云/里程计 ──> task1_perception_gate（点云受 CH7 门控，里程计持续调平）
                   ├─> super_exploration_decider ──> /goal
                   └─> SUPER ROG-Map/FSM ──> /planning/pos_cmd
                                       └─> command_bridge ──> MAVROS/PX4

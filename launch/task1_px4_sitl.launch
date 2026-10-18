@@ -34,8 +34,11 @@
   <arg name="use_absolute_mission_heading" default="false"/>
   <arg name="absolute_mission_heading_yaw" default="0.0"/>
   <arg name="max_exploration_radius" default="24.0"/>
-  <arg name="decider_vehicle_radius" default="1.0"/>
-  <arg name="decider_vertical_vehicle_radius" default="1.0"/>
+  <arg name="decider_vehicle_radius" default="0.8"/>
+  <arg name="decider_preferred_vehicle_radius" default="1.1"/>
+  <arg name="decider_vertical_vehicle_radius" default="0.3"/>
+  <arg name="decider_vertical_vehicle_clearance_below" default="0.5"/>
+  <arg name="decider_vertical_vehicle_clearance_above" default="0.5"/>
   <arg name="carve_traversed_vehicle_envelope" default="false"/>
   <arg name="frontier_search_radius" default="10.0"/>
   <arg name="decider_max_map_radius" default="40.0"/>
@@ -50,8 +53,8 @@
   <arg name="wall_coverage_end_min_span" default="4.0"/>
   <arg name="forward_corridor_half_width" default="2.0"/>
   <arg name="forward_goal_lateral_search_width" default="2.0"/>
-  <arg name="max_frontier_goal_distance" default="8.0"/>
-  <arg name="forward_lookahead_distance" default="8.0"/>
+  <arg name="max_frontier_goal_distance" default="4.0"/>
+  <arg name="forward_lookahead_distance" default="4.0"/>
   <arg name="max_frontier_goal_vertical_step" default="0.5"/>
   <arg name="max_task_lateral_offset" default="4.0"/>
   <arg name="map_closure_min_progress" default="8.0"/>
@@ -165,7 +168,7 @@
     <rosparam param="sensor_rpy">[0.0, 0.436332313, 0.0]</rosparam>
     <param name="self_filter_enable" value="true"/>
     <!-- This masks only the 0.5905 m physical rotor envelope. It is not the
-         planner's 1 m safety radius: real obstacles between 0.65 and 1.0 m
+         planner's 0.8 m safety radius: real obstacles between 0.65 and 0.8 m
          must remain visible so avoidance can reject that clearance. -->
     <param name="self_filter_xy_radius" value="0.65"/>
     <param name="self_filter_z_min" value="-0.65"/>
@@ -219,7 +222,13 @@
     <param name="frontier_search_radius" value="$(arg frontier_search_radius)"/>
     <param name="max_exploration_radius_from_home" value="$(arg max_exploration_radius)"/>
     <param name="vehicle_radius" value="$(arg decider_vehicle_radius)"/>
+    <param name="preferred_vehicle_radius"
+           value="$(arg decider_preferred_vehicle_radius)"/>
     <param name="vertical_vehicle_radius" value="$(arg decider_vertical_vehicle_radius)"/>
+    <param name="vertical_vehicle_clearance_below"
+           value="$(arg decider_vertical_vehicle_clearance_below)"/>
+    <param name="vertical_vehicle_clearance_above"
+           value="$(arg decider_vertical_vehicle_clearance_above)"/>
     <param name="carve_traversed_vehicle_envelope"
            value="$(arg carve_traversed_vehicle_envelope)"/>
     <param name="max_map_radius" value="$(arg decider_max_map_radius)"/>
@@ -308,9 +317,15 @@
        returned to the launch area, transfer control to PX4 AUTO.LAND. -->
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
     <arg name="fallback_mode" value="AUTO.LAND"/>
-    <!-- SUPER commands at most 1.0 m/s.  The bridge allows a small margin
-         for optimizer sampling and replans that inherit PX4 tracking speed. -->
-    <arg name="max_speed" value="1.2"/>
+    <!-- Keep the formal Task-1 SITL on the same contract as the physical
+         stack: 0.6 m/s nominal, 0.7 m/s predicted governance, and 0.8 m/s
+         planner/measured hard limits. The latter three are defaults of the
+         shared bridge launch; keep max_speed explicit here to prevent an old
+         scenario override from silently restoring the former 1.2 m/s limit. -->
+    <arg name="max_speed" value="0.8"/>
+    <arg name="max_measured_speed" value="0.8"/>
+    <arg name="max_predicted_speed" value="0.7"/>
+    <arg name="max_offboard_entry_speed" value="0.25"/>
     <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
     <arg name="min_height" value="$(arg bridge_min_height)"/>
     <arg name="max_height" value="$(arg bridge_max_height)"/>

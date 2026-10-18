@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -12,6 +13,80 @@ struct TrackingSpeedGovernorResult {
   bool active{false};
   bool valid{false};
 };
+
+enum class OverspeedRecoveryAction {
+  kNormalFlight,
+  kReduceSpeed,
+  kExitOffboard,
+};
+
+// A measured hard-limit excursion is first handled by the continuous speed
+// governor. Only an uninterrupted excursion lasting the complete recovery
+// window may hand control back to PX4. Returning to the safe range at any
+// point resumes normal flight and starts a future excursion from zero.
+inline OverspeedRecoveryAction overspeedRecoveryAction(
+    const double measured_speed, const double hard_limit,
+    const double continuous_overspeed_seconds,
+    const double recovery_timeout_seconds) {
+  if (!std::isfinite(measured_speed) || !std::isfinite(hard_limit) ||
+      !std::isfinite(continuous_overspeed_seconds) ||
+      !std::isfinite(recovery_timeout_seconds) || hard_limit <= 0.0 ||
+      continuous_overspeed_seconds < 0.0 ||
+      recovery_timeout_seconds <= 0.0) {
+    return OverspeedRecoveryAction::kExitOffboard;
+  }
+  if (measured_speed <= hard_limit) {
+    return OverspeedRecoveryAction::kNormalFlight;
+  }
+  return continuous_overspeed_seconds < recovery_timeout_seconds
+      ? OverspeedRecoveryAction::kReduceSpeed
+      : OverspeedRecoveryAction::kExitOffboard;
+}
+
+// Turn measured overspeed into a continuous PX4 closed-loop request limit.
+// The result never speeds up the planner: it is only a ceiling applied by
+// governTrackingSpeed(). Keep the normal request headroom at and below the
+// soft threshold. Above it, reduce the ceiling proportionally so ordinary
+// estimator noise around cruise speed cannot create a brake/recover cycle.
+inline double measuredSpeedRequestLimit(
+    const double measured_speed, const double cruise_speed,
+    const double feedback_gain, const double normal_request_limit,
+    const double minimum_request_limit) {
+  if (!std::isfinite(measured_speed) || !std::isfinite(cruise_speed) ||
+      !std::isfinite(feedback_gain) ||
+      !std::isfinite(normal_request_limit) ||
+      !std::isfinite(minimum_request_limit) || cruise_speed <= 0.0 ||
+      feedback_gain <= 0.0 || normal_request_limit < cruise_speed ||
+      minimum_request_limit <= 0.0 ||
+      minimum_request_limit >= cruise_speed) {
+    return 0.0;
+  }
+  const double overspeed =
+      std::max(0.0, std::max(0.0, measured_speed) - cruise_speed);
+  const double request = normal_request_limit - feedback_gain * overspeed;
+  return std::max(minimum_request_limit,
+                  std::min(normal_request_limit, request));
+}
+
+// Apply asymmetric slew to the adaptive request limit.  Reducing the limit
+// may be prompt, but it must still respect the command bridge's velocity
+// continuity guard.  Recovery is deliberately slower to avoid repeatedly
+// accelerating into the same threshold.
+inline double slewMeasuredSpeedRequestLimit(
+    const double current_limit, const double target_limit, const double dt,
+    const double reduction_rate, const double recovery_rate) {
+  if (!std::isfinite(current_limit) || !std::isfinite(target_limit) ||
+      !std::isfinite(dt) || !std::isfinite(reduction_rate) ||
+      !std::isfinite(recovery_rate) || current_limit <= 0.0 ||
+      target_limit <= 0.0 || dt <= 0.0 || reduction_rate <= 0.0 ||
+      recovery_rate <= 0.0) {
+    return 0.0;
+  }
+  if (target_limit < current_limit) {
+    return std::max(target_limit, current_limit - reduction_rate * dt);
+  }
+  return std::min(target_limit, current_limit + recovery_rate * dt);
+}
 
 // PX4's multicopter position controller forms its velocity setpoint as
 //

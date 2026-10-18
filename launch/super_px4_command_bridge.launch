@@ -6,7 +6,7 @@
   <arg name="max_measured_speed" default="0.8"/>
   <arg name="max_predicted_speed" default="0.7"/>
   <arg name="measured_speed_timeout" default="0.5"/>
-  <arg name="overspeed_duration" default="0.10"/>
+  <arg name="overspeed_duration" default="1.5"/>
   <arg name="max_offboard_entry_speed" default="0.25"/>
   <arg name="max_horizontal_radius" default="40.0"/>
   <arg name="min_height" default="-0.5"/>

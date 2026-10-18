@@ -1,0 +1,25 @@
+[Unit]
+Description=Mine UAV formal Task-1 exploration and flight recorder
+Documentation=file:/home/nuc/frontier-upload/docs/task1_architecture.md
+Wants=network-online.target
+After=network-online.target NetworkManager-wait-online.service
+
+[Service]
+Type=simple
+User=nuc
+Group=nuc
+SupplementaryGroups=dialout
+WorkingDirectory=/home/nuc/frontier-upload
+ExecStartPre=+/home/nuc/frontier-upload/scripts/stabilize_task1_clock.sh
+ExecStart=/home/nuc/frontier-upload/scripts/start_task1_real.sh
+ExecStopPost=+/usr/bin/systemctl start systemd-timesyncd.service
+Restart=no
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mine-uav-task1
+
+[Install]
+WantedBy=multi-user.target

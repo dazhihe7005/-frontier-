@@ -42,10 +42,12 @@
     <arg name="global_cloud_voxel_size" value="0.25"/>
     <arg name="max_global_points" value="500000"/>
     <arg name="decider_max_points_per_cloud" value="8000"/>
-    <!-- User-specified safety sphere: the aircraft reference point must stay
-         at least 1.0 m from mapped obstacles in every direction. -->
-    <arg name="decider_vehicle_radius" value="1.0"/>
+    <!-- Proportionally reduced safety envelope for this surveyed scenario. -->
+    <arg name="decider_vehicle_radius" value="0.8"/>
+    <arg name="decider_preferred_vehicle_radius" value="1.1"/>
     <arg name="decider_vertical_vehicle_radius" value="1.0"/>
+    <arg name="decider_vertical_vehicle_clearance_below" value="1.0"/>
+    <arg name="decider_vertical_vehicle_clearance_above" value="1.0"/>
     <!-- Gazebo collision proves the actually traversed aircraft envelope is
          free; clear stale binary-map hits caused by LIO/voxel jitter along
          that swept route. This remains disabled in real/task-generic use. -->
