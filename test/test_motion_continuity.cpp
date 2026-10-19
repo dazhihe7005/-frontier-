@@ -21,6 +21,23 @@ TEST(MotionContinuity, NinetyDegreeYawStepRejected) { MotionSample a,b;b.yaw=M_P
 TEST(MotionContinuity, BackwardAndDuplicateTimeRejected) { MotionSample a;EXPECT_NE(nullptr,check(a,a,-.1));EXPECT_NE(nullptr,check(a,a,0)); }
 TEST(MotionContinuity, FutureAndStaleMessagesNotRelabelledFresh) { EXPECT_FALSE(sourceStampFresh(10,11,2));EXPECT_FALSE(sourceStampFresh(10,7,2));EXPECT_TRUE(sourceStampFresh(10,9.9,2)); }
 
+TEST(MotionContinuity, ManagedHoldAloneMayUseSmoothReacquisitionEnvelope) {
+  EXPECT_TRUE(managedHoldReacquireAllowed(
+      true, true, true, true, 0.88, 1.5, 2.05, 2.6));
+  EXPECT_FALSE(managedHoldReacquireAllowed(
+      false, true, true, true, 0.88, 1.5, 2.05, 2.6));
+  EXPECT_FALSE(managedHoldReacquireAllowed(
+      true, true, true, true, 1.51, 1.5, 2.05, 2.6));
+  EXPECT_FALSE(managedHoldReacquireAllowed(
+      true, true, true, true, 0.88, 1.5, 2.61, 2.6));
+}
+
+TEST(MotionContinuity, ReacquireDurationRespectsLargeReturnYaw) {
+  const double duration = smoothReacquireDuration(3.5, 0.88, 2.05, 1.1, 0.75);
+  EXPECT_GT(duration, 5.0);
+  EXPECT_LE(1.875 * 2.05 / duration, 0.90 * 0.75 + 1e-12);
+}
+
 TEST(TrackingSpeedGovernor, LeavesRequestBelowLimitUnchanged) {
   const auto result = governTrackingSpeed(
       {{0.2, 0.0, 0.0}}, {{0.1, 0.0, 0.0}}, {{0.9, 0.9, 1.0}}, 0.4);

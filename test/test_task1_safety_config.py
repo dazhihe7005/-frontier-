@@ -109,6 +109,12 @@ class Task1SafetyConfigTest(unittest.TestCase):
         # Coverage is limited to the collision-height band, so a low wall or
         # post is complete without requiring an artificial vertical span.
         self.assertEqual(bridge["coverage_min_vertical_span"], 0.0)
+        self.assertGreater(
+            bridge["max_managed_reacquire_distance"],
+            bridge["max_initial_command_distance"])
+        self.assertGreater(
+            bridge["max_managed_reacquire_yaw_error"],
+            bridge["max_initial_yaw_error"])
 
         decider = yaml.safe_load(
             (ROOT / "config" / "super_exploration_decider.yaml").read_text())
@@ -171,6 +177,11 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertGreater(
             decider["exploration_goal_queue_end_reserve"], 0.0)
         self.assertEqual(decider["no_frontier_timeout"], 10.0)
+        self.assertEqual(decider["map_closure_no_frontier_time"], 10.0)
+        self.assertTrue(decider["return_on_confirmed_dead_end"])
+        self.assertTrue(decider["connected_turn_continuation_enabled"])
+        self.assertGreater(decider["connected_turn_max_angle_deg"], 45.0)
+        self.assertLess(decider["connected_turn_max_angle_deg"], 90.0)
         self.assertAlmostEqual(
             decider["min_observation_height_above_home"], -0.30)
         self.assertAlmostEqual(
@@ -185,7 +196,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertLess(
             decider["forward_goal_handover_distance"],
             decider["forward_lookahead_distance"])
-        self.assertEqual(decider["max_dead_end_heading_reversals"], 1)
+        self.assertEqual(decider["max_dead_end_heading_reversals"], 0)
         self.assertEqual(decider["max_task_lateral_offset"], 10.0)
         self.assertEqual(production["yaw_tracking_sample_period"], 0.5)
 
@@ -198,6 +209,8 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(
             launch_args["decider_preferred_vehicle_radius"], "1.1")
         self.assertEqual(launch_args["no_frontier_timeout"], "10.0")
+        self.assertEqual(
+            launch_args["map_closure_no_frontier_time"], "10.0")
 
         bridge_launch = ET.parse(
             ROOT / "launch" / "super_px4_command_bridge.launch").getroot()

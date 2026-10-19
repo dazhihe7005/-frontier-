@@ -123,6 +123,10 @@ class SuperPx4CommandBridge {
     private_nh_.param("max_initial_command_distance",
                       max_initial_command_distance_, 0.65);
     private_nh_.param("max_initial_yaw_error", max_initial_yaw_error_, 0.70);
+    private_nh_.param("max_managed_reacquire_distance",
+                      max_managed_reacquire_distance_, 1.5);
+    private_nh_.param("max_managed_reacquire_yaw_error",
+                      max_managed_reacquire_yaw_error_, 2.6);
     private_nh_.param("max_horizontal_radius", max_horizontal_radius_, 40.0);
     private_nh_.param("min_height", min_height_, -0.5);
     private_nh_.param("max_height", max_height_, 1.8);
@@ -238,6 +242,11 @@ class SuperPx4CommandBridge {
     reacquire_blend_duration_ = std::max(0.5, reacquire_blend_duration_);
     max_initial_command_distance_ = std::max(0.1, max_initial_command_distance_);
     max_initial_yaw_error_ = std::max(0.1, max_initial_yaw_error_);
+    max_managed_reacquire_distance_ = std::max(
+        max_initial_command_distance_, max_managed_reacquire_distance_);
+    max_managed_reacquire_yaw_error_ = std::max(
+        max_initial_yaw_error_,
+        std::min(kPi, max_managed_reacquire_yaw_error_));
     max_horizontal_radius_ = std::max(1.0, max_horizontal_radius_);
     max_alignment_translation_change_ =
         std::max(0.001, max_alignment_translation_change_);
@@ -426,6 +435,7 @@ class SuperPx4CommandBridge {
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      managed_hold_reacquire_pending_ = false;
       hold_target_latched_ = false;
       obstacle_coverage_complete_streak_ = 0;
       obstacle_coverage_incomplete_streak_ = 0;
@@ -447,6 +457,7 @@ class SuperPx4CommandBridge {
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      managed_hold_reacquire_pending_ = false;
       publishFault("");
       obstacle_hazard_stop_active_ = false;
       resetTransientObstacleMonitor();
@@ -467,6 +478,7 @@ class SuperPx4CommandBridge {
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      managed_hold_reacquire_pending_ = false;
       overspeed_since_ = ros::Time();
       obstacle_coverage_complete_streak_ = 0;
       obstacle_coverage_incomplete_streak_ = 0;
@@ -484,6 +496,7 @@ class SuperPx4CommandBridge {
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      managed_hold_reacquire_pending_ = false;
       publishFault("");
       obstacle_hazard_stop_active_ = false;
       resetTransientObstacleMonitor();
@@ -508,6 +521,7 @@ class SuperPx4CommandBridge {
       resetPrestream();
       resetContinuityGuard();
       resetReacquire();
+      managed_hold_reacquire_pending_ = false;
     }
     updateStatus();
   }
@@ -523,6 +537,7 @@ class SuperPx4CommandBridge {
     hold_requested_ = state == "WAIT_DATA" || state == "DISABLED" ||
         state == "WAIT_GOAL" ||
         state == "WAIT_FRONTIER" || state == "WAIT_MAP_CLOSURE" ||
+        state == "WAIT_HARD_SAFE_ROUTE" ||
         state == "WAIT_MODEL_COVERAGE" || state == "RETURN_ROUTE_WAIT";
     if (state == "RETURN_ROUTE_WAIT" && returning_home_) {
       if (return_route_wait_since_.isZero())
@@ -569,6 +584,7 @@ class SuperPx4CommandBridge {
     px4_mode_ = state->mode;
     if (px4_mode_ != offboard_mode_) {
       have_published_target_ = false;
+      managed_hold_reacquire_pending_ = false;
       if (previous_mode == offboard_mode_) {
         hold_target_latched_ = false;
       }
@@ -635,6 +651,7 @@ class SuperPx4CommandBridge {
   void triggerObstacleHazard(const std::string& reason) {
     if (obstacle_hazard_stop_active_) return;
     obstacle_hazard_stop_active_ = true;
+    managed_hold_reacquire_pending_ = false;
     valid_command_ = false;
     resetReacquire();
     resetContinuityGuard();
@@ -670,6 +687,9 @@ class SuperPx4CommandBridge {
       last_command_time_ = ros::Time();
       latest_source_stamp_ = ros::Time();
       source_stream_active_ = false;
+      managed_hold_reacquire_pending_ =
+          offboard_owned_ && px4_mode_ == offboard_mode_ &&
+          have_published_target_;
       resetContinuityGuard();
       resetReacquire();
       obstacle_replan_requested_ = false;
@@ -844,14 +864,29 @@ class SuperPx4CommandBridge {
           obstacle_coverage_complete_streak_ >= coverage_confirm_frames_;
     }
     if (coverage.obstacle_nearby && !surface_ready) {
-      ROS_WARN_THROTTLE(
-          0.5,
-          "OBSTACLE_SURFACE_INCOMPLETE: points=%zu horizontal_span=%.3f m "
-          "vertical_span=%.3f m nearest=%.3f m; holding before approach",
-          coverage.point_count, coverage.horizontal_span,
-          coverage.vertical_span, coverage.nearest_horizontal);
-      obstacle_requires_monitoring = true;
-      if (!clearance.violated) monitor_reason = "OBSTACLE_SURFACE_INCOMPLETE";
+      if (returning_home_ && !clearance.violated) {
+        // Surface completeness is an outbound approach precaution. During a
+        // verified return it must not pin the vehicle beside sparse wall
+        // returns that are already outside the 0.8 m planning cylinder. The
+        // live 0.65/0.8 m clearance checks and cloud freshness remain active.
+        surface_ready = true;
+        ROS_INFO_THROTTLE(
+            1.0,
+            "Return route continuing past incomplete surface outside the "
+            "planning cylinder (nearest %.3f m)",
+            coverage.nearest_horizontal);
+      } else {
+        ROS_WARN_THROTTLE(
+            0.5,
+            "OBSTACLE_SURFACE_INCOMPLETE: points=%zu horizontal_span=%.3f m "
+            "vertical_span=%.3f m nearest=%.3f m; holding before approach",
+            coverage.point_count, coverage.horizontal_span,
+            coverage.vertical_span, coverage.nearest_horizontal);
+        obstacle_requires_monitoring = true;
+        if (!clearance.violated) {
+          monitor_reason = "OBSTACLE_SURFACE_INCOMPLETE";
+        }
+      }
     }
 
     const bool hard_clearance_intrusion =
@@ -1113,6 +1148,7 @@ class SuperPx4CommandBridge {
   void resetReacquire() {
     reacquire_active_ = false;
     reacquire_start_time_ = ros::Time();
+    active_reacquire_duration_ = reacquire_blend_duration_;
     source_stream_active_ = false;
     speed_governor_active_ = false;
     adaptive_predicted_speed_limit_ = max_predicted_speed_;
@@ -1203,13 +1239,20 @@ class SuperPx4CommandBridge {
   void startReacquire(const mavros_msgs::PositionTarget& start,
                       const mavros_msgs::PositionTarget& desired,
                       const ros::Time& now) {
-    const double T = reacquire_blend_duration_;
     const double sp[3] = {start.position.x, start.position.y, start.position.z};
     const double sv[3] = {start.velocity.x, start.velocity.y, start.velocity.z};
     const double sa[3] = {start.acceleration_or_force.x, start.acceleration_or_force.y, start.acceleration_or_force.z};
     const double dp[3] = {desired.position.x, desired.position.y, desired.position.z};
     const double dv[3] = {desired.velocity.x, desired.velocity.y, desired.velocity.z};
     const double da[3] = {desired.acceleration_or_force.x, desired.acceleration_or_force.y, desired.acceleration_or_force.z};
+    const double position_offset =
+        vectorNorm(sp[0]-dp[0], sp[1]-dp[1], sp[2]-dp[2]);
+    const double yaw_offset =
+        std::abs(normalizeAngle(start.yaw-desired.yaw));
+    active_reacquire_duration_ = mine_uav_control::smoothReacquireDuration(
+        reacquire_blend_duration_, position_offset, yaw_offset,
+        max_position_rate_, max_yaw_rate_);
+    const double T = active_reacquire_duration_;
     for (int i = 0; i < 3; ++i) {
       reacquire_xyz_[i] = mine_uav_control::QuinticOffset1D::make(
           sp[i]-dp[i], sv[i]-dv[i], sa[i]-da[i], T);
@@ -1218,8 +1261,9 @@ class SuperPx4CommandBridge {
         normalizeAngle(start.yaw-desired.yaw), start.yaw_rate-desired.yaw_rate, 0.0, T);
     reacquire_start_time_ = now;
     reacquire_active_ = true;
+    managed_hold_reacquire_pending_ = false;
     ROS_INFO("Starting derivative-consistent SUPER handoff over %.2f s (offset %.3f m)",
-             T, vectorNorm(sp[0]-dp[0], sp[1]-dp[1], sp[2]-dp[2]));
+             T, position_offset);
   }
 
   mavros_msgs::PositionTarget blendReacquire(
@@ -1238,7 +1282,7 @@ class SuperPx4CommandBridge {
     output.yaw=normalizeAngle(output.yaw+yaw.p);
     output.yaw_rate+=yaw.v;
     output.header.stamp=now;
-    if (elapsed>=reacquire_blend_duration_-1e-9) {
+    if (elapsed>=active_reacquire_duration_-1e-9) {
       reacquire_active_=false;
       ROS_INFO("Derivative-consistent SUPER handoff complete");
     }
@@ -1253,6 +1297,31 @@ class SuperPx4CommandBridge {
     }
 
     if (!have_previous_target_ || previous_target_time_.isZero()) {
+      if (have_published_target_) {
+        const double managed_position_offset = vectorNorm(
+            command.position.x - published_target_.position.x,
+            command.position.y - published_target_.position.y,
+            command.position.z - published_target_.position.z);
+        const double managed_yaw_offset = std::abs(normalizeAngle(
+            command.yaw - published_target_.yaw));
+        if (mine_uav_control::managedHoldReacquireAllowed(
+                managed_hold_reacquire_pending_, offboard_owned_,
+                px4_mode_ == offboard_mode_, have_published_target_,
+                managed_position_offset, max_managed_reacquire_distance_,
+                managed_yaw_offset, max_managed_reacquire_yaw_error_)) {
+          // This raw planner sample is never transmitted directly. The output
+          // timer splices it to the fixed, already-published hold with a
+          // derivative-consistent quintic before PX4 sees it.
+          previous_target_ = command;
+          previous_target_time_ = now;
+          have_previous_target_ = true;
+          ROS_WARN("Accepting post-hold SUPER source %.3f m / %.1f deg from "
+                   "the fixed hold; smooth reacquisition will bridge it",
+                   managed_position_offset,
+                   managed_yaw_offset * 180.0 / kPi);
+          return true;
+        }
+      }
       if (have_local_pose_) {
         const auto& p = latest_local_pose_.pose.position;
         const double initial_distance = vectorNorm(
@@ -1466,6 +1535,7 @@ class SuperPx4CommandBridge {
     if (recovery_pending_) {
       ROS_WARN("Verified return trajectory accepted after command fault");
       recovery_pending_ = false;
+      recovery_attempted_ = false;
     }
     valid_command_ = true;
     if (px4_mode_ == offboard_mode_) {
@@ -1936,31 +2006,47 @@ class SuperPx4CommandBridge {
   }
 
   void latchFault(const std::string& reason) {
-    if (auto_enabled_ && mission_enabled_) {
-      publishFault(reason);
-    }
     const bool returnable_command_fault =
         reason == "HEIGHT_GEOFENCE" || reason == "HORIZONTAL_GEOFENCE" ||
         reason == "SPEED_LIMIT" || reason == "ACCELERATION_LIMIT" ||
         reason == "COMMAND_STALE_OR_FUTURE_STAMP" ||
-        reason == "OUTPUT_DISCONTINUITY_REJECTED";
-    if (returnable_command_fault && !recovery_attempted_ &&
+        reason == "OUTPUT_DISCONTINUITY_REJECTED" ||
+        reason == "INITIAL_COMMAND_POSITION_JUMP" ||
+        reason == "INITIAL_COMMAND_YAW_JUMP" ||
+        reason == "COMMAND_POSITION_JUMP" ||
+        reason == "COMMAND_VELOCITY_JUMP" ||
+        reason == "COMMAND_ACCELERATION_JUMP" ||
+        reason == "COMMAND_YAW_JUMP" ||
+        reason == "COMMAND_NONMONOTONIC_STAMP" ||
+        reason == "YAW_RATE_LIMIT";
+    if (returnable_command_fault &&
         auto_enabled_ && mission_enabled_ && offboard_owned_ &&
         px4_mode_ == offboard_mode_ && alignment_ready_ && vision_healthy_ &&
         localPoseFresh(ros::Time::now())) {
       recovery_attempted_ = true;
-      recovery_pending_ = true;
-      recovery_started_ = ros::Time::now();
-      recovery_source_trajectory_id_ = latest_source_trajectory_id_;
-      valid_command_ = false;
-      resetReacquire();
-      resetContinuityGuard();
+      if (!recovery_pending_) {
+        recovery_pending_ = true;
+        recovery_started_ = ros::Time::now();
+        recovery_source_trajectory_id_ = latest_source_trajectory_id_;
+        valid_command_ = false;
+        managed_hold_reacquire_pending_ =
+            have_published_target_ && px4_mode_ == offboard_mode_;
+        resetReacquire();
+        resetContinuityGuard();
+      }
       publishReturnRequest(true);
       publishReady(false);
       publishStatus("REQUESTING_VERIFIED_RETURN: " + reason);
       ROS_WARN("Command fault %s: braking and requesting verified outbound retrace",
                reason.c_str());
       return;
+    }
+    if (auto_enabled_ && mission_enabled_) {
+      // MissionScheduler deliberately revokes task authority on this topic.
+      // Publish only after autonomous in-OFFBOARD return has been ruled out;
+      // publishing before the branch above turned recoverable command gaps
+      // into an immediate task cancellation.
+      publishFault(reason);
     }
     if (auto_enabled_ && !fault_latched_) {
       ROS_ERROR("Task-one automatic control fault latched: %s", reason.c_str());
@@ -1979,6 +2065,7 @@ class SuperPx4CommandBridge {
 
   void beginOffboardExit(const std::string& reason) {
     hold_target_latched_ = false;
+    managed_hold_reacquire_pending_ = false;
     resetReacquire();
     if (!exit_requested_ && offboard_owned_ && px4_mode_ == offboard_mode_) {
       exit_requested_ = true;
@@ -2226,6 +2313,8 @@ class SuperPx4CommandBridge {
   double reacquire_blend_duration_{3.5};
   double max_initial_command_distance_{0.65};
   double max_initial_yaw_error_{0.70};
+  double max_managed_reacquire_distance_{1.5};
+  double max_managed_reacquire_yaw_error_{2.6};
   double max_horizontal_radius_{40.0};
   double min_height_{-0.5};
   double max_height_{1.8};
@@ -2305,7 +2394,9 @@ class SuperPx4CommandBridge {
   bool have_previous_target_{false};
   bool hold_target_latched_{false};
   bool reacquire_active_{false};
+  bool managed_hold_reacquire_pending_{false};
   bool source_stream_active_{false};
+  double active_reacquire_duration_{3.5};
   bool ready_published_{false};
   bool last_ready_{false};
 };

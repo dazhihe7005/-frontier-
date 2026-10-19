@@ -206,6 +206,7 @@ class SuperExplorationDecider {
   bool publishLateralDetourGoal(
       const VoxelSet& reachable,
       const std::vector<FrontierCandidate>& candidates);
+  bool publishConnectedTurnContinuation(const VoxelSet& reachable);
   bool reverseMissionHeadingAtDeadEnd(const MapClosureStatus& closure);
   bool tryForwardHandover(const VoxelSet& reachable);
   bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
@@ -300,6 +301,7 @@ class SuperExplorationDecider {
   ros::Time first_data_time_;
   ros::Time last_frontier_time_;
   ros::Time last_motion_progress_time_;
+  ros::Time hard_safe_route_unavailable_since_;
   geometry_msgs::Point last_motion_progress_position_;
   ros::Time goal_sent_time_;
   ros::Time rejected_goal_retry_after_;
@@ -325,6 +327,8 @@ class SuperExplorationDecider {
   // Only normal outbound exploration goals may consume the rolling queue.
   // Return, end-wall, and lateral escape goals always plan from fresh state.
   bool active_goal_allows_rolling_handover_{false};
+  bool have_last_exploration_route_heading_{false};
+  double last_exploration_route_heading_yaw_{0.0};
   bool exploration_started_{false};
   bool returning_home_{false};
   bool dead_end_backtracking_{false};
@@ -481,6 +485,9 @@ class SuperExplorationDecider {
   double exploration_goal_queue_horizon_{10.0};
   double exploration_goal_queue_spacing_{2.5};
   double exploration_goal_queue_end_reserve_{1.0};
+  bool connected_turn_continuation_enabled_{true};
+  double connected_turn_max_angle_deg_{80.0};
+  double connected_turn_min_new_space_{1.0};
   double cruise_height_above_home_{0.0};
   double directional_vertical_tolerance_{1.5};
   double directional_floor_exclusion_{0.5};
@@ -532,6 +539,7 @@ class SuperExplorationDecider {
   bool require_three_wall_completion_{false};
   bool use_map_closure_completion_{true};
   bool map_closure_require_front_boundary_{true};
+  bool return_on_confirmed_dead_end_{true};
 };
 
 }  // namespace mine_uav_control

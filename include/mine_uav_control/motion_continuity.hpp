@@ -66,4 +66,37 @@ struct QuinticOffset1D {
 inline bool sourceStampFresh(double now,double stamp,double timeout) {
   return std::isfinite(now)&&std::isfinite(stamp)&&stamp>0&&now-stamp>=-0.05&&now-stamp<=timeout;
 }
+
+inline bool managedHoldReacquireAllowed(
+    bool pending, bool offboard_owned, bool in_offboard,
+    bool have_published_target, double position_offset,
+    double maximum_position_offset, double yaw_offset,
+    double maximum_yaw_offset) {
+  return pending && offboard_owned && in_offboard && have_published_target &&
+      std::isfinite(position_offset) &&
+      position_offset <= maximum_position_offset + 1e-9 &&
+      std::isfinite(yaw_offset) &&
+      yaw_offset <= maximum_yaw_offset + 1e-9;
+}
+
+inline double smoothReacquireDuration(
+    double configured_duration, double position_offset, double yaw_offset,
+    double maximum_position_rate, double maximum_yaw_rate) {
+  if (!std::isfinite(configured_duration) || configured_duration <= 0.0 ||
+      !std::isfinite(position_offset) || position_offset < 0.0 ||
+      !std::isfinite(yaw_offset) || yaw_offset < 0.0 ||
+      !std::isfinite(maximum_position_rate) || maximum_position_rate <= 0.0 ||
+      !std::isfinite(maximum_yaw_rate) || maximum_yaw_rate <= 0.0) {
+    return configured_duration;
+  }
+  // A zero-derivative quintic offset has a peak normalized slope of 1.875.
+  // Keep ten percent headroom for the moving source trajectory.
+  constexpr double kPeakSlope = 1.875;
+  constexpr double kRateHeadroom = 0.90;
+  return std::max({configured_duration,
+      kPeakSlope * position_offset /
+          (kRateHeadroom * maximum_position_rate),
+      kPeakSlope * yaw_offset /
+          (kRateHeadroom * maximum_yaw_rate)});
+}
 } // namespace mine_uav_control

@@ -105,6 +105,12 @@ continuity_nominal_dt: 0.01
 reacquire_blend_duration: 3.5
 max_initial_command_distance: 0.65
 max_initial_yaw_error: 0.70
+# Only after this bridge has deliberately pinned a fixed obstacle hold, allow
+# a newly verified SUPER source to be farther than the ordinary first-command
+# gate. It is never sent as a step: a rate-sized quintic begins at the exact
+# published hold. Larger gaps remain held in OFFBOARD and request return.
+max_managed_reacquire_distance: 1.5
+max_managed_reacquire_yaw_error: 2.6
 # Reject a restarted/re-aligned Fast-LIO frame while an autonomous task is
 # active. This is the full 3-D rotation threshold (radians), not yaw only.
 max_alignment_rotation_change: 0.05

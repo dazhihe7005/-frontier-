@@ -184,6 +184,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("max_dead_end_heading_reversals",
                     max_dead_end_heading_reversals_,
                     max_dead_end_heading_reversals_);
+  private_nh_.param("return_on_confirmed_dead_end",
+                    return_on_confirmed_dead_end_,
+                    return_on_confirmed_dead_end_);
   private_nh_.param("carve_traversed_vehicle_envelope",
                     carve_traversed_vehicle_envelope_,
                     carve_traversed_vehicle_envelope_);
@@ -402,6 +405,15 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("exploration_goal_queue_end_reserve",
                     exploration_goal_queue_end_reserve_,
                     exploration_goal_queue_end_reserve_);
+  private_nh_.param("connected_turn_continuation_enabled",
+                    connected_turn_continuation_enabled_,
+                    connected_turn_continuation_enabled_);
+  private_nh_.param("connected_turn_max_angle_deg",
+                    connected_turn_max_angle_deg_,
+                    connected_turn_max_angle_deg_);
+  private_nh_.param("connected_turn_min_new_space",
+                    connected_turn_min_new_space_,
+                    connected_turn_min_new_space_);
   private_nh_.param("cruise_height_above_home", cruise_height_above_home_,
                     cruise_height_above_home_);
   private_nh_.param("directional_vertical_tolerance",
@@ -634,6 +646,11 @@ bool SuperExplorationDecider::loadParameters() {
       exploration_goal_queue_end_reserve_ < 0.0 ||
       exploration_goal_queue_end_reserve_ >=
           exploration_goal_queue_spacing_ ||
+      !std::isfinite(connected_turn_max_angle_deg_) ||
+      connected_turn_max_angle_deg_ <= 0.0 ||
+      connected_turn_max_angle_deg_ >= 90.0 ||
+      !std::isfinite(connected_turn_min_new_space_) ||
+      connected_turn_min_new_space_ < 0.0 ||
       !std::isfinite(cruise_height_above_home_) ||
       cruise_height_above_home_ < min_observation_height_above_home_ ||
       cruise_height_above_home_ > max_observation_height_above_home_ ||
@@ -2205,12 +2222,23 @@ void SuperExplorationDecider::publishGoal(
       reason.compare(0, std::string("forward_lookahead").size(),
                      "forward_lookahead") == 0;
   active_goal_is_blocked_frontier_route_ =
-      reason == "blocked_frontier_route";
+      reason == "blocked_frontier_route" ||
+      reason == "connected_turn_route";
   active_goal_allows_rolling_handover_ =
       active_goal_is_forward_lookahead_ ||
       reason == "heading_priority" || reason == "frontier_fallback" ||
       active_goal_is_blocked_frontier_route_ ||
       reason == "frontier_route_queued_successor";
+  if (!returning_home_ && !dead_end_backtracking_) {
+    const double route_dx = goal.pose.position.x -
+                            current_pose_.pose.position.x;
+    const double route_dy = goal.pose.position.y -
+                            current_pose_.pose.position.y;
+    if (std::hypot(route_dx, route_dy) > 0.5 * voxel_resolution_) {
+      last_exploration_route_heading_yaw_ = std::atan2(route_dy, route_dx);
+      have_last_exploration_route_heading_ = true;
+    }
+  }
   super_planner::GoalCommand command;
   command.header = current_goal_.header;
   command.command = super_planner::GoalCommand::SET_GOAL;
@@ -3133,6 +3161,167 @@ bool SuperExplorationDecider::publishLateralDetourGoal(
   publishGoal(selected->goal, selected->preferred_clearance
                              ? "lateral_detour_preferred"
                              : "lateral_detour_hard_fallback");
+  return true;
+}
+
+bool SuperExplorationDecider::publishConnectedTurnContinuation(
+    const VoxelSet& reachable) {
+  if (!connected_turn_continuation_enabled_ || !have_home_ ||
+      reachable.empty()) {
+    return false;
+  }
+
+  // The entry-axis look-ahead is intentionally straight. At a real bend it
+  // can therefore report no executable segment even though the same
+  // hard-clear reachable component continues around the corner. Follow that
+  // component for one local horizon, using the last accepted route tangent as
+  // the turn reference. Unknown cells and cells below the 0.8 m planning
+  // floor never enter this graph.
+  VoxelKey start = positionToKey(current_pose_.pose.position.x,
+                                 current_pose_.pose.position.y,
+                                 current_pose_.pose.position.z);
+  if (reachable.count(start) == 0) {
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const VoxelKey& key : reachable) {
+      const double distance = squaredDistance(
+          keyToPoint(key), current_pose_.pose.position);
+      if (distance < nearest) {
+        nearest = distance;
+        start = key;
+      }
+    }
+  }
+  if (reachable.count(start) == 0) return false;
+
+  static const int kNeighbors[6][3] = {
+      {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+      {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  const int maximum_steps = std::max(
+      1, static_cast<int>(std::floor(
+             exploration_goal_queue_horizon_ / voxel_resolution_ + 1e-9)));
+  std::queue<VoxelKey> queue;
+  std::unordered_map<VoxelKey, VoxelKey, VoxelKeyHash> parent;
+  std::unordered_map<VoxelKey, int, VoxelKeyHash> steps;
+  queue.push(start);
+  parent.emplace(start, start);
+  steps.emplace(start, 0);
+
+  const double route_heading = have_last_exploration_route_heading_
+      ? last_exploration_route_heading_yaw_ : mission_heading_yaw_;
+  const double maximum_turn = connected_turn_max_angle_deg_ * M_PI / 180.0;
+  const double mission_c = std::cos(mission_heading_yaw_);
+  const double mission_s = std::sin(mission_heading_yaw_);
+  const auto& home = home_pose_.pose.position;
+  const auto& current = current_pose_.pose.position;
+  const double current_progress =
+      mission_c * (current.x - home.x) + mission_s * (current.y - home.y);
+  const double maximum_home_distance_squared =
+      max_exploration_radius_from_home_ * max_exploration_radius_from_home_;
+
+  bool found = false;
+  VoxelKey best = start;
+  double best_score = -std::numeric_limits<double>::infinity();
+  while (!queue.empty()) {
+    const VoxelKey key = queue.front();
+    queue.pop();
+    const int route_steps = steps.at(key);
+    const geometry_msgs::Point point = keyToPoint(key);
+    if (route_steps > 0) {
+      const double dx = point.x - current.x;
+      const double dy = point.y - current.y;
+      const double horizontal_distance = std::hypot(dx, dy);
+      const double home_dx = point.x - home.x;
+      const double home_dy = point.y - home.y;
+      const double progress = mission_c * home_dx + mission_s * home_dy;
+      const double lateral = -mission_s * home_dx + mission_c * home_dy;
+      const double turn = std::abs(normalizeAngle(
+          std::atan2(dy, dx) - route_heading));
+      const double new_space = outboundSeparation(point);
+      const bool new_space_ready = outbound_breadcrumbs_.size() < 2 ||
+          new_space >= connected_turn_min_new_space_;
+      if (horizontal_distance >= min_goal_distance_ - 1e-6 &&
+          home_dx * home_dx + home_dy * home_dy <=
+              maximum_home_distance_squared + 1e-6 &&
+          std::abs(lateral) <= max_task_lateral_offset_ + 1e-6 &&
+          inObservationHeightBand(
+              point.z, home.z, min_observation_height_above_home_,
+              max_observation_height_above_home_, voxel_resolution_) &&
+          outboundProgressAllowed(current_progress, progress,
+                                  max_outbound_backtrack_) &&
+          turn <= maximum_turn + 1e-9 && new_space_ready &&
+          !isNearCoveredGoal(point) && !isNearFailedGoal(point) &&
+          returnSegmentClear(point, point, 0.0, false)) {
+        const double route_distance = route_steps * voxel_resolution_;
+        const double alignment = std::cos(turn);
+        const double preferred_bonus =
+            isClearForVehicle(key, preferred_vehicle_radius_) ? 0.25 : 0.0;
+        const double score = route_distance + 1.5 * new_space +
+            2.0 * alignment + 0.25 * (progress - current_progress) +
+            preferred_bonus;
+        if (!found || score > best_score + 1e-9) {
+          found = true;
+          best = key;
+          best_score = score;
+        }
+      }
+    }
+    if (route_steps >= maximum_steps) continue;
+    for (const auto& offset : kNeighbors) {
+      const VoxelKey next{key.x + offset[0], key.y + offset[1],
+                          key.z + offset[2]};
+      if (reachable.count(next) == 0 || parent.count(next) > 0) continue;
+      parent.emplace(next, key);
+      steps.emplace(next, route_steps + 1);
+      queue.push(next);
+    }
+  }
+  if (!found) return false;
+
+  std::vector<VoxelKey> route;
+  for (VoxelKey key = best;; key = parent.at(key)) {
+    route.push_back(key);
+    if (key == start) break;
+  }
+  std::reverse(route.begin(), route.end());
+
+  bool found_local_goal = false;
+  std::size_t selected_index = 0;
+  for (std::size_t index = 1; index < route.size(); ++index) {
+    const double route_distance = index * voxel_resolution_;
+    if (route_distance > max_frontier_goal_distance_ + 1e-6) break;
+    const geometry_msgs::Point point = keyToPoint(route[index]);
+    const double horizontal_distance =
+        std::hypot(point.x - current.x, point.y - current.y);
+    if (horizontal_distance < min_goal_distance_ - 1e-6 ||
+        std::abs(point.z - current.z) >
+            max_frontier_goal_vertical_step_ + 1e-6 ||
+        isNearFailedGoal(point) ||
+        !returnSegmentClear(point, point, 0.0, false)) {
+      continue;
+    }
+    selected_index = index;
+    found_local_goal = true;
+  }
+  if (!found_local_goal) return false;
+
+  geometry_msgs::PoseStamped goal;
+  goal.header.frame_id = world_frame_;
+  goal.pose.position = keyToPoint(route[selected_index]);
+  goal.pose.orientation = yawQuaternion(std::atan2(
+      goal.pose.position.y - current.y,
+      goal.pose.position.x - current.x));
+  const double selected_yaw = std::atan2(
+      goal.pose.position.y - current.y,
+      goal.pose.position.x - current.x);
+  ROS_INFO("Connected turn continuation: %.1f m verified route, local goal "
+           "%.2f m away, heading %.1f -> %.1f deg",
+           (route.size() - 1) * voxel_resolution_,
+           std::hypot(goal.pose.position.x - current.x,
+                      goal.pose.position.y - current.y),
+           route_heading * 180.0 / M_PI,
+           selected_yaw * 180.0 / M_PI);
+  publishGoal(goal, "connected_turn_route");
+  buildFrontierExplorationQueue(reachable, route, selected_index);
   return true;
 }
 
@@ -4134,8 +4323,13 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     map_closure_complete_streak_ = 0;
   }
   publishCoverageStatus(coverage, closure);
+  const bool hard_safe_route_timeout_confirmed =
+      !hard_safe_route_unavailable_since_.isZero() &&
+      (ros::Time::now() - hard_safe_route_unavailable_since_).toSec() >=
+          no_frontier_timeout_;
   if (use_map_closure_completion_ &&
-      map_closure_complete_streak_ >= map_closure_confirm_cycles_) {
+      map_closure_complete_streak_ >= map_closure_confirm_cycles_ &&
+      hard_safe_route_timeout_confirmed) {
     std_msgs::Bool message;
     message.data = true;
     model_complete_publisher_.publish(message);
@@ -4263,7 +4457,8 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     const bool retry_route_published =
         publishLateralDetourGoal(reachable, candidates) ||
         publishForwardLookaheadGoal(reachable) ||
-        selectAndPublishFrontier(candidates, reachable);
+        selectAndPublishFrontier(candidates, reachable) ||
+        publishConnectedTurnContinuation(reachable);
     if (retry_route_published) {
       publishStatus("EXPLORING", "retrying a reachable goal after SUPER rejection");
       return;
@@ -4299,36 +4494,59 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
     return;
   }
 
-  if (!have_active_goal_ && use_map_closure_completion_ &&
-      closure.front_boundary_seen && !closure.reachable_forward_passage &&
-      closure.actionable_frontiers == 0 &&
-      closure.vehicle_progress >= front_obstacle_min_progress_) {
-    if (reverseMissionHeadingAtDeadEnd(closure)) {
-      publishStatus(
-          "DEAD_END_BACKTRACK",
-          "heading reversed; planning a fresh route on the current map");
-      return;
-    }
-    if (max_dead_end_heading_reversals_ <= 0) {
-      // A live obstacle is only one part of map closure. The boundary can be
-      // temporary while free rays or lateral frontier cells are still being
-      // incorporated. The confirmed closure path above publishes
-      // model_complete and begins return after the map has converged.
-      publishStatus("WAIT_MAP_CLOSURE",
-                    "front boundary closed; awaiting confirmed map convergence");
-      return;
-    }
-    publishStatus("WAIT_MAP_CLOSURE",
-                  "front boundary closed; waiting for frontier and map convergence");
-    return;
-  }
-
   if (!have_active_goal_) {
     executable_route_published_this_cycle =
         selectAndPublishFrontier(candidates, reachable);
   }
   if (executable_route_published_this_cycle) {
     publishStatus("EXPLORING", "new frontier goal sent to SUPER");
+    return;
+  }
+
+  if (!have_active_goal_) {
+    executable_route_published_this_cycle =
+        publishConnectedTurnContinuation(reachable);
+  }
+  if (executable_route_published_this_cycle) {
+    publishStatus("EXPLORING",
+                  "following the hard-safe connected route around a bend");
+    return;
+  }
+
+  if (hard_safe_route_unavailable_since_.isZero()) {
+    hard_safe_route_unavailable_since_ = ros::Time::now();
+  }
+  const double hard_safe_route_wait =
+      (ros::Time::now() - hard_safe_route_unavailable_since_).toSec();
+
+  if (!have_active_goal_ && use_map_closure_completion_ &&
+      closure.front_boundary_seen && !closure.reachable_forward_passage &&
+      closure.actionable_frontiers == 0 &&
+      closure.vehicle_progress >= front_obstacle_min_progress_) {
+    if (return_on_confirmed_dead_end_) {
+      if (hard_safe_route_wait >= no_frontier_timeout_) {
+        publishStatus("FORWARD_ROUTE_STALLED",
+                      "front boundary closed and no hard-safe route remained; returning");
+        beginReturnHome(
+            "front boundary closed and no hard-safe route remained", true);
+      } else {
+        std::ostringstream detail;
+        detail << std::fixed << std::setprecision(1)
+               << "checking the live map for a hard-safe bend or passage; "
+               << std::max(0.0, no_frontier_timeout_ - hard_safe_route_wait)
+               << " s before verified return";
+        publishStatus("WAIT_HARD_SAFE_ROUTE", detail.str());
+      }
+      return;
+    }
+    if (reverseMissionHeadingAtDeadEnd(closure)) {
+      publishStatus(
+          "DEAD_END_BACKTRACK",
+          "heading reversed; planning a fresh route on the current map");
+      return;
+    }
+    publishStatus("WAIT_MAP_CLOSURE",
+                  "front boundary closed; waiting for frontier and map convergence");
     return;
   }
 
@@ -4340,12 +4558,10 @@ void SuperExplorationDecider::decisionTimerCallback(const ros::TimerEvent&) {
       exploration_started_ &&
       !closure_confirmation_pending &&
       !(use_map_closure_completion_ && map_closure_complete_streak_ > 0) &&
-      !last_motion_progress_time_.isZero() &&
-      (ros::Time::now() - last_motion_progress_time_).toSec() >=
-          no_frontier_timeout_) {
+      hard_safe_route_wait >= no_frontier_timeout_) {
     publishStatus("FORWARD_ROUTE_STALLED",
                   "no hard-safe exploration route; returning on the live map");
-    beginReturnHome("no hard-safe unexplored route remained available");
+    beginReturnHome("no hard-safe unexplored route remained available", true);
     return;
   }
 
@@ -4420,6 +4636,12 @@ void SuperExplorationDecider::acceptedGoalCallback(
     const std_msgs::UInt64::ConstPtr& message) {
   if (have_active_goal_ && message->data == active_goal_id_) {
     accepted_goal_id_ = message->data;
+    if (!returning_home_ && !dead_end_backtracking_) {
+      // Only SUPER acceptance proves that a task-level candidate became an
+      // executable route. Merely publishing goals that SUPER then rejects
+      // must not keep resetting the bounded no-route return timer.
+      hard_safe_route_unavailable_since_ = ros::Time();
+    }
     if (enabled_ && initial_accepted_goal_id_ == 0) {
       initial_accepted_goal_id_ = message->data;
       publishInitialGoalAccepted(initial_accepted_goal_id_);
@@ -4516,6 +4738,8 @@ void SuperExplorationDecider::clearMissionState() {
   active_goal_is_forward_lookahead_ = false;
   active_goal_is_blocked_frontier_route_ = false;
   active_goal_allows_rolling_handover_ = false;
+  have_last_exploration_route_heading_ = false;
+  last_exploration_route_heading_yaw_ = 0.0;
   exploration_started_ = false;
   returning_home_ = false;
   dead_end_backtracking_ = false;
@@ -4545,6 +4769,7 @@ void SuperExplorationDecider::clearMissionState() {
   first_data_time_ = ros::Time();
   last_frontier_time_ = ros::Time();
   last_motion_progress_time_ = ros::Time();
+  hard_safe_route_unavailable_since_ = ros::Time();
   last_motion_progress_position_ = geometry_msgs::Point();
   last_actionable_frontier_time_ = ros::Time();
   last_significant_map_growth_time_ = ros::Time();

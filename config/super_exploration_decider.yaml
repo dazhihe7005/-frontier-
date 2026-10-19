@@ -165,6 +165,14 @@ exploration_goal_queue_horizon: 10.0
 exploration_goal_queue_spacing: 2.5
 # Do not pre-commit the queue all the way to the current observed boundary.
 exploration_goal_queue_end_reserve: 1.0
+# If the straight entry-axis look-ahead ends at a bend, search the same
+# observed, 0.8 m-clear connected component along the most recent route
+# tangent. This lets a verified route turn into a narrowing corridor even
+# when no usable frontier exists at the far wall. The selected connected path
+# also feeds the normal two-to-three-point rolling queue.
+connected_turn_continuation_enabled: true
+connected_turn_max_angle_deg: 80.0
+connected_turn_min_new_space: 1.0
 cruise_height_above_home: 0.0
 return_breadcrumb_spacing: 1.0
 super_occupied_topic: "/fsm_node/rog_map/occ"
@@ -193,7 +201,7 @@ front_obstacle_confirm_frames: 3
 require_three_wall_completion: false
 use_map_closure_completion: true
 map_closure_min_progress: 8.0
-map_closure_no_frontier_time: 4.0
+map_closure_no_frontier_time: 10.0
 map_closure_stable_time: 4.0
 map_closure_max_actionable_frontiers: 0
 # Decision voxels fluctuate while Gazebo/SLAM pose jitters. Treat smaller
@@ -201,15 +209,14 @@ map_closure_max_actionable_frontiers: 0
 map_closure_growth_voxels: 500
 map_closure_confirm_cycles: 4
 map_closure_require_front_boundary: true
-# Optional scenario recovery: after a confirmed dead end with no body-clear
-# detour, reverse the task heading and backtrack through already observed free
-# space. If the other direction also closes with no actionable frontier, the
-# bidirectional connected component is complete. Task one enables one such
-# recovery attempt; further dead ends still use the normal closure/return path.
-# When the live map confirms that the current branch has no forward passage or
-# lateral frontier, backtrack on the verified map and try the opposite heading
-# once instead of waiting stationary for final map-closure timeout.
-max_dead_end_heading_reversals: 1
+# Real task policy: first exhaust straight, lateral, frontier and connected-
+# turn routes. If all hard-safe publishers fail continuously for 10 seconds,
+# start a verified breadcrumb/live-map return. Do not reverse the mission axis
+# and reinterpret the return leg as a new exploration direction.
+return_on_confirmed_dead_end: true
+max_dead_end_heading_reversals: 0
+# Retained only for scenario launches that explicitly disable the return
+# policy above and opt back into the legacy opposite-heading exploration.
 dead_end_reversal_delay: 4.0
 # Reachability flood-fill and candidate clustering are safety/CPU limits, not
 # assumptions about mine dimensions.

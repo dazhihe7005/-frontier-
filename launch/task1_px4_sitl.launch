@@ -58,7 +58,7 @@
   <arg name="max_frontier_goal_vertical_step" default="0.5"/>
   <arg name="max_task_lateral_offset" default="4.0"/>
   <arg name="map_closure_min_progress" default="8.0"/>
-  <arg name="map_closure_no_frontier_time" default="4.0"/>
+  <arg name="map_closure_no_frontier_time" default="10.0"/>
   <arg name="map_closure_stable_time" default="4.0"/>
   <arg name="map_closure_growth_voxels" default="500"/>
   <arg name="use_map_closure_completion" default="true"/>

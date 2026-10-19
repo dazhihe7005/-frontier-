@@ -1760,6 +1760,72 @@ class SuperExplorationDeciderTestPeer {
     return yaw < -1.5 && yaw > -1.7;
   }
 
+  static bool connectedTurnFollowsKnownFreeBendWithoutFrontier(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.have_last_exploration_route_heading_ = true;
+    decider.last_exploration_route_heading_yaw_ = -35.0 * M_PI / 180.0;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_task_lateral_offset_ = 12.0;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.exploration_goal_queue_spacing_ = 2.5;
+    decider.exploration_goal_queue_end_reserve_ = 1.0;
+    decider.connected_turn_max_angle_deg_ = 80.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({32, 0, 0});
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int y = 0; y >= -40; --y) {
+      const VoxelKey key{32, y, 0};
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    if (!decider.publishConnectedTurnContinuation(reachable) ||
+        !decider.have_active_goal_ ||
+        !decider.active_goal_is_blocked_frontier_route_ ||
+        !decider.active_goal_allows_rolling_handover_ ||
+        decider.current_goal_.pose.position.y > -3.0 ||
+        decider.exploration_goal_queue_.empty()) {
+      return false;
+    }
+    const double yaw = 2.0 * std::atan2(
+        decider.current_goal_.pose.orientation.z,
+        decider.current_goal_.pose.orientation.w);
+    return yaw < -1.5 && yaw > -1.7;
+  }
+
+  static bool noRouteTimerClearsOnlyAfterSuperAcceptance(
+      SuperExplorationDecider& decider) {
+    decider.enabled_ = true;
+    decider.current_pose_.pose.position.x = 1.0;
+    decider.hard_safe_route_unavailable_since_ =
+        ros::Time::now() - ros::Duration(5.0);
+    const ros::Time original_timer =
+        decider.hard_safe_route_unavailable_since_;
+
+    geometry_msgs::PoseStamped goal;
+    goal.pose.position.x = 3.0;
+    goal.pose.orientation.w = 1.0;
+    decider.publishGoal(goal, "frontier_fallback");
+    if (decider.hard_safe_route_unavailable_since_ != original_timer) {
+      return false;
+    }
+
+    std_msgs::UInt64::Ptr accepted(new std_msgs::UInt64());
+    accepted->data = decider.active_goal_id_;
+    decider.acceptedGoalCallback(accepted);
+    return decider.hard_safe_route_unavailable_since_.isZero();
+  }
+
   static bool unusableRawFrontierDoesNotSuppressStallReturn(
       SuperExplorationDecider& decider) {
     decider.enabled_ = true;
@@ -1773,6 +1839,8 @@ class SuperExplorationDeciderTestPeer {
     decider.data_timeout_ = 100.0;
     decider.no_frontier_timeout_ = 1.0;
     decider.last_motion_progress_time_ =
+        decider.last_sync_time_ - ros::Duration(2.0);
+    decider.hard_safe_route_unavailable_since_ =
         decider.last_sync_time_ - ros::Duration(2.0);
     decider.current_pose_.pose.position.x = 5.25;
     decider.current_pose_.pose.position.z = 0.25;
@@ -2466,6 +2534,20 @@ TEST(SuperGoalPublication, KnownFreeSidePassageDoesNotRequireAFrontier) {
   SuperExplorationDecider decider(nh, pnh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   knownFreeSidePassageDoesNotRequireAFrontier(decider));
+}
+
+TEST(SuperGoalPublication, ConnectedTurnFollowsKnownFreeBendWithoutFrontier) {
+  ros::NodeHandle nh, pnh("~connected_turn_without_frontier");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  connectedTurnFollowsKnownFreeBendWithoutFrontier(decider));
+}
+
+TEST(SuperGoalPublication, NoRouteTimerClearsOnlyAfterSuperAcceptance) {
+  ros::NodeHandle nh, pnh("~no_route_timer_acceptance");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  noRouteTimerClearsOnlyAfterSuperAcceptance(decider));
 }
 
 TEST(SuperGoalPublication, UnusableRawFrontierDoesNotSuppressStallReturn) {
