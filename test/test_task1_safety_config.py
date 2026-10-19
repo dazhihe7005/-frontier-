@@ -160,6 +160,16 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(decider["forward_lookahead_distance"], 4.0)
         self.assertEqual(decider["max_frontier_goal_distance"], 4.0)
         self.assertEqual(decider["forward_goal_handover_distance"], 2.0)
+        self.assertTrue(decider["exploration_goal_queue_enabled"])
+        self.assertIn(
+            decider["exploration_goal_queue_max_future_goals"], (2, 3))
+        self.assertGreaterEqual(
+            decider["exploration_goal_queue_horizon"], 8.0)
+        self.assertGreater(
+            decider["exploration_goal_queue_spacing"],
+            decider["forward_goal_handover_distance"])
+        self.assertGreater(
+            decider["exploration_goal_queue_end_reserve"], 0.0)
         self.assertEqual(decider["no_frontier_timeout"], 10.0)
         self.assertAlmostEqual(
             decider["min_observation_height_above_home"], -0.30)

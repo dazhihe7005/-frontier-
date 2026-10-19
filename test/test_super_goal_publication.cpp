@@ -127,6 +127,153 @@ class SuperExplorationDeciderTestPeer {
            decider.current_goal_.pose.position.x > 3.0;
   }
 
+  static bool rollingForwardQueueHandsOverOneGoalAtATime(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.4;
+    decider.preferred_vehicle_radius_ = 0.4;
+    decider.forward_lookahead_distance_ = 4.0;
+    decider.forward_lookahead_step_ = 0.5;
+    decider.forward_goal_lateral_search_width_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_exploration_radius_from_home_ = 20.0;
+    decider.exploration_goal_queue_enabled_ = true;
+    decider.exploration_goal_queue_max_future_goals_ = 3;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.exploration_goal_queue_spacing_ = 2.5;
+    decider.exploration_goal_queue_end_reserve_ = 1.0;
+    SuperExplorationDecider::VoxelSet reachable;
+    for (double x = 0.0; x <= 15.0 + 1e-9; x += 0.125) {
+      const auto key = decider.positionToKey(x, 0.0, 0.0);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    if (!decider.publishForwardLookaheadGoal(reachable) ||
+        decider.exploration_goal_queue_.size() != 2u ||
+        std::abs(decider.current_goal_.pose.position.x - 4.0) > 1e-9) {
+      return false;
+    }
+    const double first_successor =
+        decider.exploration_goal_queue_.front().goal.pose.position.x;
+    const uint64_t first_goal_id = decider.active_goal_id_;
+    decider.accepted_goal_id_ = first_goal_id;
+    decider.current_pose_.pose.position.x = 2.5;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    if (!decider.tryForwardHandover(reachable)) return false;
+    return decider.active_goal_id_ != first_goal_id &&
+           std::abs(decider.current_goal_.pose.position.x -
+                    first_successor) < 1e-9 &&
+           decider.exploration_goal_queue_.size() == 2u &&
+           decider.exploration_goal_queue_.front().goal.pose.position.x >
+               decider.current_goal_.pose.position.x;
+  }
+
+  static bool rollingForwardQueueDropsInvalidTail(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.4;
+    decider.preferred_vehicle_radius_ = 0.4;
+    decider.forward_lookahead_distance_ = 4.0;
+    decider.forward_lookahead_step_ = 0.5;
+    decider.forward_goal_lateral_search_width_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_exploration_radius_from_home_ = 20.0;
+    decider.exploration_goal_queue_enabled_ = true;
+    decider.exploration_goal_queue_max_future_goals_ = 3;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.exploration_goal_queue_spacing_ = 2.5;
+    decider.exploration_goal_queue_end_reserve_ = 1.0;
+    SuperExplorationDecider::VoxelSet reachable;
+    for (double x = 0.0; x <= 10.0 + 1e-9; x += 0.125) {
+      const auto key = decider.positionToKey(x, 0.0, 0.0);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    if (!decider.publishForwardLookaheadGoal(reachable) ||
+        decider.exploration_goal_queue_.empty()) {
+      return false;
+    }
+    const auto newly_blocked = decider.positionToKey(5.0, 0.0, 0.0);
+    reachable.erase(newly_blocked);
+    decider.voxels_[newly_blocked] = SuperExplorationDecider::OCCUPIED;
+    decider.pruneExplorationGoalQueue(reachable);
+    return decider.exploration_goal_queue_.empty() &&
+           decider.have_active_goal_;
+  }
+
+  static bool cancellingExplorationClearsRollingQueue(
+      SuperExplorationDecider& decider) {
+    SuperExplorationDecider::QueuedExplorationGoal queued;
+    queued.goal.pose.orientation.w = 1.0;
+    queued.route.push_back({0, 0, 0});
+    decider.exploration_goal_queue_.push_back(queued);
+    decider.have_active_goal_ = true;
+    decider.active_goal_id_ = 9;
+    decider.cancelActiveGoal("test_queue_cancel");
+    return decider.exploration_goal_queue_.empty() &&
+           !decider.active_goal_allows_rolling_handover_;
+  }
+
+  static bool frontierRouteCachesConnectedSuccessors(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.home_pose_.pose.position.x = 0.25;
+    decider.home_pose_.pose.position.y = 0.25;
+    decider.home_pose_.pose.position.z = 0.25;
+    decider.current_pose_ = decider.home_pose_;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.exploration_phase_ =
+        SuperExplorationDecider::ExplorationPhase::kForwardPriority;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.4;
+    decider.preferred_vehicle_radius_ = 0.4;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_exploration_radius_from_home_ = 20.0;
+    decider.exploration_goal_queue_enabled_ = true;
+    decider.exploration_goal_queue_max_future_goals_ = 3;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.exploration_goal_queue_spacing_ = 2.5;
+    decider.exploration_goal_queue_end_reserve_ = 1.0;
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int x = 0; x <= 24; ++x) {
+      const VoxelKey key{x, 0, 0};
+      reachable.insert(key);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+    }
+    SuperExplorationDecider::FrontierCandidate frontier;
+    frontier.key = {24, 0, 0};
+    frontier.goal.pose.position = decider.keyToPoint(frontier.key);
+    frontier.goal.pose.orientation.w = 1.0;
+    frontier.score = 10.0;
+    frontier.unknown_neighbors = 10;
+    if (!decider.selectAndPublishFrontier({frontier}, reachable) ||
+        decider.exploration_goal_queue_.size() != 2u ||
+        !decider.active_goal_allows_rolling_handover_) {
+      return false;
+    }
+    const double next_x =
+        decider.exploration_goal_queue_.front().goal.pose.position.x;
+    const uint64_t previous_id = decider.active_goal_id_;
+    decider.accepted_goal_id_ = previous_id;
+    decider.current_pose_.pose.position.x =
+        decider.current_goal_.pose.position.x - 1.5;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    return decider.tryForwardHandover(reachable) &&
+           decider.active_goal_id_ != previous_id &&
+           std::abs(decider.current_goal_.pose.position.x - next_x) < 1e-9 &&
+           decider.exploration_goal_queue_.size() == 1u;
+  }
+
   static bool returnHandsOverOnlyAcceptedProgressiveLeg(
       SuperExplorationDecider& decider) {
     decider.enabled_ = true;
@@ -2028,6 +2175,38 @@ TEST(SuperGoalPublication, ConfirmedObstacleStillAllowsVerifiedHandover) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   acceptedShortForwardGoalHandsOver(decider));
+}
+
+TEST(SuperGoalPublication, RollingForwardQueueHandsOverOneGoalAtATime) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~rolling_forward_queue");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  rollingForwardQueueHandsOverOneGoalAtATime(decider));
+}
+
+TEST(SuperGoalPublication, RollingForwardQueueDropsInvalidTail) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~rolling_queue_invalidation");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  rollingForwardQueueDropsInvalidTail(decider));
+}
+
+TEST(SuperGoalPublication, CancellingExplorationClearsRollingQueue) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~rolling_queue_cancel");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  cancellingExplorationClearsRollingQueue(decider));
+}
+
+TEST(SuperGoalPublication, FrontierRouteCachesConnectedSuccessors) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~frontier_route_queue");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  frontierRouteCachesConnectedSuccessors(decider));
 }
 
 TEST(SuperGoalPublication, ForwardLookaheadVariantsKeepHandoverSemantics) {

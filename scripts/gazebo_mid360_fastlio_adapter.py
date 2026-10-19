@@ -163,16 +163,32 @@ class GazeboMid360FastlioAdapter:
             self._armed = message.armed
 
     def _links_callback(self, message):
-        try:
-            sensor_index = message.name.index("iris::mid360_link")
-            base_index = message.name.index("iris::iris::base_link")
-        except ValueError:
+        sensor_index = self._unique_link_index(message.name, "::mid360_link")
+        base_index = self._unique_link_index(message.name, "::iris::base_link")
+        if sensor_index is None or base_index is None:
+            rospy.logwarn_throttle(
+                2.0,
+                "MID360 adapter could not resolve one unique sensor/base link "
+                "from Gazebo link states",
+            )
             return
         with self._lock:
             self._link_history.append(
                 (rospy.Time.now(), message.pose[sensor_index],
                  message.pose[base_index])
             )
+
+    @staticmethod
+    def _unique_link_index(names, suffix):
+        """Resolve a spawned Gazebo link without assuming its model prefix.
+
+        PX4 names the model from the selected airframe (for example
+        ``iris_xy_vision``), while older worlds used ``iris``.  The physical
+        link suffix is stable and must match exactly one entity.
+        """
+        matches = [index for index, name in enumerate(names)
+                   if name.endswith(suffix)]
+        return matches[0] if len(matches) == 1 else None
 
     @staticmethod
     def _load_static_boxes(world_file):

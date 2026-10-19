@@ -11,7 +11,8 @@
   <arg name="decider_vertical_vehicle_clearance_below" default="1.0"/>
   <arg name="decider_vertical_vehicle_clearance_above" default="1.0"/>
   <arg name="forward_corridor_half_width" default="1.5"/>
-  <arg name="max_task_lateral_offset" default="1.0"/>
+  <arg name="forward_goal_lateral_search_width" default="1.5"/>
+  <arg name="max_task_lateral_offset" default="1.5"/>
 
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -58,6 +59,8 @@
          removes frontier-induced zig-zag in an obstacle-free chamber while
          leaving collision avoidance and local deviations to SUPER. -->
     <arg name="forward_corridor_half_width" value="$(arg forward_corridor_half_width)"/>
+    <arg name="forward_goal_lateral_search_width"
+         value="$(arg forward_goal_lateral_search_width)"/>
     <arg name="max_task_lateral_offset" value="$(arg max_task_lateral_offset)"/>
 
     <!-- Seeing the far wall from the entrance is not enough: the aircraft

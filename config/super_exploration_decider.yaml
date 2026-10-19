@@ -156,6 +156,15 @@ forward_lookahead_distance: 4.0
 max_frontier_goal_distance: 4.0
 max_frontier_goal_vertical_step: 0.5
 forward_lookahead_step: 0.5
+# Cache only task-level hints for normal outbound flight. SUPER still receives
+# one goal at a time, and each queued leg is checked again on the newest task
+# map and SUPER occupancy immediately before handover.
+exploration_goal_queue_enabled: true
+exploration_goal_queue_max_future_goals: 3
+exploration_goal_queue_horizon: 10.0
+exploration_goal_queue_spacing: 2.5
+# Do not pre-commit the queue all the way to the current observed boundary.
+exploration_goal_queue_end_reserve: 1.0
 cruise_height_above_home: 0.0
 return_breadcrumb_spacing: 1.0
 super_occupied_topic: "/fsm_node/rog_map/occ"

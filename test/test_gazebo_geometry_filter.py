@@ -88,6 +88,23 @@ class GazeboGeometryFilterTest(unittest.TestCase):
         launch_text = (ROOT / "launch/task1_px4_sitl.launch").read_text()
         self.assertIn('name="self_filter_xy_radius" value="0.65"', launch_text)
 
+    def test_spawned_model_prefix_does_not_hide_sensor_pose(self):
+        names = [
+            "ground_plane::link",
+            "iris_xy_vision::iris::base_link",
+            "iris_xy_vision::mid360_link",
+        ]
+        self.assertEqual(
+            self.adapter._unique_link_index(names, "::iris::base_link"), 1
+        )
+        self.assertEqual(
+            self.adapter._unique_link_index(names, "::mid360_link"), 2
+        )
+        names.append("other_vehicle::mid360_link")
+        self.assertIsNone(
+            self.adapter._unique_link_index(names, "::mid360_link")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
