@@ -65,7 +65,7 @@
   <arg name="require_three_wall_completion" default="false"/>
   <!-- Allow map stability confirmation to finish after the last safe goal;
        the occupancy count can reset its four-second window near the end wall. -->
-  <arg name="no_frontier_timeout" default="15.0"/>
+  <arg name="no_frontier_timeout" default="10.0"/>
   <!-- The 0.25 m decision map takes several simulated seconds to evaluate;
        retain the latest SUPER occupancy for that bounded interval. SUPER
        still checks every executed trajectory against its live ROG map. -->

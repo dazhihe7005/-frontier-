@@ -81,6 +81,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
             bridge["obstacle_monitor_horizontal_clearance"],
             PLANNING_CLEARANCE)
         self.assertAlmostEqual(bridge["obstacle_persistence_duration"], 3.0)
+        self.assertAlmostEqual(bridge["obstacle_replan_escape_duration"], 4.0)
         self.assertAlmostEqual(bridge["overspeed_duration"], 1.5)
         self.assertAlmostEqual(bridge["measured_speed_target"], 0.65)
         self.assertAlmostEqual(bridge["measured_speed_feedback_gain"], 1.0)
@@ -159,6 +160,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(decider["forward_lookahead_distance"], 4.0)
         self.assertEqual(decider["max_frontier_goal_distance"], 4.0)
         self.assertEqual(decider["forward_goal_handover_distance"], 2.0)
+        self.assertEqual(decider["no_frontier_timeout"], 10.0)
         self.assertAlmostEqual(
             decider["min_observation_height_above_home"], -0.30)
         self.assertAlmostEqual(
@@ -185,6 +187,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(launch_args["decider_vehicle_radius"], "0.8")
         self.assertEqual(
             launch_args["decider_preferred_vehicle_radius"], "1.1")
+        self.assertEqual(launch_args["no_frontier_timeout"], "10.0")
 
         bridge_launch = ET.parse(
             ROOT / "launch" / "super_px4_command_bridge.launch").getroot()

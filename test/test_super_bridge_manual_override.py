@@ -263,7 +263,7 @@ class ManualOverrideTest(unittest.TestCase):
             self.assertEqual(self._requests.count("OFFBOARD"),
                              requests_at_alignment_change)
 
-    def test_command_fault_returns_before_route_timeout_fallback(self):
+    def test_command_fault_keeps_retrying_return_without_offboard_exit(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
         with self._lock:
             self._auto = True
@@ -283,8 +283,13 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self.assertNotIn("POSCTL", self._requests)
             self._exploration_status = "RETURN_ROUTE_WAIT"
-        self.assertTrue(self._wait_for(lambda: "POSCTL" in self._requests,
-                                       timeout=5.0))
+        time.sleep(3.0)
+        with self._lock:
+            self.assertNotIn("POSCTL", self._requests)
+            self.assertTrue(any(
+                status in ("RETURN_ROUTE_RETRYING", "HOLD_COMMAND_TIMEOUT")
+                for status in self._statuses
+            ), self._statuses[-20:])
 
     def test_measured_overspeed_brakes_and_exits_offboard(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))

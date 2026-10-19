@@ -59,8 +59,9 @@ live_horizontal_clearance: 0.65
 obstacle_monitor_horizontal_clearance: 0.8
 # Persistence in the 0.65--0.8 m monitored caution zone requests a fresh
 # frontier/SUPER route instead of waiting forever; it does not exit OFFBOARD.
-# The fixed hold is released only by a newly numbered trajectory. If the
-# persistent obstacle is currently inside 0.65 m, the bridge still exits.
+# The fixed hold is released only by a newly numbered trajectory. A persistent
+# obstacle inside 0.65 m requests verified return while localization and the
+# cloud remain healthy; that new trajectory must increase obstacle clearance.
 # A cloud timeout remains an immediate exit because monitoring is unavailable.
 obstacle_persistence_duration: 3.0
 obstacle_replan_topic: /mine_uav/exploration/obstacle_replan
@@ -120,6 +121,8 @@ mode_request_interval: 1.0
 offboard_mode: OFFBOARD
 fallback_mode: POSCTL
 return_recovery_timeout: 12.0
+# 定位、MAVROS 和点云仍健康时，超过该时间不是退出条件：桥接器固定悬停并再次请求
+# 验证返航。只有自主返航所需的健康条件失效才转入原有退出保护。
 
 # The SetBool service remains as an optional software inhibit. RC operation does
 # not require a service call when this default is true.

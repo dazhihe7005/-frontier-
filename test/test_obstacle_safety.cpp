@@ -154,17 +154,28 @@ TEST(ObstacleSafety, ContinuousObstacleBecomesPersistentAtThreeSeconds) {
 
 TEST(ObstacleSafety, PersistentPlanningZoneObstacleDoesNotExitOffboard) {
   EXPECT_FALSE(
-      mine_uav_control::persistentHardIntrusionRequiresOffboardExit(
+      mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
           mine_uav_control::ObstacleMonitorAction::kPersistent, false));
   EXPECT_FALSE(
-      mine_uav_control::persistentHardIntrusionRequiresOffboardExit(
+      mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
           mine_uav_control::ObstacleMonitorAction::kHold, true));
 }
 
-TEST(ObstacleSafety, OnlyPersistentHardIntrusionExitsOffboard) {
+TEST(ObstacleSafety, PersistentHardIntrusionRequestsVerifiedReturn) {
   EXPECT_TRUE(
-      mine_uav_control::persistentHardIntrusionRequiresOffboardExit(
+      mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
           mine_uav_control::ObstacleMonitorAction::kPersistent, true));
+}
+
+TEST(ObstacleSafety, HardObstacleEscapeMustIncreaseClearance) {
+  const mine_uav_control::ObstaclePoint vehicle{0.0, 0.0, 1.0};
+  const mine_uav_control::ObstaclePoint obstacle{0.5, 0.0, 1.0};
+  EXPECT_TRUE(mine_uav_control::plannedMotionIncreasesHorizontalClearance(
+      vehicle, obstacle, {-0.1, 0.0, 1.0}, -0.1, 0.0));
+  EXPECT_FALSE(mine_uav_control::plannedMotionIncreasesHorizontalClearance(
+      vehicle, obstacle, {0.1, 0.0, 1.0}, 0.1, 0.0));
+  EXPECT_FALSE(mine_uav_control::plannedMotionIncreasesHorizontalClearance(
+      vehicle, obstacle, {0.0, 0.0, 1.0}, 0.0, 0.0));
 }
 
 TEST(ObstacleSafety, SparseClearPacketDoesNotReleaseHold) {

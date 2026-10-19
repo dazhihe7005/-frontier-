@@ -233,11 +233,11 @@ three_wall_confirm_cycles: 4
 goal_reached_distance: 1.0
 goal_timeout: 30.0
 
-# 完成前至少到达一个观察点。旧的 no_frontier_timeout 仅在两个严格完成策略
-# 都关闭时生效。
+# 完成前至少到达一个观察点。只要已经产生实际运动，连续 10 秒没有任何可执行的
+# 硬安全探索路段就开始实时地图返航；严格完成策略关闭时它也兼作无 frontier 完成门。
 min_goals_before_complete: 1
 min_data_duration: 5.0
-no_frontier_timeout: 15.0
+no_frontier_timeout: 10.0
 
 # 健康检查和任务事件。
 decision_rate: 2.0

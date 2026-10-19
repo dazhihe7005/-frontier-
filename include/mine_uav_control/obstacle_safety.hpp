@@ -23,18 +23,40 @@ enum class ObstacleMonitorAction {
   kPersistent,
 };
 
-// Persistence decides when a return is no longer transient.  It does not
-// redefine the hard radius: only a persistent return that is also inside the
-// independent configured hard cylinder is allowed to request an OFFBOARD exit.
-inline bool persistentHardIntrusionRequiresOffboardExit(
+// Persistence decides when a return is no longer transient. A persistent
+// intrusion inside the independent hard cylinder requires a verified escape
+// or return route; persistence alone must not turn a planning blockage into
+// an immediate OFFBOARD exit while localization and perception remain valid.
+inline bool persistentHardIntrusionRequiresVerifiedReturn(
     ObstacleMonitorAction action, bool hard_clearance_intrusion) {
   return action == ObstacleMonitorAction::kPersistent &&
       hard_clearance_intrusion;
 }
 
+inline bool plannedMotionIncreasesHorizontalClearance(
+    const ObstaclePoint& vehicle, const ObstaclePoint& obstacle,
+    const ObstaclePoint& target, double velocity_x, double velocity_y,
+    double minimum_target_gain = 0.03,
+    double minimum_outward_speed = 0.02) {
+  const double away_x = vehicle.x - obstacle.x;
+  const double away_y = vehicle.y - obstacle.y;
+  const double current_distance = std::hypot(away_x, away_y);
+  const double target_distance =
+      std::hypot(target.x - obstacle.x, target.y - obstacle.y);
+  if (!std::isfinite(current_distance) || !std::isfinite(target_distance) ||
+      !std::isfinite(velocity_x) || !std::isfinite(velocity_y) ||
+      current_distance < 1e-6) {
+    return false;
+  }
+  const double outward_speed =
+      (velocity_x * away_x + velocity_y * away_y) / current_distance;
+  return target_distance >= current_distance + minimum_target_gain ||
+      outward_speed >= minimum_outward_speed;
+}
+
 // A newly observed obstacle first causes a fixed-position hold. Persistence
 // alone does not imply a terminal fault; the caller applies the separate hard
-// clearance policy above.
+// clearance and verified-return policy above.
 // Several consecutive clear scans are required before resuming so a sparse
 // lidar packet cannot make the vehicle alternate between hold and flight.
 class TransientObstacleMonitor {

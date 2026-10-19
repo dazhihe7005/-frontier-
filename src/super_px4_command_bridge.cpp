@@ -626,6 +626,12 @@ class SuperPx4CommandBridge {
              obstacle_cloud_timeout_);
   }
 
+  bool autonomousReturnHealthReady(const ros::Time& now) const {
+    return alignment_ready_ && vision_healthy_ && mavros_connected_ &&
+        localPoseFresh(now) && localVelocityFresh(now) &&
+        obstacleCloudFresh(now);
+  }
+
   void triggerObstacleHazard(const std::string& reason) {
     if (obstacle_hazard_stop_active_) return;
     obstacle_hazard_stop_active_ = true;
@@ -642,6 +648,7 @@ class SuperPx4CommandBridge {
     obstacle_replan_escape_active_ = false;
     obstacle_replan_escape_started_ = ros::Time();
     obstacle_hold_source_trajectory_id_ = 0;
+    obstacle_replan_requires_away_motion_ = false;
   }
 
   void beginTransientObstacleHold(const std::string& reason,
@@ -673,14 +680,26 @@ class SuperPx4CommandBridge {
                "%.1f s of continuous observation (%s)",
                obstacle_persistence_duration_, reason.c_str());
     }
-    if (mine_uav_control::persistentHardIntrusionRequiresOffboardExit(
+    if (mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
             action, hard_clearance_intrusion)) {
-      ROS_ERROR("Obstacle remained continuously actionable for %.3f s; "
-                "hard %.3f m clearance remains violated; leaving OFFBOARD "
-                "(%s)",
-                obstacle_monitor_.elapsed(now.toSec()),
-                live_horizontal_clearance_, reason.c_str());
-      triggerObstacleHazard("PERSISTENT_HARD_OBSTACLE_3S");
+      if (!autonomousReturnHealthReady(now)) {
+        ROS_ERROR("Persistent hard obstacle cannot be escaped autonomously "
+                  "because localization or perception is unhealthy");
+        triggerObstacleHazard("PERSISTENT_HARD_OBSTACLE_NO_RETURN_SENSING");
+        return;
+      }
+      obstacle_monitor_reason_ = "PERSISTENT_HARD_OBSTACLE_RETURN_WAIT";
+      obstacle_replan_requires_away_motion_ = true;
+      if (!obstacle_replan_requested_) {
+        obstacle_replan_requested_ = true;
+        obstacle_replan_publisher_.publish(std_msgs::Empty());
+        publishReturnRequest(true);
+        ROS_ERROR("Obstacle remained inside the %.3f m hard radius for %.3f "
+                  "s; retaining OFFBOARD and requesting a verified "
+                  "clearance-increasing return trajectory",
+                  live_horizontal_clearance_,
+                  obstacle_monitor_.elapsed(now.toSec()));
+      }
     } else if (action ==
                mine_uav_control::ObstacleMonitorAction::kPersistent) {
       // A persistent return outside the hard radius is a planning problem,
@@ -838,13 +857,27 @@ class SuperPx4CommandBridge {
     const bool hard_clearance_intrusion =
         clearance.violated &&
         clearance.horizontal_distance < live_horizontal_clearance_ - 1e-9;
+    if (clearance.violated) {
+      latest_monitor_obstacle_ = clearance.obstacle;
+      have_latest_monitor_obstacle_ = true;
+    }
     if (obstacle_replan_escape_active_) {
       const bool escape_expired =
           obstacle_replan_escape_started_.isZero() ||
           (now - obstacle_replan_escape_started_).toSec() >=
               obstacle_replan_escape_duration_;
-      if (hard_clearance_intrusion) {
-        // A new hard intrusion always overrides the soft-replan handoff.
+      const mine_uav_control::ObstaclePoint planned_target{
+          latest_planning_position_x_, latest_planning_position_y_,
+          latest_task_position_.z};
+      const bool moving_away = clearance.violated &&
+          mine_uav_control::plannedMotionIncreasesHorizontalClearance(
+              latest_task_position_, clearance.obstacle, planned_target,
+              latest_planning_velocity_x_, latest_planning_velocity_y_,
+              -0.01, -0.01);
+      if (hard_clearance_intrusion &&
+          (!obstacle_replan_requires_away_motion_ || !moving_away)) {
+        // A hard-radius escape may continue only while the replacement
+        // trajectory is non-closing relative to the nearest live return.
         obstacle_replan_escape_active_ = false;
       } else if (!obstacle_requires_monitoring) {
         obstacle_replan_escape_active_ = false;
@@ -1347,6 +1380,8 @@ class SuperPx4CommandBridge {
     }
     latest_planning_velocity_x_ = command->velocity.x;
     latest_planning_velocity_y_ = command->velocity.y;
+    latest_planning_position_x_ = command->position.x;
+    latest_planning_position_y_ = command->position.y;
     if (obstacle_monitor_.active()) {
       // Continue learning the planner's forward direction for coverage, but
       // never let the old trajectory advance the cache while output is pinned
@@ -1354,14 +1389,28 @@ class SuperPx4CommandBridge {
       // only by a newly numbered SUPER trajectory requested by this bridge.
       const bool fresh_replan = obstacle_replan_requested_ &&
           command->trajectory_id != obstacle_hold_source_trajectory_id_;
-      if (!fresh_replan) {
+      const mine_uav_control::ObstaclePoint planned_target{
+          command->position.x, command->position.y, command->position.z};
+      const bool escape_moves_away =
+          !obstacle_replan_requires_away_motion_ ||
+          (have_latest_monitor_obstacle_ &&
+           mine_uav_control::plannedMotionIncreasesHorizontalClearance(
+               latest_task_position_, latest_monitor_obstacle_,
+               planned_target, command->velocity.x, command->velocity.y));
+      if (!fresh_replan || !escape_moves_away) {
         valid_command_ = false;
         resetContinuityGuard();
         return;
       }
+      const bool hard_escape = obstacle_replan_requires_away_motion_;
+      const auto escape_obstacle = latest_monitor_obstacle_;
+      const bool have_escape_obstacle = have_latest_monitor_obstacle_;
       resetTransientObstacleMonitor();
       obstacle_replan_escape_active_ = true;
+      obstacle_replan_requires_away_motion_ = hard_escape;
       obstacle_replan_escape_started_ = receipt;
+      latest_monitor_obstacle_ = escape_obstacle;
+      have_latest_monitor_obstacle_ = have_escape_obstacle;
       obstacle_safety_ready_ = true;
       hold_target_latched_ = false;
       resetContinuityGuard();
@@ -1709,13 +1758,29 @@ class SuperPx4CommandBridge {
     }
     if (recovery_pending_ &&
         (now - recovery_started_).toSec() > return_recovery_timeout_) {
-      recovery_pending_ = false;
-      latchFault("VERIFIED_RETURN_NOT_AVAILABLE");
+      if (autonomousReturnHealthReady(now)) {
+        recovery_started_ = now;
+        publishReturnRequest(true);
+        publishStatus("VERIFIED_RETURN_RETRYING");
+        ROS_WARN("Verified return is not available yet; retaining OFFBOARD "
+                 "hold and retrying because localization and perception are healthy");
+      } else {
+        recovery_pending_ = false;
+        latchFault("VERIFIED_RETURN_NOT_AVAILABLE");
+      }
     }
     if (returning_home_ && !return_route_wait_since_.isZero() &&
         (now - return_route_wait_since_).toSec() > return_recovery_timeout_) {
-      return_route_wait_since_ = ros::Time();
-      latchFault("RETURN_ROUTE_UNAVAILABLE");
+      if (autonomousReturnHealthReady(now)) {
+        return_route_wait_since_ = now;
+        publishReturnRequest(true);
+        publishStatus("RETURN_ROUTE_RETRYING");
+        ROS_WARN("Return route is temporarily unavailable; retaining "
+                 "OFFBOARD hold and continuing live-map retries");
+      } else {
+        return_route_wait_since_ = ros::Time();
+        latchFault("RETURN_ROUTE_UNAVAILABLE");
+      }
     }
     // PX4 accepts AUTO.LAND and disarms at home, but can restore the prior
     // OFFBOARD user intention immediately after disarming. The no-RC SITL
@@ -2189,6 +2254,8 @@ class SuperPx4CommandBridge {
   double coverage_min_vertical_span_{0.0};
   double latest_planning_velocity_x_{1.0};
   double latest_planning_velocity_y_{0.0};
+  double latest_planning_position_x_{0.0};
+  double latest_planning_position_y_{0.0};
   double last_planning_forward_x_{1.0};
   double last_planning_forward_y_{0.0};
   int coverage_min_points_{30};
@@ -2224,6 +2291,9 @@ class SuperPx4CommandBridge {
   bool obstacle_hazard_stop_active_{false};
   bool obstacle_replan_requested_{false};
   bool obstacle_replan_escape_active_{false};
+  bool obstacle_replan_requires_away_motion_{false};
+  mine_uav_control::ObstaclePoint latest_monitor_obstacle_;
+  bool have_latest_monitor_obstacle_{false};
   uint32_t obstacle_hold_source_trajectory_id_{0};
   int obstacle_coverage_complete_streak_{0};
   int obstacle_coverage_incomplete_streak_{0};

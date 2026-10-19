@@ -371,7 +371,7 @@ class SuperExplorationDecider {
   double min_goal_distance_{2.0};
   double goal_reached_distance_{1.0};
   double goal_timeout_{30.0};
-  double no_frontier_timeout_{15.0};
+  double no_frontier_timeout_{10.0};
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
   double vehicle_radius_{0.4};
