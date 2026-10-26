@@ -129,6 +129,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sitl_shaft_router_lifecycle.py)
   catkin_add_nosetests(test/test_sitl_shaft_depth_drift.py)
   catkin_add_nosetests(test/test_sitl_shaft_vision_truth.py)
+  catkin_add_nosetests(test/test_sitl_task1_vision_truth.py)
   catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
   catkin_add_nosetests(test/test_sitl_shaft_optical_flow_depth.py)
   catkin_add_nosetests(test/test_task1_sitl_downward_range_filter.py)
@@ -240,6 +241,9 @@ catkin_install_python(PROGRAMS
   scripts/sitl_localization_adapter.py
   scripts/sitl_shaft_rviz_frames.py
   scripts/sitl_task_operator.py
+  scripts/sitl_task1_obstacle_hold_injector.py
+  scripts/sitl_task1_vision_truth.py
+  scripts/analyze_task1_trajectory_sync_bag.py
   scripts/sitl_baixiangshan_launch_stand.py
   scripts/sitl_shaft_sensor_adapter.py
   scripts/sitl_shaft_optical_flow_depth.py

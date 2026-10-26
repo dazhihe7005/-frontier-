@@ -1,0 +1,36 @@
+<launch>
+  <!-- Full-stack regression for the managed-hold/SUPER clock contract.
+       This launch is simulation-only and must use an isolated ROS master. -->
+  <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="inject_duration" default="0.35"/>
+  <arg name="inject_delay" default="2.0"/>
+  <arg name="inject_distance" default="0.75"/>
+  <arg name="bridge_cloud_topic"
+       default="/mine_uav/sitl/bridge_obstacle_cloud"/>
+
+  <include file="$(find mine_uav_control)/launch/task1_40m_platform_sitl.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="bridge_obstacle_cloud_topic" value="$(arg bridge_cloud_topic)"/>
+    <!-- Isolate the execution/safety contract from the known directional
+         degeneracy of stationary LIO in this empty 40 m chamber. -->
+    <arg name="use_sitl_vision_truth" value="true"/>
+  </include>
+
+  <!-- Preserve the live simulated cloud for the bridge. The injector below
+       is a second publisher on this bridge-only topic, so SUPER and the
+       exploration map never ingest the synthetic return. -->
+  <node pkg="topic_tools" type="relay" name="bridge_obstacle_cloud_relay"
+        args="/mine_uav/task1/cloud_registered $(arg bridge_cloud_topic)"
+        output="log" required="true"/>
+
+  <node pkg="mine_uav_control" type="sitl_task1_obstacle_hold_injector.py"
+        name="sitl_task1_obstacle_hold_injector" output="screen"
+        required="true">
+    <param name="output_cloud_topic" value="$(arg bridge_cloud_topic)"/>
+    <param name="inject_duration" value="$(arg inject_duration)"/>
+    <param name="trigger_delay" value="$(arg inject_delay)"/>
+    <param name="obstacle_distance" value="$(arg inject_distance)"/>
+  </node>
+</launch>

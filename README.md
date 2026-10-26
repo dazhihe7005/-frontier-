@@ -245,6 +245,13 @@ SUPER 名义 `0.9 m/s`、预测闭环治理及规划、实测三维速度硬上�
 首次进入 OFFBOARD 仍按总误差 `0.65 m` 检查，超过 `1.5 m` 的沿程落后仍会故障退出。
 这两个跟踪阈值均不改变 `0.65 m` 实时障碍硬圆柱和 `0.8 m` 规划净距。
 
+2026-10-26 的隔离 PX4/Gazebo 回归已覆盖上述暂停合同：飞机在滚动更新目标时持续飞行，
+专项节点仅向指令桥注入一个位于前方 `0.75 m`、持续 `0.35 s` 的模拟回波。执行授权在
+`24.020 s` 下降、`24.638 s` 恢复；暂停期 62 个 SUPER 指令样本的位置跨度为 `0 m`，
+恢复首步为 `0.00269 m`，PX4 未离开 OFFBOARD，指令桥没有锁存故障。原始证据包为
+`/home/nuc/task1_logs/trajectory_sync_20261026_final.bag`，机器可读结果已固化在
+[`docs/evidence/trajectory_sync_20261026_final.json`](docs/evidence/trajectory_sync_20261026_final.json)。
+
 真机默认配置的自动返航只由以下条件触发：显式 `/mine_uav/exploration/return_home=true`；
 电压低于 `21.6 V`；地图闭合稳定确认；或者实际运动后连续 `7 s` 找不到任何可执行的
 硬安全探索路段。当前硬件的电量百分比估计没有电流/容量模型，已禁用百分比启动与返航授权。
@@ -580,6 +587,31 @@ home返航点，最终位置约 `(-0.35, 0.17, 1.05) m`，`model_complete=true`�
 `/mavros/state`：如果 PX4 仍处于 `OFFBOARD`，陈旧或缺失指令仍会触发安全告警并停止
 转发；如果 PX4 已切换到 `AUTO.LOITER`、`POSCTL` 等非 OFFBOARD 模式，则静默停止，
 不会把正常的任务收尾重复报告为 `Setpoint command is ... old`。
+
+#### SUPER 暂停时钟专项回归
+
+`task1_trajectory_sync_sitl.launch` 专门验证“桥接器保持时 SUPER 轨迹时钟必须同步冻结”。
+它复用完整任务一、SUPER、MAVROS 和 PX4 SITL，只把合成障碍发送到桥接器专用点云话题，
+不会污染 SUPER/探索地图。40 m 空室的静止平台对 LIO 存在方向退化，因此该专项启动文件
+显式设置 `use_sitl_vision_truth=true`，把 PX4 外部视觉、规划里程计和点云注册统一到局部
+Gazebo 真值坐标，以隔离控制合同；普通 `task1_px4_sitl.launch` 的默认值仍为 `false`，
+继续使用 Omni-LIVO，真机启动文件不包含这个入口。真值节点还会拒绝非 `/use_sim_time`、
+非隔离 ROS master 或非本地 SITL FCU URL。
+
+```bash
+export ROS_MASTER_URI=http://127.0.0.1:11319
+export GAZEBO_MASTER_URI=http://127.0.0.1:11499
+roslaunch mine_uav_control task1_trajectory_sync_sitl.launch \
+  gui:=false rviz:=false
+
+rosrun mine_uav_control analyze_task1_trajectory_sync_bag.py \
+  /home/nuc/task1_logs/trajectory_sync_20261026_final.bag
+```
+
+验收要求包括：注入完成、`execution_enable` 先降后升、暂停参考跨度不超过 `0.03 m`、
+恢复首步不超过 `0.08 m`、桥接器进入软障碍监测、无故障且 PX4 不退出 OFFBOARD。
+2026-10-26 实测结果为 `PASS`；同一无注入连续飞行观测到 315 次在线重规划、累计规划轨迹
+长度 `32.59 m`，没有出现“每个局部目标到点后停稳再起步”的行为。
 
 #### 复杂地形采空区场景
 

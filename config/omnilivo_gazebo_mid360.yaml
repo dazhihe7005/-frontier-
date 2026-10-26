@@ -88,6 +88,10 @@ safety:
 uav:
   align_output_time_to_ros: true
   gravity_align_en: true
+  # Gazebo's instantaneous ray scans can create correction steps that are not
+  # representative of the hardware pipeline. Keep the high-rate relock path
+  # disabled in this sensor-model regression and explicitly route the stable
+  # mapping odometry into the PX4 bridge in task1_px4_sitl.launch.
   imu_rate_odom: false
 
 publish:

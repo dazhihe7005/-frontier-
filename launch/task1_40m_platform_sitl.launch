@@ -17,6 +17,9 @@
   <arg name="forward_corridor_half_width" default="1.5"/>
   <arg name="forward_goal_lateral_search_width" default="1.5"/>
   <arg name="max_task_lateral_offset" default="1.5"/>
+  <arg name="bridge_obstacle_cloud_topic"
+       default="/mine_uav/task1/cloud_registered"/>
+  <arg name="use_sitl_vision_truth" default="false"/>
 
   <include file="$(find mine_uav_control)/launch/task1_px4_sitl.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -39,6 +42,9 @@
          value="$(arg world)"/>
     <arg name="vehicle_sdf"
          value="$(arg vehicle_sdf)"/>
+    <arg name="bridge_obstacle_cloud_topic"
+         value="$(arg bridge_obstacle_cloud_topic)"/>
+    <arg name="use_sitl_vision_truth" value="$(arg use_sitl_vision_truth)"/>
     <arg name="spawn_x" value="-8.0"/>
     <arg name="spawn_y" value="0.0"/>
     <arg name="spawn_z" value="16.15"/>

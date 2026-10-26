@@ -21,6 +21,10 @@
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_goaf_smooth.yaml"/>
   <arg name="omnilivo_config"
        default="$(find mine_uav_control)/config/omnilivo_gazebo_mid360.yaml"/>
+  <arg name="sitl_vision_odometry_topic" default="/omnilivo/odometry"/>
+  <!-- Explicit control-isolation mode for trajectory regressions. The
+       default still validates the real Omni-LIVO -> PX4 path. -->
+  <arg name="use_sitl_vision_truth" default="false"/>
   <!-- Canonical no-GPS SITL airframe. This selects PX4 autostart 1018; the
        SDF below remains the STEP-derived 6 kg vehicle. -->
   <arg name="vehicle" default="iris_xy_vision"/>
@@ -103,6 +107,8 @@
   <arg name="bridge_max_height" default="8.0"/>
   <arg name="bridge_height_clamp_tolerance" default="0.25"/>
   <arg name="require_mission_enable_edge" default="true"/>
+  <arg name="bridge_obstacle_cloud_topic"
+       default="/mine_uav/task1/cloud_registered"/>
 
   <include file="$(find mine_uav_control)/launch/mavros_posix_sitl_task1.launch">
     <arg name="gui" value="$(arg gui)"/>
@@ -163,8 +169,29 @@
     <param name="sensor_position_in_body_y" value="0.0"/>
     <param name="sensor_position_in_body_z" value="0.0"/>
     <param name="require_localization_health" value="true"/>
-    <param name="localization_health_topic"
+    <param unless="$(arg use_sitl_vision_truth)"
+           name="localization_health_topic"
            value="/omnilivo/localization_healthy"/>
+    <param if="$(arg use_sitl_vision_truth)"
+           name="localization_health_topic"
+           value="/mine_uav/sitl/vision_truth_healthy"/>
+    <!-- Production uses /omnilivo/control_odometry. This Gazebo profile has
+         no real Livox packet timing and therefore uses the stable mapping
+         state while retaining the same health and PX4-facing contracts. -->
+    <param unless="$(arg use_sitl_vision_truth)"
+           name="input_topic" value="$(arg sitl_vision_odometry_topic)"/>
+    <param if="$(arg use_sitl_vision_truth)"
+           name="input_topic" value="/mine_uav/sitl/vision_truth_odometry"/>
+  </node>
+
+  <!-- Simulation truth is allowed only as an explicit A/B input for
+       control-path regressions. In that mode both control and cloud
+       registration use the same local truth frame; normal SITL continues to
+       use Omni-LIVO. The publisher refuses non-SITL masters/FCU links. -->
+  <node if="$(arg use_sitl_vision_truth)" pkg="mine_uav_control"
+        type="sitl_task1_vision_truth.py" name="sitl_task1_vision_truth"
+        output="screen" required="true">
+    <param name="vehicle_model" value="$(arg vehicle)"/>
   </node>
 
   <!-- Build the planner cloud from the real Omni-LIVO pose and the same raw
@@ -174,7 +201,12 @@
   <node pkg="mine_uav_control" type="gazebo_mid360_lio_adapter.py"
         name="task1_planner_cloud_adapter" output="screen" required="true">
     <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
-    <param name="odom_topic" value="/omnilivo/odometry"/>
+    <param unless="$(arg use_sitl_vision_truth)"
+           name="odom_topic" value="/omnilivo/odometry"/>
+    <!-- Keep cloud registration, planner state and PX4 state in one frame
+         when the explicit trajectory-control isolation mode is selected. -->
+    <param if="$(arg use_sitl_vision_truth)"
+           name="odom_topic" value="/mine_uav/sitl/vision_truth_odometry"/>
     <param name="output_topic" value="/mine_uav/sitl/planner_cloud_registered"/>
     <param name="px4_pose_topic" value="/mavros/local_position/pose"/>
     <param name="output_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
@@ -367,6 +399,8 @@
     <arg name="max_offboard_entry_speed" value="0.30"/>
     <arg name="mission_enable_topic"
          value="/mine_uav/mission/exploration_enable"/>
+    <arg name="obstacle_cloud_topic"
+         value="$(arg bridge_obstacle_cloud_topic)"/>
     <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
     <arg name="min_height" value="$(arg bridge_min_height)"/>
     <arg name="max_height" value="$(arg bridge_max_height)"/>

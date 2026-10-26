@@ -21,8 +21,8 @@ class OmniLivoProductionMigrationTest(unittest.TestCase):
         nodes = [(node.attrib.get("pkg"), node.attrib.get("type"))
                  for node in root.findall(".//node")]
 
-        self.assertTrue(any("omni_livo" in item and
-                            "mapping_seeker_raw.launch" in item
+        self.assertTrue(any("uav_modes/releases" in item and
+                            item.endswith("/mapping.launch")
                             for item in includes))
         self.assertTrue(any("seeker" in item and
                             "3undistort_nodelet.launch" in item
@@ -34,7 +34,8 @@ class OmniLivoProductionMigrationTest(unittest.TestCase):
         seeker_args = {arg.attrib["name"]: arg.attrib["value"]
                        for arg in seeker_include.findall("arg")}
         self.assertEqual(seeker_args.get("publish_tf"), "false")
-        self.assertTrue(any("omnilivo_px4_vision_bridge.launch" in item
+        self.assertTrue(any("uav_modes/releases/height_correction_" in item and
+                            item.endswith("/bridge.launch")
                             for item in includes))
         self.assertNotIn('pkg="fast_lio"', launch_text)
         self.assertNotIn("fastlio_px4_vision_bridge.launch", launch_text)
@@ -92,7 +93,7 @@ class OmniLivoProductionMigrationTest(unittest.TestCase):
         self.assertIn("seeker_usb_present", wrapper)
         self.assertIn("TASK3_USB_VENDOR=1a86", wrapper)
         self.assertIn("task3_ch340_present", wrapper)
-        self.assertIn("exactly one Task-3 CH340 USB UART", wrapper)
+        self.assertIn("physical pressure/telemetry UART", wrapper)
         self.assertIn("/sys/bus/usb/devices", wrapper)
 
         generator = pathlib.Path(

@@ -509,10 +509,10 @@ class Task1SafetyConfigTest(unittest.TestCase):
             ROOT / "scripts" / "start_task1_with_telemetry.sh"
         ).read_text()
         self.assertIn(
-            "roslaunch nuc_mavlink_sender nuc_mavlink_sender.launch",
+            "roslaunch --wait nuc_mavlink_sender nuc_mavlink_sender.launch",
             startup)
         self.assertLess(
-            startup.index("roslaunch nuc_mavlink_sender"),
+            startup.index("roslaunch --wait nuc_mavlink_sender"),
             startup.index('start_task1_real.sh" &'))
         self.assertIn("respawn_sender:=true", startup)
 

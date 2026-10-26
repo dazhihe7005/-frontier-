@@ -18,6 +18,8 @@
   <arg name="height_clamp_tolerance" default="0.25"/>
   <arg name="mission_enable_topic"
        default="/mine_uav/mission/goaf_enable"/>
+  <arg name="obstacle_cloud_topic"
+       default="/mine_uav/task1/cloud_registered"/>
 
   <node pkg="mine_uav_control" type="super_px4_command_bridge"
         name="super_px4_command_bridge" output="screen" required="true">
@@ -35,6 +37,7 @@
     <param name="max_height" value="$(arg max_height)"/>
     <param name="height_clamp_tolerance" value="$(arg height_clamp_tolerance)"/>
     <param name="mission_enable_topic" value="$(arg mission_enable_topic)"/>
+    <param name="obstacle_cloud_topic" value="$(arg obstacle_cloud_topic)"/>
   </node>
 
   <!-- This node only repeats a fresh validated target. The command bridge may

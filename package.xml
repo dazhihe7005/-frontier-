@@ -34,6 +34,7 @@
   <exec_depend>mine_uav_task3</exec_depend>
   <exec_depend>nuc_mavlink_sender</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
   <exec_depend>rviz</exec_depend>
 
   <test_depend>gtest</test_depend>

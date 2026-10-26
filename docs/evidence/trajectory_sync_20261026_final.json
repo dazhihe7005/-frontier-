@@ -1,0 +1,16 @@
+{
+  "authorization_false_s": 24.02,
+  "authorization_resumed_s": 24.638,
+  "failures": [],
+  "faults_after_injection": [],
+  "injection_cleared_s": 24.343,
+  "injection_start_s": 23.98,
+  "monitoring_status_seen": true,
+  "paused_command_samples": 62,
+  "paused_reference_spread_m": 0.0,
+  "premature_mode_exits": [],
+  "resume_reference_step_m": 0.0026915590498512876,
+  "trajectory_id_after_resume": 18,
+  "trajectory_id_before_pause": 18,
+  "verdict": "PASS"
+}
