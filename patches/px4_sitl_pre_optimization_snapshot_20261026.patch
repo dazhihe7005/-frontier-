@@ -1,0 +1,38 @@
+From 64f22b6537192e7682d960688d6d6f3449d346de Mon Sep 17 00:00:00 2001
+From: dazhihe7005 <dazhihe7005@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 22:07:48 +0800
+Subject: [PATCH] Snapshot PX4 SITL airframe before trajectory sync
+ optimization
+
+---
+ .../init.d-posix/airframes/1013_gazebo-classic_iris_vision | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/ROMFS/px4fmu_common/init.d-posix/airframes/1013_gazebo-classic_iris_vision b/ROMFS/px4fmu_common/init.d-posix/airframes/1013_gazebo-classic_iris_vision
+index df11976012a33de9e89f39ac7e5e15acef18d424..7a8b10726841327f1fe462f983a4a4832c059e1b 100644
+--- a/ROMFS/px4fmu_common/init.d-posix/airframes/1013_gazebo-classic_iris_vision
++++ b/ROMFS/px4fmu_common/init.d-posix/airframes/1013_gazebo-classic_iris_vision
+@@ -5,11 +5,11 @@
+ # @type Quadrotor Wide
+ #
+ 
+-. ${R}etc/init.d-posix/airframes/10016_gazebo-classic_iris
++. ${R}etc/init.d-posix/airframes/10015_gazebo-classic_iris
+ 
+ # EKF2: Vision position and heading, no GPS
+ param set-default EKF2_EV_DELAY 5
+-param set-default EKF2_EV_CTRL 15
++param set-default EKF2_EV_CTRL 3
+ param set-default EKF2_HGT_REF 3
+ param set-default EKF2_GPS_CTRL 0
+ 
+@@ -17,5 +17,4 @@ param set-default EKF2_GPS_CTRL 0
+ param set-default LPE_FUSION 132
+ 
+ # AEQ: External heading set to use vision input
+-param set-default ATT_EXT_HDG_M 1
+-
++param set-default ATT_EXT_HDG_M 0
+-- 
+2.25.1
+

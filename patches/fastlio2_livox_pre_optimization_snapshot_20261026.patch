@@ -1,0 +1,547 @@
+From 0ffbe871af2c120afcfb8cd85098c626313f6373 Mon Sep 17 00:00:00 2001
+From: dazhihe7005 <dazhihe7005@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 22:07:25 +0800
+Subject: [PATCH] Snapshot Fast-LIO2 and Livox adaptations before trajectory
+ sync optimization
+
+---
+ README.md                                     |  5 ++-
+ run_fast_lio.sh                               |  5 +--
+ src/FAST_LIO_SLAM/FAST-LIO/config/mid360.yaml |  8 +++-
+ .../FAST-LIO/launch/mapping_mid360.launch     |  7 +++-
+ .../FAST-LIO/launch/view_loop_result.launch   | 11 ++++++
+ .../FAST-LIO/launch/view_raw_pcd.launch       | 13 +++++++
+ .../FAST-LIO/launch/view_saved_pcd.launch     | 22 +++++++++++
+ .../FAST-LIO/src/IMU_Processing.hpp           | 31 +++++++++++++--
+ .../FAST-LIO/src/laserMapping.cpp             | 29 +++++++++++---
+ src/FAST_LIO_SLAM/FAST-LIO/src/preprocess.cpp |  8 ++--
+ .../config/MID360_config.json                 | 11 +++---
+ .../config/MID360s_config.json                | 39 +++++++++++++++++++
+ .../launch/msg_MID360s.launch                 | 35 +++++++++++++++++
+ .../src/call_back/livox_lidar_callback.cpp    |  1 +
+ .../src/comm/pub_handler.cpp                  |  5 ++-
+ .../src/include/livox_ros_driver2.h           |  2 +-
+ src/livox_ros_driver2/src/lds_lidar.cpp       |  6 +--
+ 17 files changed, 207 insertions(+), 31 deletions(-)
+ create mode 100644 src/FAST_LIO_SLAM/FAST-LIO/launch/view_loop_result.launch
+ create mode 100644 src/FAST_LIO_SLAM/FAST-LIO/launch/view_raw_pcd.launch
+ create mode 100644 src/FAST_LIO_SLAM/FAST-LIO/launch/view_saved_pcd.launch
+ create mode 100644 src/livox_ros_driver2/config/MID360s_config.json
+ create mode 100644 src/livox_ros_driver2/launch/msg_MID360s.launch
+
+diff --git a/README.md b/README.md
+index 01997cfdf1553309bf8551bdef00f45b64438894..33de104d3fe60b3983dfa3230e7ccbde25180be3 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,10 @@
+ > Note: This project is based on [FAST_LIO_SLAM](https://github.com/GDUT-Kyle/FAST_LIO_SLAM.git)、[livox2pointcloud](https://github.com/juliangaal/livox2pointcloud.git) and [ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm.git). It has been modified and greatly improved by emNavi Technology.
+ 
+ ### 使用Fast-LIO2 的激光惯性里程计，加入 SC-A-LOAM 实现回环闭合和位姿图优化，最后使用 ego-planner 作为规划器
+-![result](./result.png)
++![result](./docs/assets/result.png)
++
++项目数据、实验结果和进度文档的目录约定见
++[docs/DATA_LAYOUT.md](./docs/DATA_LAYOUT.md)。
+ 
+ ## 实验配置
+ - 环境：ROS1 Noetic
+diff --git a/run_fast_lio.sh b/run_fast_lio.sh
+index d5d08112583dce4f8fe10cab7a3fff04c46a9bc9..b89dd886fa6fa27c3330381de35de4e02ac078c7 100644
+--- a/run_fast_lio.sh
++++ b/run_fast_lio.sh
+@@ -8,11 +8,10 @@ echo "[START] Fast-LIO2"
+ PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ 
+ 
+-gnome-terminal -- bash -c "source ${PROJECT_DIR}/devel/setup.bash;roslaunch livox_ros_driver2 msg_MID360.launch"  && sleep 1;
++gnome-terminal -- bash -c "source ${PROJECT_DIR}/devel/setup.bash;roslaunch livox_ros_driver2 msg_MID360s.launch"  && sleep 1;
+ 
+-gnome-terminal -- bash -c "source ${PROJECT_DIR}/devel/setup.bash;roslaunch fast_lio mapping_mid360.launch"  && sleep 1;
++gnome-terminal -- bash -c "source ${PROJECT_DIR}/devel/setup.bash;roslaunch fast_lio mapping_mid360.launch rviz:=true"  && sleep 1;
+ 
+ gnome-terminal -- bash -c "source ${PROJECT_DIR}/devel/setup.bash;roslaunch livox2pointcloud livox2pointcloud.launch"  && sleep 1;
+ 
+ gnome-terminal -- bash -c "source ${PROJECT_DIR}/devel/setup.bash;roslaunch foxglove_bridge foxglove_bridge.launch"  && sleep 1;
+-
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/config/mid360.yaml b/src/FAST_LIO_SLAM/FAST-LIO/config/mid360.yaml
+index 672c0512150522e5bc9676aa1fc73603914b29d6..de2d63175aebdc8f594e2abaca47d0261769d81a 100644
+--- a/src/FAST_LIO_SLAM/FAST-LIO/config/mid360.yaml
++++ b/src/FAST_LIO_SLAM/FAST-LIO/config/mid360.yaml
+@@ -8,9 +8,13 @@ common:
+ preprocess:
+     lidar_type: 1                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 
+     scan_line: 4
+-    blind: 0.5
++    blind: 0.64                   # squared range threshold; 0.64 gives a 0.8 m blind radius
+ 
+ mapping:
++    # Small fixed correction [roll, pitch, yaw] in degrees, applied after
++    # automatic gravity alignment to compensate this IMU's static bias.
++    # Calibrated from the 2026-08-26 level-floor recording.
++    initial_attitude_deg: [-0.1417, -0.4862, 0.0]
+     acc_cov: 0.1
+     gyr_cov: 0.1
+     b_acc_cov: 0.0001
+@@ -32,4 +36,4 @@ publish:
+ pcd_save:
+     pcd_save_en: true
+     interval: -1                 # how many LiDAR frames saved in each pcd file; 
+-                                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+\ No newline at end of file
++                                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/launch/mapping_mid360.launch b/src/FAST_LIO_SLAM/FAST-LIO/launch/mapping_mid360.launch
+index 7aba5b810d3d106b271caebb8f15355269d6c75f..906424475442355710e54c439621d1e6da5c5b0f 100644
+--- a/src/FAST_LIO_SLAM/FAST-LIO/launch/mapping_mid360.launch
++++ b/src/FAST_LIO_SLAM/FAST-LIO/launch/mapping_mid360.launch
+@@ -2,8 +2,10 @@
+ <!-- Launch file for Livox MID360 LiDAR -->
+ 
+ 	<arg name="rviz" default="false" />
++	<arg name="pcd_save" default="true" />
++	<arg name="config_file" default="$(find fast_lio)/config/mid360.yaml" />
+ 
+-	<rosparam command="load" file="$(find fast_lio)/config/mid360.yaml" />
++	<rosparam command="load" file="$(arg config_file)" />
+ 
+ 	<param name="feature_extract_enable" type="bool" value="0"/>
+ 	<param name="point_filter_num" type="int" value="3"/>
+@@ -12,10 +14,11 @@
+ 	<param name="filter_size_map" type="double" value="0.5" />
+ 	<param name="cube_side_length" type="double" value="1000" />
+ 	<param name="runtime_pos_log_enable" type="bool" value="0" />
++	<param name="pcd_save_enable" type="bool" value="$(arg pcd_save)" />
+     <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" /> 
+ 
+ 	<group if="$(arg rviz)">
+ 	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz" />
+ 	</group>
+ 
+-</launch>
+\ No newline at end of file
++</launch>
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/launch/view_loop_result.launch b/src/FAST_LIO_SLAM/FAST-LIO/launch/view_loop_result.launch
+new file mode 100644
+index 0000000000000000000000000000000000000000..062ea6d642c9381a97a36c040dd4310b86544946
+--- /dev/null
++++ b/src/FAST_LIO_SLAM/FAST-LIO/launch/view_loop_result.launch
+@@ -0,0 +1,11 @@
++<launch>
++  <arg name="bag_file"
++       default="$(find fast_lio)/../../../bags/archive/2026-08-07/mid360s_loop_test_20260807_3.bag"/>
++  <arg name="rate" default="10"/>
++
++  <node pkg="rviz" type="rviz" name="rviz" required="true"
++        args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz"/>
++
++  <node pkg="rosbag" type="play" name="loop_result_replay" output="screen"
++        args="-r $(arg rate) $(arg bag_file) --topics /cloud_registered /Odometry /path"/>
++</launch>
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/launch/view_raw_pcd.launch b/src/FAST_LIO_SLAM/FAST-LIO/launch/view_raw_pcd.launch
+new file mode 100644
+index 0000000000000000000000000000000000000000..dc195c9b3205836104d445d3cc52a632cbcd2e5d
+--- /dev/null
++++ b/src/FAST_LIO_SLAM/FAST-LIO/launch/view_raw_pcd.launch
+@@ -0,0 +1,13 @@
++<launch>
++  <arg name="pcd_file" default="$(find fast_lio)/PCD/scans.pcd"/>
++
++  <node pkg="pcl_ros" type="pcd_to_pointcloud" name="raw_pcd_to_pointcloud"
++        args="$(arg pcd_file) 0" output="screen">
++    <param name="frame_id" value="world"/>
++    <param name="latch" value="true"/>
++    <remap from="cloud_pcd" to="cloud_registered"/>
++  </node>
++
++  <node pkg="rviz" type="rviz" name="rviz"
++        args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz"/>
++</launch>
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/launch/view_saved_pcd.launch b/src/FAST_LIO_SLAM/FAST-LIO/launch/view_saved_pcd.launch
+new file mode 100644
+index 0000000000000000000000000000000000000000..66dd07f1a9f9c59d1bc30beda7a355645ff9133c
+--- /dev/null
++++ b/src/FAST_LIO_SLAM/FAST-LIO/launch/view_saved_pcd.launch
+@@ -0,0 +1,22 @@
++<launch>
++  <arg name="pcd_file" default="$(find fast_lio)/PCD/scans.pcd"/>
++  <arg name="leaf_size" default="0.02"/>
++
++  <node pkg="pcl_ros" type="pcd_to_pointcloud" name="pcd_to_pointcloud"
++        args="$(arg pcd_file) 0" output="screen">
++    <param name="frame_id" value="world"/>
++    <param name="latch" value="true"/>
++    <remap from="cloud_pcd" to="saved_map_raw"/>
++  </node>
++
++  <node pkg="nodelet" type="nodelet" name="saved_map_voxel_grid"
++        args="standalone pcl/VoxelGrid" output="screen">
++    <remap from="~input" to="saved_map_raw"/>
++    <remap from="~output" to="cloud_registered"/>
++    <param name="filter_field_name" value=""/>
++    <param name="leaf_size" value="$(arg leaf_size)"/>
++  </node>
++
++  <node pkg="rviz" type="rviz" name="rviz"
++        args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz"/>
++</launch>
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/src/IMU_Processing.hpp b/src/FAST_LIO_SLAM/FAST-LIO/src/IMU_Processing.hpp
+index 76958394f7674be7a64073141de291b328c26f47..213fce56c5a6429b2ba4c9f603591c9a97c783d5 100644
+--- a/src/FAST_LIO_SLAM/FAST-LIO/src/IMU_Processing.hpp
++++ b/src/FAST_LIO_SLAM/FAST-LIO/src/IMU_Processing.hpp
+@@ -48,6 +48,7 @@ class ImuProcess
+   void set_acc_cov(const V3D &scaler);
+   void set_gyr_bias_cov(const V3D &b_g);
+   void set_acc_bias_cov(const V3D &b_a);
++  void set_initial_attitude(const V3D &rpy_deg);
+   Eigen::Matrix<double, 12, 12> Q;
+   void Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI::Ptr pcl_un_);
+ 
+@@ -80,6 +81,7 @@ class ImuProcess
+   int    init_iter_num = 1;
+   bool   b_first_frame_ = true;
+   bool   imu_need_init_ = true;
++  M3D    initial_attitude_ = Eye3d;
+ };
+ 
+ ImuProcess::ImuProcess()
+@@ -154,6 +156,15 @@ void ImuProcess::set_acc_bias_cov(const V3D &b_a)
+   cov_bias_acc = b_a;
+ }
+ 
++void ImuProcess::set_initial_attitude(const V3D &rpy_deg)
++{
++  const V3D rpy = rpy_deg * M_PI / 180.0;
++  initial_attitude_ =
++      (Eigen::AngleAxisd(rpy.z(), V3D::UnitZ()) *
++       Eigen::AngleAxisd(rpy.y(), V3D::UnitY()) *
++       Eigen::AngleAxisd(rpy.x(), V3D::UnitX())).toRotationMatrix();
++}
++
+ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N)
+ {
+   /** 1. initializing the gravity, gyro bias, acc and gyro covariance
+@@ -191,9 +202,23 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom,
+     N ++;
+   }
+   state_ikfom init_state = kf_state.get_x();
+-  init_state.grav = S2(- mean_acc / mean_acc.norm() * G_m_s2);
+-  
+-  //state_inout.rot = Eye3d; // Exp(mean_acc.cross(V3D(0, 0, -1 / scale_gravity)));
++  // At rest the accelerometer measures the direction opposite to gravity.
++  // Rotate that measured direction onto world +Z, so gravity is exactly world
++  // -Z and the initial map is level. The configured attitude is retained as an
++  // optional world-frame correction (normally identity).
++  if (mean_acc.norm() > 1e-3)
++  {
++    const M3D gravity_alignment =
++        Eigen::Quaterniond::FromTwoVectors(mean_acc.normalized(), V3D::UnitZ()).toRotationMatrix();
++    init_state.rot = initial_attitude_ * gravity_alignment;
++    init_state.grav = S2(V3D(0.0, 0.0, -G_m_s2));
++  }
++  else
++  {
++    ROS_WARN_THROTTLE(1.0, "IMU initialization: acceleration norm is too small for gravity alignment");
++    init_state.rot = initial_attitude_;
++    init_state.grav = S2(V3D(0.0, 0.0, -G_m_s2));
++  }
+   init_state.bg  = mean_gyr;
+   init_state.offset_T_L_I = Lidar_T_wrt_IMU;
+   init_state.offset_R_L_I = Lidar_R_wrt_IMU;
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/src/laserMapping.cpp b/src/FAST_LIO_SLAM/FAST-LIO/src/laserMapping.cpp
+index bee4eb5877423f42a45df519a109651b79616f5d..612cb200212f23926026c25ba36bd6f9d4b5aea1 100644
+--- a/src/FAST_LIO_SLAM/FAST-LIO/src/laserMapping.cpp
++++ b/src/FAST_LIO_SLAM/FAST-LIO/src/laserMapping.cpp
+@@ -274,12 +274,15 @@ void lasermap_fov_segment()
+     kdtree_delete_time = omp_get_wtime() - delete_begin;
+ }
+ 
++double time_offset_lidar_to_imu = 0.0;
++
+ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
+ {
+     mtx_buffer.lock();
+     scan_count ++;
+     double preprocess_start_time = omp_get_wtime();
+-    if (msg->header.stamp.toSec() < last_timestamp_lidar)
++    const double lidar_timestamp = msg->header.stamp.toSec() + time_offset_lidar_to_imu;
++    if (lidar_timestamp < last_timestamp_lidar)
+     {
+         ROS_ERROR("lidar loop back, clear buffer");
+         lidar_buffer.clear();
+@@ -288,13 +291,15 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
+     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
+     p_pre->process(msg, ptr);
+     lidar_buffer.push_back(ptr);
+-    time_buffer.push_back(msg->header.stamp.toSec());
+-    last_timestamp_lidar = msg->header.stamp.toSec();
++    time_buffer.push_back(lidar_timestamp);
++    last_timestamp_lidar = lidar_timestamp;
+     s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
+     mtx_buffer.unlock();
+     sig_buffer.notify_all();
+ }
+ 
++// Fixed LiDAR timestamp correction from offline calibration. LI-Init reports
++// this as the amount to add to the LiDAR timestamp (typically negative).
+ double timediff_lidar_wrt_imu = 0.0;
+ bool   timediff_set_flg = false;
+ void livox_pcl_cbk(const livox_ros_driver2::CustomMsg::ConstPtr &msg)
+@@ -302,12 +307,13 @@ void livox_pcl_cbk(const livox_ros_driver2::CustomMsg::ConstPtr &msg)
+     mtx_buffer.lock();
+     double preprocess_start_time = omp_get_wtime();
+     scan_count ++;
+-    if (msg->header.stamp.toSec() < last_timestamp_lidar)
++    const double lidar_timestamp = msg->header.stamp.toSec() + time_offset_lidar_to_imu;
++    if (lidar_timestamp < last_timestamp_lidar)
+     {
+         ROS_ERROR("lidar loop back, clear buffer");
+         lidar_buffer.clear();
+     }
+-    last_timestamp_lidar = msg->header.stamp.toSec();
++    last_timestamp_lidar = lidar_timestamp;
+ 
+     if (!time_sync_en && abs(last_timestamp_imu - lidar_end_time) > 10.0)
+     {
+@@ -728,6 +734,8 @@ int main(int argc, char** argv)
+     nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
+     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
+     nh.param<bool>("common/time_sync_en", time_sync_en, false);
++    nh.param<double>("common/time_offset_lidar_to_imu", time_offset_lidar_to_imu, 0.0);
++    timediff_lidar_wrt_imu = time_offset_lidar_to_imu;
+     nh.param<double>("filter_size_corner",filter_size_corner_min,0.5);
+     nh.param<double>("filter_size_surf",filter_size_surf_min,0.5);
+     nh.param<double>("filter_size_map",filter_size_map_min,0.5);
+@@ -738,6 +746,9 @@ int main(int argc, char** argv)
+     nh.param<double>("mapping/acc_cov",acc_cov,0.1);
+     nh.param<double>("mapping/b_gyr_cov",b_gyr_cov,0.0001);
+     nh.param<double>("mapping/b_acc_cov",b_acc_cov,0.0001);
++    vector<double> initial_attitude_deg;
++    nh.param<vector<double>>("mapping/initial_attitude_deg", initial_attitude_deg,
++                             vector<double>({0.0, 0.0, 0.0}));
+     nh.param<double>("preprocess/blind", p_pre->blind, 0.01);
+     nh.param<int>("preprocess/lidar_type", p_pre->lidar_type, AVIA);
+     nh.param<int>("preprocess/scan_line", p_pre->N_SCANS, 16);
+@@ -776,6 +787,14 @@ int main(int argc, char** argv)
+     p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
+     p_imu->set_gyr_bias_cov(V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov));
+     p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
++    if (initial_attitude_deg.size() != 3)
++    {
++        ROS_ERROR("mapping/initial_attitude_deg must contain [roll, pitch, yaw]");
++        return -1;
++    }
++    p_imu->set_initial_attitude(V3D(initial_attitude_deg[0],
++                                    initial_attitude_deg[1],
++                                    initial_attitude_deg[2]));
+ 
+     double epsi[23] = {0.001};
+     fill(epsi, epsi+23, 0.001);
+diff --git a/src/FAST_LIO_SLAM/FAST-LIO/src/preprocess.cpp b/src/FAST_LIO_SLAM/FAST-LIO/src/preprocess.cpp
+index 01275ba608ab7035a71c80760067100e4295e58a..ee558e33d190f90bfa882d1415b037cfa2cf874d 100644
+--- a/src/FAST_LIO_SLAM/FAST-LIO/src/preprocess.cpp
++++ b/src/FAST_LIO_SLAM/FAST-LIO/src/preprocess.cpp
+@@ -149,10 +149,12 @@ void Preprocess::avia_handler(const livox_ros_driver2::CustomMsg::ConstPtr &msg)
+           pl_full[i].intensity = msg->points[i].reflectivity;
+           pl_full[i].curvature = msg->points[i].offset_time / float(1000000); //use curvature as time of each laser points
+ 
+-          if((abs(pl_full[i].x - pl_full[i-1].x) > 1e-7) 
++          if(((abs(pl_full[i].x - pl_full[i-1].x) > 1e-7)
+               || (abs(pl_full[i].y - pl_full[i-1].y) > 1e-7)
+-              || (abs(pl_full[i].z - pl_full[i-1].z) > 1e-7)
+-              && (pl_full[i].x * pl_full[i].x + pl_full[i].y * pl_full[i].y > blind))
++              || (abs(pl_full[i].z - pl_full[i-1].z) > 1e-7))
++              && (pl_full[i].x * pl_full[i].x
++                  + pl_full[i].y * pl_full[i].y
++                  + pl_full[i].z * pl_full[i].z > blind))
+           {
+             pl_surf.push_back(pl_full[i]);
+           }
+diff --git a/src/livox_ros_driver2/config/MID360_config.json b/src/livox_ros_driver2/config/MID360_config.json
+index 93a01decd51d6d09fc191534099ae0240726a17d..444ec1e0dae4635b1bfbf21d78471baf38498e8a 100644
+--- a/src/livox_ros_driver2/config/MID360_config.json
++++ b/src/livox_ros_driver2/config/MID360_config.json
+@@ -11,13 +11,13 @@
+       "log_data_port": 56500
+     },
+     "host_net_info" : {
+-      "cmd_data_ip" : "192.168.2.10",
++      "cmd_data_ip" : "192.168.1.5",
+       "cmd_data_port": 56101,
+-      "push_msg_ip": "192.168.2.10",
++      "push_msg_ip": "192.168.1.5",
+       "push_msg_port": 56201,
+-      "point_data_ip": "192.168.2.10",
++      "point_data_ip": "192.168.1.5",
+       "point_data_port": 56301,
+-      "imu_data_ip" : "192.168.2.10",
++      "imu_data_ip" : "192.168.1.5",
+       "imu_data_port": 56401,
+       "log_data_ip" : "",
+       "log_data_port": 56501
+@@ -25,7 +25,7 @@
+   },
+   "lidar_configs" : [
+     {
+-      "ip" : "192.168.2.139",
++      "ip" : "192.168.1.123",
+       "pcl_data_type" : 1,
+       "pattern_mode" : 0,
+       "extrinsic_parameter" : {
+@@ -39,4 +39,3 @@
+     }
+   ]
+ }
+-
+diff --git a/src/livox_ros_driver2/config/MID360s_config.json b/src/livox_ros_driver2/config/MID360s_config.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..168b6247d94bc20ce080c0ecbcc9e107323d6ce5
+--- /dev/null
++++ b/src/livox_ros_driver2/config/MID360s_config.json
+@@ -0,0 +1,39 @@
++{
++  "lidar_summary_info" : {
++    "lidar_type": 8
++  },
++  "Mid360s": {
++    "lidar_net_info" : {
++      "cmd_data_port"  : 56100,
++      "push_msg_port"  : 56200,
++      "point_data_port": 56300,
++      "imu_data_port"  : 56400,
++      "log_data_port"  : 56500
++    },
++    "host_net_info" : [
++      {
++        "host_ip"        : "192.168.1.5",
++        "cmd_data_port"  : 56101,
++        "push_msg_port"  : 56201,
++        "point_data_port": 56301,
++        "imu_data_port"  : 56401,
++        "log_data_port"  : 56501
++      }
++    ]
++  },
++  "lidar_configs" : [
++    {
++      "ip" : "192.168.1.123",
++      "pcl_data_type" : 1,
++      "pattern_mode" : 0,
++      "extrinsic_parameter" : {
++        "roll": 0.0,
++        "pitch": 0.0,
++        "yaw": 0.0,
++        "x": 0,
++        "y": 0,
++        "z": 0
++      }
++    }
++  ]
++}
+diff --git a/src/livox_ros_driver2/launch/msg_MID360s.launch b/src/livox_ros_driver2/launch/msg_MID360s.launch
+new file mode 100644
+index 0000000000000000000000000000000000000000..ebeae5ceeaff796670770f6a3ca2816e5a78c11c
+--- /dev/null
++++ b/src/livox_ros_driver2/launch/msg_MID360s.launch
+@@ -0,0 +1,35 @@
++<launch>
++  <arg name="lvx_file_path" default="livox_test.lvx"/>
++  <arg name="bd_list" default="100000000000000"/>
++  <arg name="xfer_format" default="1"/>
++  <arg name="multi_topic" default="0"/>
++  <arg name="data_src" default="0"/>
++  <arg name="publish_freq" default="10.0"/>
++  <arg name="output_type" default="0"/>
++  <arg name="rosbag_enable" default="false"/>
++  <arg name="cmdline_arg" default="$(arg bd_list)"/>
++  <arg name="msg_frame_id" default="livox_frame"/>
++  <arg name="lidar_bag" default="true"/>
++  <arg name="imu_bag" default="true"/>
++
++  <param name="xfer_format" value="$(arg xfer_format)"/>
++  <param name="multi_topic" value="$(arg multi_topic)"/>
++  <param name="data_src" value="$(arg data_src)"/>
++  <param name="publish_freq" type="double" value="$(arg publish_freq)"/>
++  <param name="output_data_type" value="$(arg output_type)"/>
++  <param name="cmdline_str" type="string" value="$(arg bd_list)"/>
++  <param name="cmdline_file_path" type="string" value="$(arg lvx_file_path)"/>
++  <param name="user_config_path" type="string"
++         value="$(find livox_ros_driver2)/config/MID360s_config.json"/>
++  <param name="frame_id" type="string" value="$(arg msg_frame_id)"/>
++  <param name="enable_lidar_bag" type="bool" value="$(arg lidar_bag)"/>
++  <param name="enable_imu_bag" type="bool" value="$(arg imu_bag)"/>
++
++  <node name="livox_lidar_publisher2" pkg="livox_ros_driver2"
++        type="livox_ros_driver2_node" required="true"
++        output="screen" args="$(arg cmdline_arg)"/>
++
++  <group if="$(arg rosbag_enable)">
++    <node pkg="rosbag" type="record" name="record" output="screen" args="-a"/>
++  </group>
++</launch>
+diff --git a/src/livox_ros_driver2/src/call_back/livox_lidar_callback.cpp b/src/livox_ros_driver2/src/call_back/livox_lidar_callback.cpp
+index 60bb237fe643c098bc1d77fed4c7c07b3de11f43..8b68d16ce898780bf5ca5d1df6aa1eb17b6da967 100644
+--- a/src/livox_ros_driver2/src/call_back/livox_lidar_callback.cpp
++++ b/src/livox_ros_driver2/src/call_back/livox_lidar_callback.cpp
+@@ -24,6 +24,7 @@
+ 
+ #include "livox_lidar_callback.h"
+ 
++#include "livox_lidar_api.h"
+ #include <string>
+ #include <thread>
+ #include <iostream>
+diff --git a/src/livox_ros_driver2/src/comm/pub_handler.cpp b/src/livox_ros_driver2/src/comm/pub_handler.cpp
+index 07d4d4ffa33fe689253615339dd9a9867114e6d6..40c3e42d86d1ec1aec2078553591eb1179a232e8 100644
+--- a/src/livox_ros_driver2/src/comm/pub_handler.cpp
++++ b/src/livox_ros_driver2/src/comm/pub_handler.cpp
+@@ -23,7 +23,7 @@
+ //
+ 
+ #include "pub_handler.h"
+-
++#include "livox_lidar_api.h"
+ #include <cstdlib>
+ #include <chrono>
+ #include <iostream>
+@@ -132,7 +132,8 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
+   packet.extrinsic_enable = false; 
+   if (dev_type == LivoxLidarDeviceType::kLivoxLidarTypeIndustrialHAP) {
+     packet.line_num = kLineNumberHAP;
+-  } else if (dev_type == LivoxLidarDeviceType::kLivoxLidarTypeMid360) {
++  } else if (dev_type == LivoxLidarDeviceType::kLivoxLidarTypeMid360 ||
++             dev_type == LivoxLidarDeviceType::kLivoxLidarTypeMid360s) {
+     packet.line_num = kLineNumberMid360;
+   } else {
+     packet.line_num = kLineNumberDefault;
+diff --git a/src/livox_ros_driver2/src/include/livox_ros_driver2.h b/src/livox_ros_driver2/src/include/livox_ros_driver2.h
+index 9160a986e2e3f7cd6d5a261e599600c28bb34613..0ba4789ca66cad2eb77afb2046e85004bee76bdf 100644
+--- a/src/livox_ros_driver2/src/include/livox_ros_driver2.h
++++ b/src/livox_ros_driver2/src/include/livox_ros_driver2.h
+@@ -27,7 +27,7 @@
+ 
+ #define LIVOX_ROS_DRIVER2_VER_MAJOR 1
+ #define LIVOX_ROS_DRIVER2_VER_MINOR 2
+-#define LIVOX_ROS_DRIVER2_VER_PATCH 4
++#define LIVOX_ROS_DRIVER2_VER_PATCH 6
+ 
+ #define GET_STRING(n) GET_STRING_DIRECT(n)
+ #define GET_STRING_DIRECT(n) #n
+diff --git a/src/livox_ros_driver2/src/lds_lidar.cpp b/src/livox_ros_driver2/src/lds_lidar.cpp
+index 6c739b0884db2b87c83dfdf4e3648f2a41fa8f2b..54629bfa71d6e69dcf4bb31626d990cbfa957699 100644
+--- a/src/livox_ros_driver2/src/lds_lidar.cpp
++++ b/src/livox_ros_driver2/src/lds_lidar.cpp
+@@ -39,9 +39,9 @@
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ #include <unistd.h>
+-#endif // WIN32
+-
+-#include "comm/comm.h"
++#endif // WIN32
++#include "livox_lidar_api.h"
++#include "comm/comm.h"
+ #include "comm/pub_handler.h"
+ 
+ #include "parse_cfg_file/parse_cfg_file.h"
+-- 
+2.25.1
+

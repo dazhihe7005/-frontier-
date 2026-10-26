@@ -11,7 +11,8 @@
 - GitHub：`git@github.com:dazhihe7005/-frontier-.git`
 - 分支：`main`
 - 优化前基线父提交：`dc70ad272d9744a4624455cae98bc8e0937e2fa2`
-- 冻结标签：`pre-trajectory-sync-optimization-20261026`
+- 核心冻结标签：`pre-trajectory-sync-optimization-20261026`，提交 `7c16c3f`
+- 完整依赖冻结标签：`pre-trajectory-sync-optimization-20261026-complete`
 - 标签指向的提交包含当前工程源码、配置、launch、测试、文档和本文件所述 SUPER 补丁。
 
 ### SUPER/ROG-Map 核心
@@ -25,6 +26,29 @@
 
 SUPER 的远程仍是官方上游，未尝试向 `hku-mars/SUPER` 推送项目定制修改。完整定制内容通过
 上述补丁进入用户自己的 GitHub 仓库。
+
+### 定位与传感器依赖
+
+生产启动入口还会加载 Omni-LIVO 和 `livox_ros_driver2`。完整依赖标签额外包含：
+
+- Omni-LIVO 完整 Git bundle：`patches/omnilivo_pre_optimization_snapshot_20261026.bundle`
+  - 冻结提交：`5f4c3bfdceb7679003c49fbaa1bab9ac8e4e4b90`
+  - 分支：`mine-uav/pre-trajectory-sync-optimization-20261026`
+  - SHA-256：`3e2ce2e861ca7698c6f286a3ce427702e4b748552dae26492ce27bd96c3fa831`
+  - bundle 包含完整历史，不依赖外部远程仓库；冻结提交包含 71 个当前源码、配置、测试和工具文件。
+- Fast-LIO2/Livox 补丁：`patches/fastlio2_livox_pre_optimization_snapshot_20261026.patch`
+  - 上游：`https://github.com/emNavi/Fast-LIO2.git`
+  - 基线：`5238841a87fa6d22b0a80ded6a9de7b1697b204d`
+  - 本机冻结提交：`0ffbe871af2c120afcfb8cd85098c626313f6373`
+  - SHA-256：`1366661f5239b4527c0541ca60b89a6740261cf0804b0c6bd41702b11ae6dd47`
+- PX4 SITL 机型补丁：`patches/px4_sitl_pre_optimization_snapshot_20261026.patch`
+  - 上游：`https://github.com/PX4/PX4-Autopilot.git`
+  - 基线：`1555f2bd2229544c43966ab5f94879c41d8e1e01`（PX4 v1.14.4）
+  - 本机冻结提交：`64f22b6537192e7682d960688d6d6f3449d346de`
+  - SHA-256：`b21f73dcfb011d3040456fd99c4b448d7686f761b4268a0164c20dcefc0d6695`
+
+PX4 真机参数快照已在本仓库 `params/real_tuning/` 中。PX4 源码补丁只影响 Gazebo Classic
+的 Iris Vision 机型，不改变真机飞控固件。
 
 ## 真机实际源码解析
 
@@ -44,13 +68,29 @@ rog_map          = /home/nuc/super_ws/src/SUPER/rog_map
 ```bash
 git clone git@github.com:dazhihe7005/-frontier-.git frontier-upload
 cd frontier-upload
-git checkout pre-trajectory-sync-optimization-20261026
+git checkout pre-trajectory-sync-optimization-20261026-complete
 
 cd ..
 git clone https://github.com/hku-mars/SUPER.git SUPER
 cd SUPER
 git checkout 2ad3419c127a617c6d7df6925e81a14175a9c096
 git am ../frontier-upload/patches/super_pre_optimization_snapshot_20261026.patch
+
+cd ..
+git clone ./frontier-upload/patches/omnilivo_pre_optimization_snapshot_20261026.bundle \
+  omni_livo_fisheye_ws
+
+git clone https://github.com/emNavi/Fast-LIO2.git Fast-LIO2
+cd Fast-LIO2
+git checkout 5238841a87fa6d22b0a80ded6a9de7b1697b204d
+# 上游部分文件使用 CRLF；--keep-cr 是精确还原所必需的。
+git am --keep-cr ../frontier-upload/patches/fastlio2_livox_pre_optimization_snapshot_20261026.patch
+
+cd ..
+git clone https://github.com/PX4/PX4-Autopilot.git PX4-Autopilot
+cd PX4-Autopilot
+git checkout 1555f2bd2229544c43966ab5f94879c41d8e1e01
+git am ../frontier-upload/patches/px4_sitl_pre_optimization_snapshot_20261026.patch
 ```
 
 应用后 SUPER 树应对应本机冻结提交 `49136f1` 的文件内容。可再次计算补丁 SHA-256，确认下载
@@ -96,6 +136,8 @@ catkin_make run_tests_rog_map run_tests_super_planner \
 
 补丁还在一个从官方基线创建的临时干净仓库中通过 `git am` 验证。应用前后树对象均为
 `c1c18b685429e099dde4758f026c54f2c90c7f5e`，证明补丁包含本机冻结提交的完整文件内容。
+Fast-LIO2/Livox 和 PX4 补丁也分别在临时干净仓库中验证，应用后树对象与本机冻结提交完全
+一致；Omni-LIVO bundle 通过 `git bundle verify`，并确认记录完整历史。
 
 ## 有意不上传的内容
 
