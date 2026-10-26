@@ -416,6 +416,9 @@ class SuperExplorationDecider {
   double active_goal_exploration_heading_yaw_{0.0};
   bool tunnel_route_locked_{false};
   double tunnel_route_heading_yaw_{0.0};
+  int pending_connected_turn_side_{0};
+  int pending_connected_turn_streak_{0};
+  ros::Time pending_connected_turn_time_;
   bool have_last_exploration_route_heading_{false};
   double last_exploration_route_heading_yaw_{0.0};
   bool exploration_started_{false};
@@ -611,6 +614,7 @@ class SuperExplorationDecider {
   double tunnel_route_lock_min_turn_deg_{35.0};
   double tunnel_connected_turn_max_angle_deg_{120.0};
   double tunnel_straight_preference_angle_deg_{35.0};
+  int tunnel_connected_turn_confirm_frames_{3};
   double cruise_height_above_home_{0.0};
   double directional_vertical_tolerance_{1.5};
   double directional_floor_exclusion_{0.5};

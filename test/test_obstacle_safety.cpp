@@ -112,6 +112,49 @@ TEST(ObstacleSafety, FlightSizedPanelQualifiesCoverageAndKeepsNearestPoint) {
   EXPECT_NEAR(result.nearest_obstacle.x, 1.0, 1e-9);
 }
 
+TEST(ObstacleSafety, DenseNarrowVerticalStructureQualifiesCoverage) {
+  std::vector<ObstaclePoint> points;
+  for (int x = 0; x <= 3; ++x) {
+    for (int z = -20; z <= 20; ++z) {
+      points.push_back({1.5 + 0.1 * x, 0.0, 0.03 * z});
+    }
+  }
+  const auto result = mine_uav_control::evaluateForwardObstacleCoverage(
+      points, {0.0, 0.0, 0.0}, 1.0, 0.0, 2.5, 1.0, 0.7, 0.7,
+      30, 0.5, 0.0, -10.0, 120, 0.2, 0.8);
+  EXPECT_FALSE(result.broad_surface_complete);
+  EXPECT_TRUE(result.narrow_vertical_surface_complete);
+  EXPECT_TRUE(result.complete);
+}
+
+TEST(ObstacleSafety, SparseNarrowVerticalStructureRemainsIncomplete) {
+  std::vector<ObstaclePoint> points;
+  for (int z = -20; z <= 20; ++z) {
+    points.push_back({1.5, 0.0, 0.03 * z});
+  }
+  const auto result = mine_uav_control::evaluateForwardObstacleCoverage(
+      points, {0.0, 0.0, 0.0}, 1.0, 0.0, 2.5, 1.0, 0.7, 0.7,
+      30, 0.5, 0.0, -10.0, 120, 0.2, 0.8);
+  EXPECT_FALSE(result.narrow_vertical_surface_complete);
+  EXPECT_FALSE(result.complete);
+}
+
+TEST(ObstacleSafety, DenseShortStripRemainsIncomplete) {
+  std::vector<ObstaclePoint> points;
+  for (int x = 0; x <= 3; ++x) {
+    for (int z = -5; z <= 5; ++z) {
+      for (int repeat = 0; repeat < 4; ++repeat) {
+        points.push_back({1.5 + 0.1 * x, 0.0, 0.03 * z});
+      }
+    }
+  }
+  const auto result = mine_uav_control::evaluateForwardObstacleCoverage(
+      points, {0.0, 0.0, 0.0}, 1.0, 0.0, 2.5, 1.0, 0.7, 0.7,
+      30, 0.5, 0.0, -10.0, 120, 0.2, 0.8);
+  EXPECT_FALSE(result.narrow_vertical_surface_complete);
+  EXPECT_FALSE(result.complete);
+}
+
 TEST(ObstacleSafety, CeilingOutsideRelativeSafetyBandIsNotCoverage) {
   std::vector<ObstaclePoint> ceiling;
   for (int x = 1; x <= 10; ++x) {

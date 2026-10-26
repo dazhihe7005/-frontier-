@@ -19,5 +19,8 @@ tunnel_route_lock_min_turn_deg: 35.0
 # back toward the already surveyed junction remain ineligible.
 tunnel_straight_preference_angle_deg: 35.0
 tunnel_connected_turn_max_angle_deg: 120.0
+# A newly discovered sharp branch must remain on the same side for three
+# consecutive 2 Hz decisions before replacing the current trajectory.
+tunnel_connected_turn_confirm_frames: 3
 # Dense actual-flight trace for strict reverse replay through bends.
 tunnel_return_breadcrumb_spacing: 1.0

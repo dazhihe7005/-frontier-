@@ -73,6 +73,7 @@ class SuperExplorationDeciderTestPeer {
   static bool batteryAdmissionRequiresOutboundAndReturnReserve(
       SuperExplorationDecider& decider) {
     decider.battery_start_guard_enabled_ = true;
+    decider.battery_percentage_return_enabled_ = true;
     decider.battery_start_minimum_percentage_ = 0.50;
     decider.battery_start_minimum_voltage_ = 22.2;
     decider.have_battery_ = false;
@@ -121,6 +122,19 @@ class SuperExplorationDeciderTestPeer {
     decider.battery_percentage_ = -1.0;
     decider.battery_voltage_ = -1.0;
     return decider.batteryReadyForMissionStart();
+  }
+
+  static bool voltageOnlyBatteryAdmissionIgnoresUnreliablePercentage(
+      SuperExplorationDecider& decider) {
+    decider.battery_start_guard_enabled_ = true;
+    decider.battery_percentage_return_enabled_ = false;
+    decider.battery_start_minimum_voltage_ = 22.2;
+    decider.have_battery_ = false;
+    decider.battery_percentage_ = -1.0;
+    decider.battery_voltage_ = 22.3;
+    if (!decider.batteryReadyForMissionStart()) return false;
+    decider.battery_voltage_ = 22.1;
+    return !decider.batteryReadyForMissionStart();
   }
 
   static bool forwardLookaheadVariantsKeepHandoverSemantics(
@@ -2475,7 +2489,11 @@ class SuperExplorationDeciderTestPeer {
     }
     decider.super_occupied_tree_.setInputCloud(decider.super_occupied_points_);
 
-    if (!decider.publishConnectedTurnContinuation(reachable) ||
+    if (decider.publishConnectedTurnContinuation(reachable) ||
+        decider.pending_connected_turn_streak_ != 1 ||
+        decider.publishConnectedTurnContinuation(reachable) ||
+        decider.pending_connected_turn_streak_ != 2 ||
+        !decider.publishConnectedTurnContinuation(reachable) ||
         decider.current_goal_.pose.position.y <= 2.0 ||
         !decider.active_goal_commits_tunnel_heading_) {
       return false;
@@ -2530,7 +2548,11 @@ class SuperExplorationDeciderTestPeer {
       decider.voxels_[{34, y, 0}] = SuperExplorationDecider::FREE;
     }
 
-    if (!decider.tryForwardHandover(reachable) ||
+    if (decider.tryForwardHandover(reachable) ||
+        decider.active_goal_id_ != 50 ||
+        decider.tryForwardHandover(reachable) ||
+        decider.active_goal_id_ != 50 ||
+        !decider.tryForwardHandover(reachable) ||
         decider.active_goal_id_ == 50 ||
         decider.current_goal_.pose.position.y >= -2.0) {
       return false;
@@ -2869,6 +2891,16 @@ TEST(SuperGoalPublication,
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   disabledBatteryAdmissionIgnoresUnreliablePercentage(
+                      decider));
+}
+
+TEST(SuperGoalPublication,
+     VoltageOnlyBatteryAdmissionIgnoresUnreliablePercentage) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~battery_admission_voltage_only");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  voltageOnlyBatteryAdmissionIgnoresUnreliablePercentage(
                       decider));
 }
 

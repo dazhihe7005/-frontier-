@@ -487,6 +487,9 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("tunnel_straight_preference_angle_deg",
                     tunnel_straight_preference_angle_deg_,
                     tunnel_straight_preference_angle_deg_);
+  private_nh_.param("tunnel_connected_turn_confirm_frames",
+                    tunnel_connected_turn_confirm_frames_,
+                    tunnel_connected_turn_confirm_frames_);
   private_nh_.param("cruise_height_above_home", cruise_height_above_home_,
                     cruise_height_above_home_);
   private_nh_.param("directional_vertical_tolerance",
@@ -756,6 +759,8 @@ bool SuperExplorationDecider::loadParameters() {
       tunnel_straight_preference_angle_deg_ <= 0.0 ||
       tunnel_straight_preference_angle_deg_ >=
           tunnel_connected_turn_max_angle_deg_ ||
+      tunnel_connected_turn_confirm_frames_ < 1 ||
+      tunnel_connected_turn_confirm_frames_ > 10 ||
       !std::isfinite(cruise_height_above_home_) ||
       cruise_height_above_home_ < min_observation_height_above_home_ ||
       cruise_height_above_home_ > max_observation_height_above_home_ ||
@@ -4135,6 +4140,11 @@ bool SuperExplorationDecider::publishConnectedTurnContinuation(
       }
       if (!found_local_goal) continue;
 
+      const geometry_msgs::Point local_goal =
+          keyToPoint(candidate.route[candidate.local_goal_index]);
+      candidate.score -= forward_height_penalty_ *
+          std::abs(local_goal.z - current.z);
+
       std::size_t tangent_start_index = candidate.local_goal_index;
       double tangent_length = 0.0;
       while (tangent_start_index > 0 && tangent_length < tangent_window) {
@@ -4147,8 +4157,6 @@ bool SuperExplorationDecider::publishConnectedTurnContinuation(
       }
       const geometry_msgs::Point tangent_start =
           keyToPoint(candidate.route[tangent_start_index]);
-      const geometry_msgs::Point local_goal =
-          keyToPoint(candidate.route[candidate.local_goal_index]);
       candidate.tangent_yaw = std::atan2(
           local_goal.y - tangent_start.y,
           local_goal.x - tangent_start.x);
@@ -4236,6 +4244,41 @@ bool SuperExplorationDecider::publishConnectedTurnContinuation(
   // finish aligned with the outgoing passage.
   goal.pose.orientation = yawQuaternion(selected->tangent_yaw);
   const double selected_yaw = selected->tangent_yaw;
+  const double selected_turn = normalizeAngle(selected_yaw - route_heading);
+  if (tunnel_profile && !tunnel_route_locked_ &&
+      std::abs(selected_turn) > preferred_turn + 1e-9 &&
+      tunnel_connected_turn_confirm_frames_ > 1) {
+    const int selected_turn_side = selected_turn > 0.0 ? 1 : -1;
+    const ros::Time now = ros::Time::now();
+    const double confirmation_timeout = std::max(
+        1.0, 2.5 / std::max(0.1, decision_rate_));
+    if (pending_connected_turn_side_ != selected_turn_side ||
+        pending_connected_turn_time_.isZero() ||
+        (now - pending_connected_turn_time_).toSec() >
+            confirmation_timeout) {
+      pending_connected_turn_side_ = selected_turn_side;
+      pending_connected_turn_streak_ = 1;
+    } else {
+      pending_connected_turn_streak_ = std::min(
+          tunnel_connected_turn_confirm_frames_,
+          pending_connected_turn_streak_ + 1);
+    }
+    pending_connected_turn_time_ = now;
+    if (pending_connected_turn_streak_ <
+        tunnel_connected_turn_confirm_frames_) {
+      ROS_INFO_THROTTLE(
+          0.5,
+          "Sharp tunnel turn %.1f deg awaiting stable branch evidence "
+          "(%d/%d frames); current trajectory remains active",
+          selected_turn * 180.0 / M_PI,
+          pending_connected_turn_streak_,
+          tunnel_connected_turn_confirm_frames_);
+      return false;
+    }
+  }
+  pending_connected_turn_side_ = 0;
+  pending_connected_turn_streak_ = 0;
+  pending_connected_turn_time_ = ros::Time();
   ROS_INFO("Connected turn continuation: %.1f m verified route, local goal "
            "%.2f m away, heading %.1f -> %.1f deg, minimum clearance %.2f m",
            (route.size() - 1) * voxel_resolution_,
@@ -4977,12 +5020,14 @@ bool SuperExplorationDecider::batteryReadyForMissionStart(
     return true;
   }
   std::ostringstream status;
-  if (!have_battery_ || !std::isfinite(battery_percentage_) ||
-      battery_percentage_ < 0.0) {
-    status << "waiting for a valid battery percentage";
-  } else if (!std::isfinite(battery_voltage_) || battery_voltage_ <= 0.0) {
+  if (!std::isfinite(battery_voltage_) || battery_voltage_ <= 0.0) {
     status << "waiting for a valid battery voltage";
-  } else if (battery_percentage_ + 1e-6 <
+  } else if (battery_percentage_return_enabled_ &&
+             (!have_battery_ || !std::isfinite(battery_percentage_) ||
+              battery_percentage_ < 0.0)) {
+    status << "waiting for a valid battery percentage";
+  } else if (battery_percentage_return_enabled_ &&
+             battery_percentage_ + 1e-6 <
              battery_start_minimum_percentage_) {
     status << std::fixed << std::setprecision(0)
            << "battery " << 100.0 * battery_percentage_
@@ -5999,6 +6044,9 @@ void SuperExplorationDecider::clearMissionState() {
   active_goal_exploration_heading_yaw_ = 0.0;
   tunnel_route_locked_ = false;
   tunnel_route_heading_yaw_ = 0.0;
+  pending_connected_turn_side_ = 0;
+  pending_connected_turn_streak_ = 0;
+  pending_connected_turn_time_ = ros::Time();
   have_last_exploration_route_heading_ = false;
   last_exploration_route_heading_yaw_ = 0.0;
   exploration_started_ = false;

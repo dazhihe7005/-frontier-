@@ -301,6 +301,8 @@ inline LiveClearanceResult liveHorizontalCylinderClearance(
 struct SurfaceCoverageResult {
   bool obstacle_nearby{false};
   bool complete{false};
+  bool broad_surface_complete{false};
+  bool narrow_vertical_surface_complete{false};
   std::size_t point_count{0};
   double nearest_horizontal{std::numeric_limits<double>::infinity()};
   ObstaclePoint nearest_obstacle;
@@ -344,7 +346,10 @@ inline SurfaceCoverageResult evaluateForwardObstacleCoverage(
     double vertical_clearance_above,
     std::size_t min_points, double min_horizontal_span,
     double min_vertical_span = 0.0,
-    double min_obstacle_z = -std::numeric_limits<double>::infinity()) {
+    double min_obstacle_z = -std::numeric_limits<double>::infinity(),
+    std::size_t narrow_vertical_min_points = 0,
+    double narrow_vertical_min_horizontal_span = 0.0,
+    double narrow_vertical_min_vertical_span = 0.0) {
   SurfaceCoverageResult result;
   const double norm = std::hypot(forward_x, forward_y);
   if (!(std::isfinite(norm) && norm > 1e-6 && lookahead > 0.0 &&
@@ -392,9 +397,24 @@ inline SurfaceCoverageResult evaluateForwardObstacleCoverage(
   result.horizontal_span = std::max(max_forward - min_forward,
                                     max_lateral - min_lateral);
   result.vertical_span = max_z - min_z;
-  result.complete = result.point_count >= min_points &&
-                    result.horizontal_span >= min_horizontal_span &&
-                    result.vertical_span >= min_vertical_span;
+  result.broad_surface_complete = result.point_count >= min_points &&
+      result.horizontal_span >= min_horizontal_span &&
+      result.vertical_span >= min_vertical_span;
+  // A door jamb or post can be densely and consistently observed while its
+  // horizontal footprint remains narrower than a wall panel. Treat that
+  // geometry as complete only when it has substantially stronger point-count
+  // and vertical-span evidence. This keeps isolated/small returns on the
+  // conservative path while preventing a real narrow vertical structure from
+  // pinning the aircraft forever outside the independent clearance cylinder.
+  result.narrow_vertical_surface_complete =
+      narrow_vertical_min_points > 0 &&
+      narrow_vertical_min_horizontal_span > 0.0 &&
+      narrow_vertical_min_vertical_span > 0.0 &&
+      result.point_count >= narrow_vertical_min_points &&
+      result.horizontal_span >= narrow_vertical_min_horizontal_span &&
+      result.vertical_span >= narrow_vertical_min_vertical_span;
+  result.complete = result.broad_surface_complete ||
+                    result.narrow_vertical_surface_complete;
   return result;
 }
 

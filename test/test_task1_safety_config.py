@@ -124,6 +124,11 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertAlmostEqual(bridge["obstacle_persistence_duration"], 0.5)
         self.assertAlmostEqual(bridge["obstacle_replan_escape_duration"], 4.0)
         self.assertAlmostEqual(bridge["coverage_min_horizontal_span"], 0.5)
+        self.assertEqual(bridge["coverage_narrow_vertical_min_points"], 120)
+        self.assertAlmostEqual(
+            bridge["coverage_narrow_vertical_min_horizontal_span"], 0.2)
+        self.assertAlmostEqual(
+            bridge["coverage_narrow_vertical_min_vertical_span"], 0.8)
         self.assertGreater(
             bridge["obstacle_cloud_fault_timeout"],
             bridge["obstacle_cloud_timeout"])
@@ -217,6 +222,8 @@ class Task1SafetyConfigTest(unittest.TestCase):
             exploration_args["tunnel_straight_preference_angle_deg"], "35.0")
         self.assertEqual(
             exploration_args["tunnel_connected_turn_max_angle_deg"], "120.0")
+        self.assertEqual(
+            exploration_args["tunnel_connected_turn_confirm_frames"], "3")
         self.assertEqual(
             exploration_args["tunnel_return_breadcrumb_spacing"], "1.0")
         self.assertEqual(scheduler["shaft_trigger_channel"], 10)  # CH11
@@ -447,9 +454,12 @@ class Task1SafetyConfigTest(unittest.TestCase):
     def test_task4_preserves_pre_split_task1_decider_tuning(self):
         decider = yaml.safe_load(
             (ROOT / "config" / "super_exploration_decider.yaml").read_text())
-        self.assertFalse(decider["battery_start_guard_enabled"])
+        self.assertTrue(decider["battery_start_guard_enabled"])
         self.assertFalse(decider["battery_percentage_return_enabled"])
         self.assertEqual(decider["battery_return_voltage"], 21.6)
+        self.assertEqual(decider["battery_start_minimum_voltage"], 22.2)
+        self.assertEqual(decider["forward_height_penalty"], 3.0)
+        self.assertEqual(decider["max_frontier_goal_vertical_step"], 0.35)
         self.assertEqual(decider.pop("mission_profile"), "goaf")
         # These two parameters are goaf-only and ignored when the active
         # scheduler profile is Task 4/tunnel, so they are not part of the
@@ -483,11 +493,14 @@ class Task1SafetyConfigTest(unittest.TestCase):
         # use a 20 m rolling computation window and a 3 m/3.5 m early-handover
         # contract; neither change reduces clearance or tunnel extent.
         # Percentage admission and return are explicitly disabled while the
-        # production PX4 lacks reliable current/capacity estimation. The
-        # independent 21.6 V verified-return trigger remains enabled.
+        # production PX4 lacks reliable current/capacity estimation. Raw
+        # voltage now blocks a new mission below 22.2 V and independently
+        # starts verified return below 21.6 V. The baseline also includes the
+        # flight-log-driven 0.35 m vertical-leg limit and stronger soft height
+        # preference; inclined tunnels remain supported across repeated legs.
         self.assertEqual(
             hashlib.sha256(canonical).hexdigest(),
-            "7be699de2f00c5ab30eaecf3a2c4c9213a0561497a585c1d5269080150bf2a2e",
+            "045c1557036a074058f2964f1fdadf400d6d86b026afd936493fad2302f78d18",
         )
 
     def test_autostart_freezes_realtime_clock_during_ros_flight(self):

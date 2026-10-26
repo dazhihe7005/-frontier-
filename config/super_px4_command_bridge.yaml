@@ -115,6 +115,13 @@ coverage_min_horizontal_span: 0.5
 # A wall edge, post or low obstacle need not span 0.6 m vertically to be a
 # complete surface. Point population and horizontal extent reject speckles.
 coverage_min_vertical_span: 0.0
+# Door jambs and posts in the 2026-10-27 flights produced 246--613 stable
+# points and 1.2--1.39 m vertical span, but only 0.258--0.388 m horizontal
+# span. Accept that distinct shape as complete evidence without changing the
+# independent 0.65/0.8 m hard/planning clearance cylinders.
+coverage_narrow_vertical_min_points: 120
+coverage_narrow_vertical_min_horizontal_span: 0.2
+coverage_narrow_vertical_min_vertical_span: 0.8
 coverage_confirm_frames: 3
 coverage_reject_frames: 2
 max_obstacle_points: 100000

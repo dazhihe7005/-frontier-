@@ -9,6 +9,7 @@
   <arg name="tunnel_route_lock_min_turn_deg" default="35.0" />
   <arg name="tunnel_straight_preference_angle_deg" default="35.0" />
   <arg name="tunnel_connected_turn_max_angle_deg" default="120.0" />
+  <arg name="tunnel_connected_turn_confirm_frames" default="3" />
   <arg name="tunnel_return_breadcrumb_spacing" default="1.0" />
   <!-- Keep the validated tunnel tuning loaded. The goaf profile ignores these
        two preferences in code; Task 4 applies them unchanged. -->
@@ -36,6 +37,8 @@
            value="$(arg tunnel_straight_preference_angle_deg)" />
     <param name="tunnel_connected_turn_max_angle_deg"
            value="$(arg tunnel_connected_turn_max_angle_deg)" />
+    <param name="tunnel_connected_turn_confirm_frames"
+           value="$(arg tunnel_connected_turn_confirm_frames)" />
     <param name="tunnel_return_breadcrumb_spacing"
            value="$(arg tunnel_return_breadcrumb_spacing)" />
     <param name="corridor_centering_enabled"
