@@ -663,6 +663,37 @@ class ManualOverrideTest(unittest.TestCase):
                 0.400001
             )
 
+    def test_same_path_lag_above_cross_track_limit_is_governed(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            self._command_speed = 0.2
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+
+        # The latest flight reached 0.655 m almost entirely along the moving
+        # path tangent. This must remain governed, while the unit tests retain
+        # the strict 0.65 m rule for lateral, vertical, ahead-of-reference and
+        # stationary-reference errors.
+        # Reproduce a physically possible accumulation of lag. An
+        # instantaneous 0.655 m estimator jump is a different fault class and
+        # is intentionally rejected by the output-continuity guard.
+        for step in range(1, 67):
+            with self._lock:
+                self._pose_x = -0.655 * step / 66.0
+            time.sleep(0.04)
+        self.assertTrue(self._wait_for(
+            lambda: "SPEED_GOVERNING" in self._statuses, timeout=3.0
+        ))
+        time.sleep(0.3)
+        with self._lock:
+            self.assertEqual(self._fault, "")
+            self.assertNotIn("POSCTL", self._requests)
+
     def test_task_teardown_holds_last_output_before_position_handover(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
         time.sleep(0.5)

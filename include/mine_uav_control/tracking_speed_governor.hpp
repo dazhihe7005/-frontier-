@@ -14,6 +14,71 @@ struct TrackingSpeedGovernorResult {
   bool valid{false};
 };
 
+struct TrackingErrorComponents {
+  double total{0.0};
+  double along_track_lag{0.0};
+  double non_lag_deviation{0.0};
+  bool tangent_available{false};
+  bool valid{false};
+};
+
+// Split reference error by the instantaneous trajectory tangent. A positive
+// projection means the aircraft is behind a still-certified point on the same
+// trajectory. Lateral/vertical displacement and motion ahead of the reference
+// remain in non_lag_deviation because neither can be explained by a slower
+// traversal of the planned path. At a stationary endpoint no tangent exists,
+// so the complete error remains a deviation.
+inline TrackingErrorComponents decomposeTrackingError(
+    const std::array<double, 3>& position_error,
+    const std::array<double, 3>& planned_velocity,
+    const double minimum_tangent_speed = 0.05) {
+  TrackingErrorComponents result;
+  if (!std::isfinite(minimum_tangent_speed) ||
+      minimum_tangent_speed <= 0.0) {
+    return result;
+  }
+  double error_squared = 0.0;
+  double speed_squared = 0.0;
+  double projection_numerator = 0.0;
+  for (std::size_t i = 0; i < 3; ++i) {
+    if (!std::isfinite(position_error[i]) ||
+        !std::isfinite(planned_velocity[i])) {
+      return result;
+    }
+    error_squared += position_error[i] * position_error[i];
+    speed_squared += planned_velocity[i] * planned_velocity[i];
+    projection_numerator += position_error[i] * planned_velocity[i];
+  }
+  result.total = std::sqrt(error_squared);
+  const double speed = std::sqrt(speed_squared);
+  if (speed < minimum_tangent_speed) {
+    result.non_lag_deviation = result.total;
+    result.valid = true;
+    return result;
+  }
+  result.tangent_available = true;
+  const double signed_along = projection_numerator / speed;
+  result.along_track_lag = std::max(0.0, signed_along);
+  const double transverse_squared = std::max(
+      0.0, error_squared - signed_along * signed_along);
+  const double ahead = std::min(0.0, signed_along);
+  result.non_lag_deviation = std::sqrt(
+      transverse_squared + ahead * ahead);
+  result.valid = true;
+  return result;
+}
+
+inline bool trackingErrorWithinExecutionEnvelope(
+    const TrackingErrorComponents& error,
+    const double max_non_lag_deviation,
+    const double max_along_track_lag) {
+  return error.valid && std::isfinite(max_non_lag_deviation) &&
+      std::isfinite(max_along_track_lag) && max_non_lag_deviation > 0.0 &&
+      max_along_track_lag >= max_non_lag_deviation &&
+      error.non_lag_deviation <= max_non_lag_deviation &&
+      error.along_track_lag <= max_along_track_lag;
+}
+
 enum class OverspeedRecoveryAction {
   kNormalFlight,
   kReduceSpeed,

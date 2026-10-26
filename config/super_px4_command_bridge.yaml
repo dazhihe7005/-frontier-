@@ -34,6 +34,11 @@ overspeed_duration: 1.5
 tracking_position_gain_xy: 0.75
 tracking_position_gain_z: 1.0
 max_governor_tracking_error: 0.65
+# A vehicle behind a moving reference but still on the certified path has a
+# trajectory-time lag, not a lateral safety breach. The strict non-lag limit
+# above is unchanged; this bounded along-track envelope only permits governed
+# recovery and matches the largest managed reacquisition distance below.
+max_governor_along_track_lag: 1.5
 # OFFBOARD may only engage from the same stable-hover envelope used by the
 # five-metre operator. This is checked before the mode request, not afterward.
 max_offboard_entry_speed: 0.30

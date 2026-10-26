@@ -141,6 +141,13 @@ class Task1SafetyConfigTest(unittest.TestCase):
         # systematically high or low.
         self.assertAlmostEqual(bridge["tracking_position_gain_xy"], 0.75)
         self.assertAlmostEqual(bridge["tracking_position_gain_z"], 1.0)
+        self.assertAlmostEqual(
+            bridge["max_governor_tracking_error"], HARD_CLEARANCE)
+        self.assertAlmostEqual(
+            bridge["max_governor_along_track_lag"], 1.5)
+        self.assertGreater(
+            bridge["max_governor_along_track_lag"],
+            bridge["max_governor_tracking_error"])
         self.assertLess(
             bridge["measured_speed_target"],
             bridge["max_measured_speed"])
@@ -167,6 +174,9 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertGreater(
             bridge["max_managed_reacquire_distance"],
             bridge["max_initial_command_distance"])
+        self.assertLessEqual(
+            bridge["max_governor_along_track_lag"],
+            bridge["max_managed_reacquire_distance"])
         self.assertGreater(
             bridge["max_managed_reacquire_yaw_error"],
             bridge["max_initial_yaw_error"])

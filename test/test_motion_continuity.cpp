@@ -96,6 +96,52 @@ TEST(TrackingSpeedGovernor, LeavesRequestBelowLimitUnchanged) {
   EXPECT_NEAR(result.closed_loop_velocity[0], 0.29, 1e-12);
 }
 
+TEST(TrackingSpeedGovernor, AlongTrackLagIsNotCrossTrackDeviation) {
+  const auto error = decomposeTrackingError(
+      {{0.655, 0.0, 0.0}}, {{0.9, 0.0, 0.0}});
+  ASSERT_TRUE(error.valid);
+  EXPECT_TRUE(error.tangent_available);
+  EXPECT_NEAR(error.total, 0.655, 1e-12);
+  EXPECT_NEAR(error.along_track_lag, 0.655, 1e-12);
+  EXPECT_NEAR(error.non_lag_deviation, 0.0, 1e-12);
+  EXPECT_TRUE(trackingErrorWithinExecutionEnvelope(error, 0.65, 1.5));
+}
+
+TEST(TrackingSpeedGovernor, LateralErrorStillUsesStrictLimit) {
+  const auto error = decomposeTrackingError(
+      {{0.0, 0.655, 0.0}}, {{0.9, 0.0, 0.0}});
+  ASSERT_TRUE(error.valid);
+  EXPECT_NEAR(error.along_track_lag, 0.0, 1e-12);
+  EXPECT_NEAR(error.non_lag_deviation, 0.655, 1e-12);
+  EXPECT_FALSE(trackingErrorWithinExecutionEnvelope(error, 0.65, 1.5));
+}
+
+TEST(TrackingSpeedGovernor, AheadOfReferenceIsNotTreatedAsSafeLag) {
+  const auto error = decomposeTrackingError(
+      {{-0.655, 0.0, 0.0}}, {{0.9, 0.0, 0.0}});
+  ASSERT_TRUE(error.valid);
+  EXPECT_NEAR(error.along_track_lag, 0.0, 1e-12);
+  EXPECT_NEAR(error.non_lag_deviation, 0.655, 1e-12);
+  EXPECT_FALSE(trackingErrorWithinExecutionEnvelope(error, 0.65, 1.5));
+}
+
+TEST(TrackingSpeedGovernor, StationaryReferenceKeepsTotalErrorStrict) {
+  const auto error = decomposeTrackingError(
+      {{0.655, 0.0, 0.0}}, {{0.0, 0.0, 0.0}});
+  ASSERT_TRUE(error.valid);
+  EXPECT_FALSE(error.tangent_available);
+  EXPECT_NEAR(error.along_track_lag, 0.0, 1e-12);
+  EXPECT_NEAR(error.non_lag_deviation, 0.655, 1e-12);
+  EXPECT_FALSE(trackingErrorWithinExecutionEnvelope(error, 0.65, 1.5));
+}
+
+TEST(TrackingSpeedGovernor, ExcessiveAlongTrackLagRemainsBounded) {
+  const auto error = decomposeTrackingError(
+      {{1.51, 0.0, 0.0}}, {{0.9, 0.0, 0.0}});
+  ASSERT_TRUE(error.valid);
+  EXPECT_FALSE(trackingErrorWithinExecutionEnvelope(error, 0.65, 1.5));
+}
+
 TEST(TrackingSpeedGovernor, CompensatesPositionPursuitWithoutAborting) {
   const auto result = governTrackingSpeed(
       {{0.3, 0.0, 0.0}}, {{0.15, 0.0, 0.0}}, {{0.9, 0.9, 1.0}}, 0.4);

@@ -111,6 +111,8 @@ class SuperPx4CommandBridge {
                       tracking_position_gain_z_, 1.0);
     private_nh_.param("max_governor_tracking_error",
                       max_governor_tracking_error_, 0.65);
+    private_nh_.param("max_governor_along_track_lag",
+                      max_governor_along_track_lag_, 1.5);
     private_nh_.param("measured_speed_timeout", measured_speed_timeout_, 0.5);
     private_nh_.param("overspeed_duration", overspeed_duration_, 1.5);
     private_nh_.param("max_offboard_entry_speed",
@@ -242,6 +244,8 @@ class SuperPx4CommandBridge {
         std::max(0.0, tracking_position_gain_z_);
     max_governor_tracking_error_ =
         std::max(0.1, max_governor_tracking_error_);
+    max_governor_along_track_lag_ = std::max(
+        max_governor_tracking_error_, max_governor_along_track_lag_);
     measured_speed_timeout_ = std::max(0.1, measured_speed_timeout_);
     overspeed_duration_ = std::max(0.1, overspeed_duration_);
     max_offboard_entry_speed_ = std::max(
@@ -1747,18 +1751,24 @@ class SuperPx4CommandBridge {
         target->position.y - latest_local_pose_.pose.position.y;
     const double error_z =
         target->position.z - latest_local_pose_.pose.position.z;
-    const double tracking_error = vectorNorm(error_x, error_y, error_z);
-    if (tracking_error > max_governor_tracking_error_) {
-      ROS_ERROR(
-          "PX4 tracking error %.3f m exceeds governor limit %.3f m; refusing "
-          "to hide a localization or trajectory fault",
-          tracking_error, max_governor_tracking_error_);
-      return false;
-    }
-
     const std::array<double, 3> planned_velocity{{
         target->velocity.x, target->velocity.y, target->velocity.z}};
     const std::array<double, 3> position_error{{error_x, error_y, error_z}};
+    const auto tracking_error = mine_uav_control::decomposeTrackingError(
+        position_error, planned_velocity);
+    if (!mine_uav_control::trackingErrorWithinExecutionEnvelope(
+            tracking_error, max_governor_tracking_error_,
+            max_governor_along_track_lag_)) {
+      ROS_ERROR(
+          "PX4 tracking error outside execution envelope: total=%.3f m, "
+          "along-track lag=%.3f/%.3f m, non-lag deviation=%.3f/%.3f m; "
+          "refusing to hide a localization or trajectory fault",
+          tracking_error.total, tracking_error.along_track_lag,
+          max_governor_along_track_lag_, tracking_error.non_lag_deviation,
+          max_governor_tracking_error_);
+      return false;
+    }
+
     const std::array<double, 3> position_gain{{
         tracking_position_gain_xy_, tracking_position_gain_xy_,
         tracking_position_gain_z_}};
@@ -1819,7 +1829,7 @@ class SuperPx4CommandBridge {
       ROS_ERROR(
           "PX4 speed governor would require %.3f m/s feed-forward, above "
           "bridge limit %.3f m/s (tracking error %.3f m)",
-          governed_feedforward_speed, max_speed_, tracking_error);
+          governed_feedforward_speed, max_speed_, tracking_error.total);
       return false;
     }
 
@@ -1841,10 +1851,13 @@ class SuperPx4CommandBridge {
         "Governing PX4 tracking request %.3f -> %.3f m/s without abort "
         "(measured=%.3f m/s): "
         "planner_v=(%.3f, %.3f, %.3f), error=(%.3f, %.3f, %.3f), "
+        "tracking=(total %.3f, lag %.3f, non-lag %.3f), "
         "governed_feedforward=(%.3f, %.3f, %.3f)",
         raw_speed, adaptive_predicted_speed_limit_, latest_measured_speed_,
         planned_velocity[0], planned_velocity[1], planned_velocity[2],
         error_x, error_y, error_z,
+        tracking_error.total, tracking_error.along_track_lag,
+        tracking_error.non_lag_deviation,
         target->velocity.x, target->velocity.y, target->velocity.z);
     return true;
   }
@@ -2579,6 +2592,7 @@ class SuperPx4CommandBridge {
   double tracking_position_gain_xy_{0.9};
   double tracking_position_gain_z_{1.0};
   double max_governor_tracking_error_{0.65};
+  double max_governor_along_track_lag_{1.5};
   double measured_speed_timeout_{0.5};
   double overspeed_duration_{1.5};
   double max_offboard_entry_speed_{0.20};
