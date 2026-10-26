@@ -3,6 +3,20 @@
 #include <cmath>
 #include <algorithm>
 namespace mine_uav_control {
+
+// SUPER's trajectory clock may advance only while the bridge can actually
+// execute that trajectory.  A managed hold is intentionally different from
+// leaving OFFBOARD: PX4 keeps receiving a fixed safe setpoint, while SUPER is
+// told to preserve the current polynomial time for a later continuous resume.
+inline bool trajectoryExecutionAuthorized(
+    const bool gates_ready, const bool exit_requested,
+    const bool offboard_owned, const bool px4_mode_is_offboard,
+    const bool obstacle_hold_active, const bool cloud_gap_hold_active,
+    const bool exploration_hold_active) {
+  return gates_ready && !exit_requested && offboard_owned &&
+      px4_mode_is_offboard && !obstacle_hold_active &&
+      !cloud_gap_hold_active && !exploration_hold_active;
+}
 struct MotionSample { std::array<double,3> p{{0,0,0}},v{{0,0,0}},a{{0,0,0}}; double yaw{0}; };
 inline double norm3(const std::array<double,3>& a) { return std::sqrt(a[0]*a[0]+a[1]*a[1]+a[2]*a[2]); }
 inline double delta3(const std::array<double,3>& a,const std::array<double,3>& b) { return norm3({{a[0]-b[0],a[1]-b[1],a[2]-b[2]}}); }

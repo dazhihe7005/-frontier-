@@ -59,6 +59,28 @@ TEST(MotionContinuity, ManagedHoldAloneMayUseSmoothReacquisitionEnvelope) {
       true, true, true, true, 0.88, 1.5, 2.61, 2.6));
 }
 
+TEST(MotionContinuity, ExecutionClockStopsForEveryManagedHold) {
+  EXPECT_TRUE(trajectoryExecutionAuthorized(
+      true, false, true, true, false, false, false));
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      true, false, true, true, true, false, false));
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      true, false, true, true, false, true, false));
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      true, false, true, true, false, false, true));
+}
+
+TEST(MotionContinuity, ExecutionClockRequiresHealthyOwnedOffboard) {
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      false, false, true, true, false, false, false));
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      true, true, true, true, false, false, false));
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      true, false, false, true, false, false, false));
+  EXPECT_FALSE(trajectoryExecutionAuthorized(
+      true, false, true, false, false, false, false));
+}
+
 TEST(MotionContinuity, ReacquireDurationRespectsLargeReturnYaw) {
   const double duration = smoothReacquireDuration(3.5, 0.88, 2.05, 1.1, 0.75);
   EXPECT_GT(duration, 5.0);

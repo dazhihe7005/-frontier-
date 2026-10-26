@@ -12,8 +12,11 @@ from geometry_msgs.msg import (PoseStamped, TransformStamped, TwistStamped,
                                Vector3Stamped)
 from mavros_msgs.msg import PositionTarget, State
 from mavros_msgs.srv import SetMode, SetModeResponse
+from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
-from std_msgs.msg import Bool, String
+from sensor_msgs import point_cloud2
+from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import Bool, Header, String
 
 
 class ManualOverrideTest(unittest.TestCase):
@@ -36,6 +39,7 @@ class ManualOverrideTest(unittest.TestCase):
         self._returning = False
         self._vision_healthy = True
         self._trajectory_id = 0
+        self._obstacle_distance = None
         self._setpoints = []
         self._setpoint_velocities = []
         self._requests = []
@@ -55,6 +59,12 @@ class ManualOverrideTest(unittest.TestCase):
         )
         self._command_pub = rospy.Publisher(
             "/planning/pos_cmd", PositionCommand, queue_size=5
+        )
+        self._task_odometry_pub = rospy.Publisher(
+            "/mine_uav/task1/odometry", Odometry, queue_size=5
+        )
+        self._obstacle_cloud_pub = rospy.Publisher(
+            "/mine_uav/task1/cloud_registered", PointCloud2, queue_size=2
         )
         self._alignment_pub = rospy.Publisher(
             "/mine_uav/task1/planning_to_px4_alignment",
@@ -166,6 +176,7 @@ class ManualOverrideTest(unittest.TestCase):
                 returning = self._returning
                 vision_healthy = self._vision_healthy
                 trajectory_id = self._trajectory_id
+                obstacle_distance = self._obstacle_distance
             stamp = rospy.Time.now()
             state = State()
             state.header.stamp = stamp
@@ -197,6 +208,26 @@ class ManualOverrideTest(unittest.TestCase):
             command.trajectory_flag = PositionCommand.TRAJECTORY_STATUS_READY
             command.trajectory_id = trajectory_id
             self._command_pub.publish(command)
+            task_odometry = Odometry()
+            task_odometry.header.stamp = stamp
+            task_odometry.header.frame_id = "task1_planning"
+            # This topic is in SUPER's task1_planning frame, unlike the PX4
+            # local pose above. The fixture's command coordinates represent
+            # that planning-frame vehicle state across alignment tests.
+            task_odometry.pose.pose.position.x = command_x
+            task_odometry.pose.pose.position.y = command_y
+            task_odometry.pose.pose.position.z = command_z
+            task_odometry.pose.pose.orientation.w = 1.0
+            self._task_odometry_pub.publish(task_odometry)
+            cloud_header = Header(stamp=stamp, frame_id="task1_planning")
+            obstacle_points = []
+            if obstacle_distance is not None:
+                obstacle_points.append(
+                    (command_x + obstacle_distance, command_y, command_z)
+                )
+            self._obstacle_cloud_pub.publish(
+                point_cloud2.create_cloud_xyz32(cloud_header, obstacle_points)
+            )
             alignment = TransformStamped()
             alignment.header.stamp = stamp
             alignment.transform.rotation.z = math.sin(0.5 * alignment_yaw)
@@ -244,6 +275,10 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self._exploration_status = "WAIT_MAP_CLOSURE"
         self.assertTrue(self._wait_for(lambda: self._status == "HOLD_COMMAND_TIMEOUT"))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._execution_authorizations) and
+            not self._execution_authorizations[-1]
+        ), "SUPER execution clock remained authorized during fixed hold")
         with self._lock:
             self._pose_z = 1.0
             self._setpoints.clear()
@@ -258,6 +293,10 @@ class ManualOverrideTest(unittest.TestCase):
             self._pose_z = 1.5
             self._command_z = 1.5
         self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._execution_authorizations) and
+            self._execution_authorizations[-1]
+        ), "SUPER execution clock did not resume after hold cleared")
         self.assertTrue(self._wait_for(
             lambda: bool(self._setpoints) and
             abs(self._setpoints[-1][0] - 1.5) < 0.01
@@ -442,6 +481,46 @@ class ManualOverrideTest(unittest.TestCase):
         # The fallback request is a different mode and must not be delayed by
         # the throttle on the immediately preceding OFFBOARD request.
         self.assertLess(time.monotonic() - started, 0.8)
+
+    def test_obstacle_hold_freezes_and_resumes_super_execution_clock(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._execution_authorizations) and
+            self._execution_authorizations[-1]
+        ))
+
+        # Reproduce the latest flight's soft-zone stop: outside the 0.65 m
+        # hard cylinder but inside the 0.8 m planning monitor. PX4 must retain
+        # OFFBOARD hold while SUPER's polynomial clock is frozen.
+        with self._lock:
+            self._obstacle_distance = 0.75
+        self.assertTrue(self._wait_for(
+            lambda: self._status.startswith("OBSTACLE_MONITORING_")
+        ))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._execution_authorizations) and
+            not self._execution_authorizations[-1]
+        ), "SUPER clock remained authorized during obstacle hold")
+        with self._lock:
+            self.assertNotIn("POSCTL", self._requests)
+            self.assertEqual(self._fault, "")
+            self._obstacle_distance = None
+
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._execution_authorizations) and
+            self._execution_authorizations[-1]
+        ), "SUPER clock did not resume after obstacle cleared")
+        with self._lock:
+            self.assertNotIn("POSCTL", self._requests)
+            self.assertEqual(self._fault, "")
 
     def test_entry_speed_is_not_rechecked_while_mode_confirmation_is_pending(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))

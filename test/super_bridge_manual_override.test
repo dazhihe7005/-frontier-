@@ -12,6 +12,16 @@
     <param name="tracking_position_gain_xy" value="0.9"/>
     <param name="tracking_position_gain_z" value="1.0"/>
     <param name="overspeed_duration" value="0.1"/>
+    <param name="obstacle_safety_enabled" value="true"/>
+    <param name="obstacle_cloud_timeout" value="0.5"/>
+    <param name="obstacle_cloud_fault_timeout" value="2.0"/>
+    <param name="obstacle_persistence_duration" value="5.0"/>
+    <param name="obstacle_clear_confirm_frames" value="2"/>
+    <param name="live_horizontal_clearance" value="0.65"/>
+    <param name="obstacle_monitor_horizontal_clearance" value="0.8"/>
+    <param name="coverage_min_points" value="3"/>
+    <param name="coverage_confirm_frames" value="1"/>
+    <param name="coverage_reject_frames" value="1"/>
     <param name="max_horizontal_radius" value="0.0"/>
     <!-- Keep this integration fixture narrow so its existing 2.2 m command
          fault remains meaningful; production uses SUPER's -5..8 m bounds. -->

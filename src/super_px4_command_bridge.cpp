@@ -639,6 +639,11 @@ class SuperPx4CommandBridge {
       latched_hold_target_ = makeLastCommandHoldTarget(now);
       hold_target_latched_ = true;
     }
+    // Do not wait for the normal status path: it is bypassed by several
+    // managed-hold early returns in outputTimerCallback().  SUPER must freeze
+    // its polynomial clock before the bridge spends any time at this fixed
+    // setpoint.
+    publishExecutionAuthorization();
   }
 
   void stateCallback(const mavros_msgs::State::ConstPtr& state) {
@@ -1942,6 +1947,12 @@ class SuperPx4CommandBridge {
       publishStatus("OBSTACLE_HAZARD_STOP_EXITING_OFFBOARD");
       return;
     }
+    // Publish the execution contract before every managed-hold branch below.
+    // Previously those branches returned before updateStatus(), so PX4 could
+    // be pinned at a fixed hold while SUPER continued advancing its time
+    // trajectory.  On recovery this produced a stale reference ahead of the
+    // aircraft and eventually SPEED_GOVERNOR_INFEASIBLE.
+    publishExecutionAuthorization();
     if (obstacle_safety_enabled_ && auto_enabled_ && mission_enabled_ &&
         offboard_owned_ && px4_mode_ == offboard_mode_ &&
         !obstacleCloudFresh(now) && !fault_latched_) {
@@ -2426,8 +2437,11 @@ class SuperPx4CommandBridge {
   }
 
   void publishExecutionAuthorization() {
-    const bool authorized = gatesReady() && !exit_requested_ &&
-        offboard_owned_ && px4_mode_ == offboard_mode_;
+    const bool authorized =
+        mine_uav_control::trajectoryExecutionAuthorized(
+            gatesReady(), exit_requested_, offboard_owned_,
+            px4_mode_ == offboard_mode_, obstacle_monitor_.active(),
+            cloud_gap_hold_active_, exploration_status_hold_);
     if (execution_authorization_published_ &&
         authorized == last_execution_authorization_) {
       return;
