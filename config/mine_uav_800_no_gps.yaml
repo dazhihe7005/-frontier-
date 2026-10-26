@@ -33,7 +33,7 @@ localization:
     # user-supplied 0.173 m installation height.
     pose_flu_xyz_m: [0.1315, 0.0, 0.223]
     pose_flu_rpy_rad: [0.0, 0.436332313, 0.0]
-  horizontal_source: fast_lio2_external_vision
+  horizontal_source: omni_livo_external_vision
 
 battery:
   pack_count: 2

@@ -2,16 +2,22 @@
   <arg name="config" default="$(find mine_uav_control)/config/super_px4_command_bridge.yaml"/>
   <arg name="offboard_rate" default="50.0"/>
   <arg name="fallback_mode" default="POSCTL"/>
-  <arg name="max_speed" default="0.8"/>
-  <arg name="max_measured_speed" default="0.8"/>
-  <arg name="max_predicted_speed" default="0.7"/>
+  <!-- These arguments intentionally mirror the production YAML because the
+       param tags below are applied after rosparam and therefore override it. -->
+  <arg name="max_speed" default="1.1"/>
+  <arg name="max_measured_speed" default="1.1"/>
+  <arg name="max_predicted_speed" default="1.1"/>
   <arg name="measured_speed_timeout" default="0.5"/>
   <arg name="overspeed_duration" default="1.5"/>
-  <arg name="max_offboard_entry_speed" default="0.25"/>
-  <arg name="max_horizontal_radius" default="40.0"/>
-  <arg name="min_height" default="-0.5"/>
-  <arg name="max_height" default="1.8"/>
+  <arg name="max_offboard_entry_speed" default="0.30"/>
+  <!-- Zero disables the optional home-centred command fence. -->
+  <arg name="max_horizontal_radius" default="0.0"/>
+  <!-- task1_planning-frame limits, shared with SUPER flight_min_z/max_z. -->
+  <arg name="min_height" default="-5.0"/>
+  <arg name="max_height" default="8.0"/>
   <arg name="height_clamp_tolerance" default="0.25"/>
+  <arg name="mission_enable_topic"
+       default="/mine_uav/mission/goaf_enable"/>
 
   <node pkg="mine_uav_control" type="super_px4_command_bridge"
         name="super_px4_command_bridge" output="screen" required="true">
@@ -28,6 +34,7 @@
     <param name="min_height" value="$(arg min_height)"/>
     <param name="max_height" value="$(arg max_height)"/>
     <param name="height_clamp_tolerance" value="$(arg height_clamp_tolerance)"/>
+    <param name="mission_enable_topic" value="$(arg mission_enable_topic)"/>
   </node>
 
   <!-- This node only repeats a fresh validated target. The command bridge may

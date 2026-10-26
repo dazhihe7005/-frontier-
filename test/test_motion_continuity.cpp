@@ -15,7 +15,34 @@ TEST(MotionContinuity, ShortRosStampJitterDoesNotBecomePositionFault) {
 TEST(MotionContinuity, VelocityStepRejected) { MotionSample a,b;b.v[0]=.8;EXPECT_NE(nullptr,check(a,b)); }
 TEST(MotionContinuity, AccelerationStepRejected) { MotionSample a,b;b.a[0]=1.;EXPECT_NE(nullptr,check(a,b)); }
 TEST(MotionContinuity, StationaryHoldDoesNotMoveReference) { MotionSample a;a.p[0]=5;EXPECT_EQ(nullptr,check(a,a)); }
+TEST(MotionContinuity, ExactStationaryHoldMayResumeAfterBoundedStreamGap) {
+  MotionSample hold;
+  hold.p = {{0.093, -0.033, 0.663}};
+  hold.yaw = -1.138;
+  EXPECT_EQ(nullptr, check(hold, hold, .46));
+  MotionSample changed = hold;
+  changed.p[0] += .01;
+  EXPECT_STREQ("TIME_DISCONTINUITY", check(hold, changed, .46));
+  MotionSample moving = hold;
+  moving.v[0] = .1;
+  EXPECT_STREQ("TIME_DISCONTINUITY", check(moving, moving, .46));
+}
 TEST(MotionContinuity, MovingHoldCannotZeroVelocityInstantly) { MotionSample a,b;a.v[0]=.8;EXPECT_NE(nullptr,check(a,b)); }
+TEST(MotionContinuity, GovernedFeedforwardMayDifferFromPositionDerivative) {
+  // id307 faulted on this safe shape: the position reference remained smooth,
+  // while the intentional speed governor reduced feed-forward velocity.  All
+  // independent position/velocity/acceleration/yaw transition limits still
+  // apply; only the source-trajectory PVA identity is inapplicable afterward.
+  MotionSample before, after;
+  before.v[0] = 0.34;
+  after.p[0] = 0.022;
+  after.v[0] = 0.3406;
+  EXPECT_STREQ("INCONSISTENT_PVA",
+      motionTransitionFailure(before, after, .02, 1.1, 1.75, 6.0, .75));
+  EXPECT_EQ(nullptr,
+      motionTransitionFailure(before, after, .02, 1.1, 1.75, 6.0, .75,
+                              false));
+}
 TEST(MotionContinuity, YawWrapIsNotAnArtificialTurn) { MotionSample a,b;a.yaw=M_PI-.002;b.yaw=-M_PI+.002;EXPECT_EQ(nullptr,check(a,b)); }
 TEST(MotionContinuity, NinetyDegreeYawStepRejected) { MotionSample a,b;b.yaw=M_PI_2;EXPECT_NE(nullptr,check(a,b)); }
 TEST(MotionContinuity, BackwardAndDuplicateTimeRejected) { MotionSample a;EXPECT_NE(nullptr,check(a,a,-.1));EXPECT_NE(nullptr,check(a,a,0)); }

@@ -3,14 +3,48 @@
   <arg name="require_mission_enable_edge" default="false" />
   <arg name="cloud_topic" default="/mine_uav/task1/cloud_registered" />
   <arg name="odom_topic" default="/mine_uav/task1/odometry" />
+  <arg name="mission_profile" default="goaf" />
+  <!-- Task-4 route policy is explicit in the production launch while the
+       shared safety YAML remains frozen for Task-1 compatibility. -->
+  <arg name="tunnel_route_lock_min_turn_deg" default="35.0" />
+  <arg name="tunnel_straight_preference_angle_deg" default="35.0" />
+  <arg name="tunnel_connected_turn_max_angle_deg" default="120.0" />
+  <arg name="tunnel_return_breadcrumb_spacing" default="1.0" />
+  <!-- Keep the validated tunnel tuning loaded. The goaf profile ignores these
+       two preferences in code; Task 4 applies them unchanged. -->
+  <arg name="corridor_centering_enabled" default="true" />
+  <arg name="corridor_preview_enabled" default="true" />
+  <arg name="mission_enable_topic"
+       default="/mine_uav/mission/goaf_enable" />
+  <arg name="follow_active_task_profile" default="false" />
+  <arg name="active_task_topic"
+       default="/mine_uav/mission/active_task" />
 
   <node pkg="mine_uav_control"
         type="super_exploration_decider"
         name="super_exploration_decider"
-        output="screen">
+        output="screen"
+        required="true">
     <rosparam command="load" file="$(arg config)" />
     <param name="require_mission_enable_edge" value="$(arg require_mission_enable_edge)" />
     <param name="cloud_topic" value="$(arg cloud_topic)" />
     <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="mission_profile" value="$(arg mission_profile)" />
+    <param name="tunnel_route_lock_min_turn_deg"
+           value="$(arg tunnel_route_lock_min_turn_deg)" />
+    <param name="tunnel_straight_preference_angle_deg"
+           value="$(arg tunnel_straight_preference_angle_deg)" />
+    <param name="tunnel_connected_turn_max_angle_deg"
+           value="$(arg tunnel_connected_turn_max_angle_deg)" />
+    <param name="tunnel_return_breadcrumb_spacing"
+           value="$(arg tunnel_return_breadcrumb_spacing)" />
+    <param name="corridor_centering_enabled"
+           value="$(arg corridor_centering_enabled)" />
+    <param name="corridor_preview_enabled"
+           value="$(arg corridor_preview_enabled)" />
+    <param name="mission_enable_topic" value="$(arg mission_enable_topic)" />
+    <param name="follow_active_task_profile"
+           value="$(arg follow_active_task_profile)" />
+    <param name="active_task_topic" value="$(arg active_task_topic)" />
   </node>
 </launch>

@@ -5,6 +5,7 @@
 namespace {
 
 using mine_uav_control::ObstaclePoint;
+using mine_uav_control::updateSurfaceCoverageReadiness;
 
 TEST(ObstacleSafety, LiveCylinderDoesNotTradeHeightForHorizontalDistance) {
   const std::vector<ObstaclePoint> points{{0.6, 0.0, 0.25}};
@@ -93,6 +94,24 @@ TEST(ObstacleSafety, DenseSpanningSurfaceQualifiesCoverage) {
   EXPECT_GE(result.point_count, 30u);
 }
 
+TEST(ObstacleSafety, FlightSizedPanelQualifiesCoverageAndKeepsNearestPoint) {
+  std::vector<ObstaclePoint> points;
+  for (int y = -3; y <= 3; ++y) {
+    for (int z = -3; z <= 3; ++z) {
+      points.push_back({1.0, 0.1 * y, 0.1 * z});
+    }
+  }
+  const auto result = mine_uav_control::evaluateForwardObstacleCoverage(
+      points, {0.0, 0.0, 0.0}, 1.0, 0.0, 2.5, 2.0, 0.7, 0.7,
+      20, 0.5, 0.5);
+  EXPECT_TRUE(result.obstacle_nearby);
+  EXPECT_TRUE(result.complete);
+  EXPECT_NEAR(result.horizontal_span, 0.6, 1e-9);
+  EXPECT_NEAR(result.vertical_span, 0.6, 1e-9);
+  EXPECT_NEAR(result.nearest_horizontal, 1.0, 1e-9);
+  EXPECT_NEAR(result.nearest_obstacle.x, 1.0, 1e-9);
+}
+
 TEST(ObstacleSafety, CeilingOutsideRelativeSafetyBandIsNotCoverage) {
   std::vector<ObstaclePoint> ceiling;
   for (int x = 1; x <= 10; ++x) {
@@ -167,6 +186,18 @@ TEST(ObstacleSafety, PersistentHardIntrusionRequestsVerifiedReturn) {
           mine_uav_control::ObstacleMonitorAction::kPersistent, true));
 }
 
+TEST(ObstacleSafety, EveryPersistentReplanMustMoveAwayFromObstacle) {
+  EXPECT_TRUE(
+      mine_uav_control::persistentObstacleReplanRequiresAwayMotion(
+          mine_uav_control::ObstacleMonitorAction::kPersistent));
+  EXPECT_FALSE(
+      mine_uav_control::persistentObstacleReplanRequiresAwayMotion(
+          mine_uav_control::ObstacleMonitorAction::kHold));
+  EXPECT_FALSE(
+      mine_uav_control::persistentObstacleReplanRequiresAwayMotion(
+          mine_uav_control::ObstacleMonitorAction::kClear));
+}
+
 TEST(ObstacleSafety, HardObstacleEscapeMustIncreaseClearance) {
   const mine_uav_control::ObstaclePoint vehicle{0.0, 0.0, 1.0};
   const mine_uav_control::ObstaclePoint obstacle{0.5, 0.0, 1.0};
@@ -176,6 +207,43 @@ TEST(ObstacleSafety, HardObstacleEscapeMustIncreaseClearance) {
       vehicle, obstacle, {0.1, 0.0, 1.0}, 0.1, 0.0));
   EXPECT_FALSE(mine_uav_control::plannedMotionIncreasesHorizontalClearance(
       vehicle, obstacle, {0.0, 0.0, 1.0}, 0.0, 0.0));
+}
+
+TEST(ObstacleSafety, VerifiedReturnMayLeaveSoftZoneOnlyWhileMovingAway) {
+  const ObstaclePoint vehicle{0.0, 0.0, 1.0};
+  const ObstaclePoint wall{0.0, -0.79, 1.0};
+  const ObstaclePoint away_target{-0.2, 0.2, 1.0};
+  EXPECT_TRUE(verifiedReturnSoftZoneEscapeAllowed(
+      true, true, true, false, vehicle, wall, away_target, -0.1, 0.1));
+  EXPECT_FALSE(verifiedReturnSoftZoneEscapeAllowed(
+      true, true, true, true, vehicle, wall, away_target, -0.1, 0.1));
+  EXPECT_FALSE(verifiedReturnSoftZoneEscapeAllowed(
+      false, true, true, false, vehicle, wall, away_target, -0.1, 0.1));
+  EXPECT_FALSE(verifiedReturnSoftZoneEscapeAllowed(
+      true, true, true, false, vehicle, wall,
+      {0.0, -0.2, 1.0}, 0.0, -0.1));
+}
+
+TEST(ObstacleSafety, SurfaceCoverageReadinessHasBidirectionalHysteresis) {
+  int complete_streak = 0;
+  int incomplete_streak = 0;
+  bool ready = true;
+  EXPECT_TRUE(updateSurfaceCoverageReadiness(
+      true, false, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_FALSE(updateSurfaceCoverageReadiness(
+      true, false, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_FALSE(updateSurfaceCoverageReadiness(
+      true, true, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_FALSE(updateSurfaceCoverageReadiness(
+      true, true, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_TRUE(updateSurfaceCoverageReadiness(
+      true, true, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_TRUE(updateSurfaceCoverageReadiness(
+      true, false, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_FALSE(updateSurfaceCoverageReadiness(
+      true, false, 3, 2, &complete_streak, &incomplete_streak, &ready));
+  EXPECT_TRUE(updateSurfaceCoverageReadiness(
+      false, false, 3, 2, &complete_streak, &incomplete_streak, &ready));
 }
 
 TEST(ObstacleSafety, SparseClearPacketDoesNotReleaseHold) {

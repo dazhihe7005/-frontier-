@@ -7,14 +7,20 @@
   <arg name="global_cloud_voxel_size" default="0.20"/>
   <arg name="allow_auto_arm" default="true"/>
   <arg name="auto_enable_delay" default="8.0"/>
+  <!-- RCIn array indexes: Task 1 uses physical CH9/index 8 and Task 4 uses
+       physical CH7/index 6, matching the confirmed production mapping. -->
+  <arg name="sitl_exploration_trigger_channel" default="8"/>
+  <arg name="tunnel_trigger_channel" default="6"/>
+  <arg name="tunnel_task_available" default="true"/>
   <arg name="takeoff_height" default="1.5"/>
+  <arg name="takeoff_climb_rate" default="0.35"/>
   <arg name="takeoff_yaw_offset" default="0.0"/>
   <arg name="takeoff_hover_yaw_tolerance_deg" default="10.0"/>
   <arg name="vision_stable_duration" default="3.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_goaf_smooth.yaml"/>
-  <arg name="fastlio_config"
-       default="$(find mine_uav_control)/config/fastlio_gazebo_mid360.yaml"/>
+  <arg name="omnilivo_config"
+       default="$(find mine_uav_control)/config/omnilivo_gazebo_mid360.yaml"/>
   <!-- Canonical no-GPS SITL airframe. This selects PX4 autostart 1018; the
        SDF below remains the STEP-derived 6 kg vehicle. -->
   <arg name="vehicle" default="iris_xy_vision"/>
@@ -31,9 +37,14 @@
   <arg name="spawn_z" default="0.11"/>
   <arg name="spawn_yaw" default="0"/>
   <arg name="mission_heading_offset" default="0.0"/>
+  <arg name="mission_profile" default="goaf"/>
+  <arg name="corridor_centering_enabled" default="true"/>
+  <arg name="corridor_preview_enabled" default="true"/>
   <arg name="use_absolute_mission_heading" default="false"/>
   <arg name="absolute_mission_heading_yaw" default="0.0"/>
-  <arg name="max_exploration_radius" default="24.0"/>
+  <!-- Zero means no mission-distance limit; bounded scenario wrappers may
+       still supply a positive value for their finite test world. -->
+  <arg name="max_exploration_radius" default="0.0"/>
   <arg name="decider_vehicle_radius" default="0.8"/>
   <arg name="decider_preferred_vehicle_radius" default="1.1"/>
   <arg name="decider_vertical_vehicle_radius" default="0.3"/>
@@ -54,7 +65,7 @@
   <arg name="forward_corridor_half_width" default="2.0"/>
   <arg name="forward_goal_lateral_search_width" default="2.0"/>
   <arg name="max_frontier_goal_distance" default="4.0"/>
-  <arg name="forward_lookahead_distance" default="4.0"/>
+  <arg name="forward_lookahead_distance" default="6.0"/>
   <arg name="max_frontier_goal_vertical_step" default="0.5"/>
   <arg name="max_task_lateral_offset" default="4.0"/>
   <arg name="map_closure_min_progress" default="8.0"/>
@@ -65,13 +76,13 @@
   <arg name="require_three_wall_completion" default="false"/>
   <!-- Allow map stability confirmation to finish after the last safe goal;
        the occupancy count can reset its four-second window near the end wall. -->
-  <arg name="no_frontier_timeout" default="10.0"/>
+  <arg name="no_frontier_timeout" default="7.0"/>
   <!-- The 0.25 m decision map takes several simulated seconds to evaluate;
        retain the latest SUPER occupancy for that bounded interval. SUPER
        still checks every executed trajectory against its live ROG map. -->
   <arg name="return_map_timeout" default="8.0"/>
   <arg name="return_segment_length" default="3.0"/>
-  <arg name="return_home_arrival_radius" default="0.0"/>
+  <arg name="return_home_arrival_radius" default="0.75"/>
   <arg name="min_forward_super_clearance" default="0.0"/>
   <arg name="min_clearance_return_progress" default="0.0"/>
   <arg name="max_outbound_backtrack" default="2.0"/>
@@ -79,15 +90,17 @@
   <arg name="dead_end_reversal_delay" default="4.0"/>
   <arg name="min_observation_height_above_home" default="0.0"/>
   <arg name="max_observation_height_above_home" default="0.3"/>
+  <arg name="tunnel_min_planning_height" default="-5.0"/>
+  <arg name="tunnel_max_planning_height" default="8.0"/>
   <arg name="cruise_height_above_home" default="0.0"/>
   <!-- Airborne home is around 1.43 m in the goaf run. Keep return goals below
        1.63 m so SUPER and PX4 have room under the 1.8 m acceptance ceiling. -->
   <arg name="return_max_height_above_home" default="0.2"/>
   <arg name="lidar_max_range" default="30.0"/>
   <arg name="max_global_points" default="120000"/>
-  <arg name="bridge_max_horizontal_radius" default="40.0"/>
-  <arg name="bridge_min_height" default="-0.5"/>
-  <arg name="bridge_max_height" default="1.8"/>
+  <arg name="bridge_max_horizontal_radius" default="0.0"/>
+  <arg name="bridge_min_height" default="-5.0"/>
+  <arg name="bridge_max_height" default="8.0"/>
   <arg name="bridge_height_clamp_tolerance" default="0.25"/>
   <arg name="require_mission_enable_edge" default="true"/>
 
@@ -117,52 +130,62 @@
 
   <!-- Default no-GPS localization chain: simulated MID360 returns and raw
        PX4 IMU are the only estimator inputs. Gazebo world pose is not used. -->
+  <!-- Gazebo produces an instantaneous ray image, not a Livox packet with
+       per-point firing times.  Feed that native representation through
+       Omni-LIVO's standard-cloud path instead of inventing CustomMsg timing. -->
   <node pkg="mine_uav_control" type="pointcloud1_to_pointcloud2"
-        name="mid360_pointcloud_converter" output="screen" required="true">
+        name="mid360_omnilivo_input_adapter" output="screen" required="true">
     <param name="input_topic" value="/mine_uav/sitl/mid360/points"/>
     <param name="output_topic" value="/mine_uav/sitl/mid360/points2"/>
     <param name="min_range" value="0.20"/>
     <param name="max_range" value="$(arg lidar_max_range)"/>
     <param name="max_range_epsilon" value="0.05"/>
   </node>
-  <rosparam command="load" file="$(arg fastlio_config)"/>
-  <param name="feature_extract_enable" type="bool" value="false"/>
-  <param name="point_filter_num" type="int" value="2"/>
-  <param name="max_iteration" type="int" value="3"/>
-  <param name="filter_size_surf" type="double" value="0.15"/>
-  <param name="filter_size_map" type="double" value="0.20"/>
-  <param name="cube_side_length" type="double" value="100"/>
-  <param name="runtime_pos_log_enable" type="bool" value="false"/>
-  <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
-        output="screen" required="true"/>
-  <node pkg="mine_uav_control" type="fastlio_px4_vision_bridge"
-        name="fastlio_px4_vision_bridge" output="screen" required="true">
+  <rosparam command="load" file="$(arg omnilivo_config)"/>
+  <!-- The Gazebo vehicle has no fisheye renderers.  The dedicated regression
+       therefore runs Omni-LIVO's LIO backend while retaining the exact
+       estimator health and PX4/downstream interfaces used on the aircraft. -->
+  <node pkg="omni_livo" type="fastlivo_mapping" name="laserMapping"
+        output="screen" required="true">
+    <rosparam file="$(find omni_livo)/config/seeker_raw_cam.yaml"/>
+  </node>
+  <node pkg="mine_uav_control" type="lio_px4_vision_bridge"
+        name="omnilivo_px4_vision_bridge" output="screen" required="true">
     <rosparam command="load"
-              file="$(find mine_uav_control)/config/fastlio_px4_vision_bridge.yaml"/>
-    <!-- Temporary real-aircraft mounting compensation is disabled in SITL. -->
+              file="$(find mine_uav_control)/config/omnilivo_px4_vision_bridge.yaml"/>
+    <!-- Omni's simulated state is the body/PX4 IMU pose, so no additional
+         physical-aircraft sensor lever arm is applied in SITL. -->
     <param name="temporary_sensor_roll_in_body_deg" value="0.0"/>
     <param name="temporary_sensor_pitch_in_body_deg" value="0.0"/>
     <param name="temporary_sensor_yaw_in_body_deg" value="0.0"/>
+    <param name="auto_calibrate_mount_from_gravity" value="false"/>
     <param name="sensor_position_in_body_x" value="0.0"/>
     <param name="sensor_position_in_body_y" value="0.0"/>
     <param name="sensor_position_in_body_z" value="0.0"/>
-    <param name="require_fastlio_health" value="false"/>
+    <param name="require_localization_health" value="true"/>
+    <param name="localization_health_topic"
+           value="/omnilivo/localization_healthy"/>
   </node>
 
-  <!-- Build the planner cloud from the real FAST-LIO2 pose and the same raw
+  <!-- Build the planner cloud from the real Omni-LIVO pose and the same raw
        MID360 scan.  This simulation-only adapter removes aircraft self
        returns and emits no-return rays as free-space evidence; it never uses
        Gazebo vehicle pose unless the explicit geometry A/B filter is enabled. -->
-  <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
+  <node pkg="mine_uav_control" type="gazebo_mid360_lio_adapter.py"
         name="task1_planner_cloud_adapter" output="screen" required="true">
     <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
-    <param name="odom_topic" value="/Odometry"/>
+    <param name="odom_topic" value="/omnilivo/odometry"/>
     <param name="output_topic" value="/mine_uav/sitl/planner_cloud_registered"/>
     <param name="px4_pose_topic" value="/mavros/local_position/pose"/>
     <param name="output_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
     <param name="max_height_age" value="0.5"/>
     <param name="free_ray_topic" value="/mine_uav/sitl/mid360/free_ray_endpoints"/>
     <param if="$(arg world_geometry_filter)" name="world_geometry_file" value="$(arg world)"/>
+    <!-- Gazebo LinkStates has no header; allow bounded receive-time jitter
+         while retaining the static-geometry consistency check. At the 0.8
+         m/s mission limit, 0.15 s corresponds to 0.12 m, below the 0.35 m
+         surface tolerance. -->
+    <param name="max_link_pose_delta" value="0.15"/>
     <param name="world_frame" value="camera_init"/>
     <rosparam param="sensor_offset">[0.1315, 0.0, 0.223]</rosparam>
     <rosparam param="sensor_rpy">[0.0, 0.436332313, 0.0]</rosparam>
@@ -185,6 +208,7 @@
         name="sitl_task_operator" output="screen" required="true">
     <param name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <param name="takeoff_height" value="$(arg takeoff_height)"/>
+    <param name="takeoff_climb_rate" value="$(arg takeoff_climb_rate)"/>
     <param name="ground_z_stable_duration" value="3.0"/>
     <param name="ground_z_stability_tolerance" value="0.15"/>
     <param name="takeoff_yaw_offset" value="$(arg takeoff_yaw_offset)"/>
@@ -196,21 +220,27 @@
     <param name="vision_status_topic" value="/mine_uav/task1/vision_status"/>
     <param name="vision_stable_duration" value="$(arg vision_stable_duration)"/>
     <param name="auto_enable_delay" value="$(arg auto_enable_delay)"/>
+    <param name="exploration_trigger_channel"
+           value="$(arg sitl_exploration_trigger_channel)"/>
   </node>
 
   <node pkg="mine_uav_control" type="mission_scheduler"
         name="mission_scheduler" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/mission_scheduler.yaml"/>
     <param name="rc_topic" value="/mine_uav/sitl/rc/in"/>
+    <param name="tunnel_trigger_channel" value="$(arg tunnel_trigger_channel)"/>
+    <param name="tunnel_task_available" value="$(arg tunnel_task_available)"/>
   </node>
 
-  <!-- Planning-map lifecycle follows CH7. /Odometry remains continuously
-       available to the scheduler and PX4-facing localization path. -->
+  <!-- Planning-map lifecycle follows the selected exploration task. Omni-LIVO
+       odometry remains continuously available to the PX4-facing path. -->
   <node pkg="mine_uav_control" type="task1_perception_gate"
         name="task1_perception_gate" output="screen" required="true">
     <param name="input_cloud_topic"
            value="/mine_uav/sitl/planner_cloud_registered"/>
     <param name="input_odom_topic" value="/mine_uav/sitl/planner_odometry"/>
+    <param name="mission_enable_topic"
+           value="/mine_uav/mission/exploration_enable"/>
   </node>
 
   <node pkg="mine_uav_control" type="super_exploration_decider"
@@ -282,6 +312,10 @@
            value="$(arg min_observation_height_above_home)"/>
     <param name="max_observation_height_above_home"
            value="$(arg max_observation_height_above_home)"/>
+    <param name="tunnel_min_planning_height"
+           value="$(arg tunnel_min_planning_height)"/>
+    <param name="tunnel_max_planning_height"
+           value="$(arg tunnel_max_planning_height)"/>
     <param name="cruise_height_above_home"
            value="$(arg cruise_height_above_home)"/>
     <param name="directional_vertical_tolerance" value="1.5"/>
@@ -304,6 +338,14 @@
            value="$(arg use_absolute_mission_heading)"/>
     <param name="absolute_mission_heading_yaw"
            value="$(arg absolute_mission_heading_yaw)"/>
+    <param name="mission_profile" value="$(arg mission_profile)"/>
+    <param name="corridor_centering_enabled"
+           value="$(arg corridor_centering_enabled)"/>
+    <param name="corridor_preview_enabled"
+           value="$(arg corridor_preview_enabled)"/>
+    <param name="mission_enable_topic"
+           value="/mine_uav/mission/exploration_enable"/>
+    <param name="follow_active_task_profile" value="true"/>
   </node>
 
   <node pkg="super_planner" type="fsm_node" name="fsm_node"
@@ -317,15 +359,14 @@
        returned to the launch area, transfer control to PX4 AUTO.LAND. -->
   <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
     <arg name="fallback_mode" value="AUTO.LAND"/>
-    <!-- Keep the formal Task-1 SITL on the same contract as the physical
-         stack: 0.6 m/s nominal, 0.7 m/s predicted governance, and 0.8 m/s
-         planner/measured hard limits. The latter three are defaults of the
-         shared bridge launch; keep max_speed explicit here to prevent an old
-         scenario override from silently restoring the former 1.2 m/s limit. -->
-    <arg name="max_speed" value="0.8"/>
-    <arg name="max_measured_speed" value="0.8"/>
-    <arg name="max_predicted_speed" value="0.7"/>
-    <arg name="max_offboard_entry_speed" value="0.25"/>
+    <!-- Keep formal Task-1 SITL on the physical-flight speed contract:
+         0.9 m/s nominal with 1.1 m/s command, measured, and predicted limits. -->
+    <arg name="max_speed" value="1.1"/>
+    <arg name="max_measured_speed" value="1.1"/>
+    <arg name="max_predicted_speed" value="1.1"/>
+    <arg name="max_offboard_entry_speed" value="0.30"/>
+    <arg name="mission_enable_topic"
+         value="/mine_uav/mission/exploration_enable"/>
     <arg name="max_horizontal_radius" value="$(arg bridge_max_horizontal_radius)"/>
     <arg name="min_height" value="$(arg bridge_min_height)"/>
     <arg name="max_height" value="$(arg bridge_max_height)"/>

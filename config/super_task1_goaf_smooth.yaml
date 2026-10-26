@@ -57,6 +57,15 @@ super_planner:
   flight_min_z: -5.0
   flight_max_z: 8.0
   yaw_dot_max: 0.6
+  # This is the tangent-knot spacing inside the planner, not the command
+  # publication period.  Keep it fine enough for narrow bends; commands are
+  # still interpolated continuously at the planner/bridge timer rates.
+  yaw_tracking_sample_period: 0.2
+  # A fresh rest-to-rest trajectory (notably the first return leg) must turn
+  # toward its initial path tangent before any translational motion begins.
+  yaw_prealign_from_rest: true
+  yaw_prealign_threshold: 0.35
+  yaw_prealign_min_duration: 0.5
   yaw_mode: 1
   mpc_horizon: 15
 
@@ -65,8 +74,8 @@ traj_opt:
     save_log_en: false
     print_optimizer_log: false
   boundary:
-    # Formal Task-1 speed contract shared with the real and five-metre stacks.
-    max_vel: 0.6
+    # Formal Task-1 speed contract shared with the real-aircraft profile.
+    max_vel: 0.9
     max_acc: 0.8
     max_jerk: 2.5
     max_omg: 2.5

@@ -1,4 +1,4 @@
-#include "mine_uav_control/fastlio_mount_alignment.hpp"
+#include "mine_uav_control/lio_mount_alignment.hpp"
 
 #include <cmath>
 
@@ -8,7 +8,7 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-TEST(FastlioMountAlignment, ClockwiseNinetyMapsSensorLeftToBodyForward) {
+TEST(LioMountAlignment, ClockwiseNinetyMapsSensorLeftToBodyForward) {
   const auto alignment = mine_uav_control::makePlanarMountAlignment(
       0.0, -kPi / 2.0, true);
 
@@ -23,7 +23,7 @@ TEST(FastlioMountAlignment, ClockwiseNinetyMapsSensorLeftToBodyForward) {
   EXPECT_NEAR(y, 0.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, MountAndWorldRotationsCancelAtInitialPose) {
+TEST(LioMountAlignment, MountAndWorldRotationsCancelAtInitialPose) {
   const auto alignment = mine_uav_control::makePlanarMountAlignment(
       0.0, -kPi / 2.0, true);
   const double initial_body_yaw = alignment.map_to_output_yaw +
@@ -31,14 +31,14 @@ TEST(FastlioMountAlignment, MountAndWorldRotationsCancelAtInitialPose) {
   EXPECT_NEAR(initial_body_yaw, 0.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, ZeroMountKeepsLegacyAlignment) {
+TEST(LioMountAlignment, ZeroMountKeepsLegacyAlignment) {
   const auto alignment = mine_uav_control::makePlanarMountAlignment(
       0.3, 0.0, true);
   EXPECT_NEAR(alignment.map_to_output_yaw, -0.3, 1e-12);
   EXPECT_NEAR(alignment.sensor_from_body_yaw, 0.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, DownwardPitchDoesNotLeakHorizontalMotionIntoZ) {
+TEST(LioMountAlignment, DownwardPitchDoesNotLeakHorizontalMotionIntoZ) {
   const double pitch = 25.0 * kPi / 180.0;
   const double yaw = -kPi / 2.0;
   const auto alignment = mine_uav_control::makeMountAlignment(
@@ -56,7 +56,7 @@ TEST(FastlioMountAlignment, DownwardPitchDoesNotLeakHorizontalMotionIntoZ) {
   EXPECT_NEAR(forward_in_px4.z, 0.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, ForwardFacingRadarKeepsOnlyPitchCompensation) {
+TEST(LioMountAlignment, ForwardFacingRadarKeepsOnlyPitchCompensation) {
   const double pitch = 25.0 * kPi / 180.0;
   const auto alignment = mine_uav_control::makeMountAlignment(
       mine_uav_control::Quaternion(), 0.0, pitch, 0.0, true, true);
@@ -74,7 +74,7 @@ TEST(FastlioMountAlignment, ForwardFacingRadarKeepsOnlyPitchCompensation) {
       0.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, InitialBodyAttitudeBecomesIdentity) {
+TEST(LioMountAlignment, InitialBodyAttitudeBecomesIdentity) {
   const auto sensor_in_map = mine_uav_control::quaternionFromRpy(
       0.02, -0.03, 0.17);
   const auto alignment = mine_uav_control::makeMountAlignment(
@@ -89,7 +89,7 @@ TEST(FastlioMountAlignment, InitialBodyAttitudeBecomesIdentity) {
   EXPECT_NEAR(std::abs(body_in_output.w), 1.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, PlannerSeesHorizontalTravelInALevelFrame) {
+TEST(LioMountAlignment, PlannerSeesHorizontalTravelInALevelFrame) {
   const double pitch = 25.0 * kPi / 180.0;
   const auto alignment = mine_uav_control::makeMountAlignment(
       mine_uav_control::Quaternion(), 0.0, pitch, 0.0, true, true);
@@ -112,7 +112,55 @@ TEST(FastlioMountAlignment, PlannerSeesHorizontalTravelInALevelFrame) {
   EXPECT_NEAR(std::abs(planning_body.w), 1.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, PitchSignMakesSensorForwardPointDownward) {
+TEST(LioMountAlignment, PlanningHeadingCanStartAtPx4Heading) {
+  const auto planning_body = mine_uav_control::quaternionFromRpy(
+      0.0, 0.0, 0.0);
+  const auto px4_body = mine_uav_control::quaternionFromRpy(
+      0.04, -0.03, kPi / 2.0);
+  const auto planning_to_px4 =
+      mine_uav_control::planningToReferenceHeading(px4_body, planning_body);
+  const auto forward_in_px4 = mine_uav_control::rotateVector(
+      planning_to_px4, mine_uav_control::Vector3(1.0, 0.0, 0.0));
+
+  EXPECT_NEAR(mine_uav_control::yawFromQuaternion(planning_to_px4),
+              kPi / 2.0, 1e-12);
+  EXPECT_NEAR(forward_in_px4.x, 0.0, 1e-12);
+  EXPECT_NEAR(forward_in_px4.y, 1.0, 1e-12);
+  EXPECT_NEAR(forward_in_px4.z, 0.0, 1e-12);
+}
+
+TEST(LioMountAlignment, GravityDerivesPitchWithoutFixedMountAngle) {
+  const double pitch = 25.0 * kPi / 180.0;
+  const mine_uav_control::Vector3 sensor_gravity(
+      -std::sin(pitch), 0.0, std::cos(pitch));
+  const mine_uav_control::Vector3 body_gravity(0.0, 0.0, 9.81);
+  mine_uav_control::Quaternion body_from_sensor;
+
+  ASSERT_TRUE(mine_uav_control::gravityAlignmentRotation(
+      sensor_gravity, body_gravity, &body_from_sensor));
+  const auto corrected = mine_uav_control::rotateVector(
+      body_from_sensor, sensor_gravity);
+  EXPECT_NEAR(corrected.x, 0.0, 1e-12);
+  EXPECT_NEAR(corrected.y, 0.0, 1e-12);
+  EXPECT_NEAR(corrected.z, 1.0, 1e-12);
+  EXPECT_NEAR(mine_uav_control::quaternionAngularDistance(
+                  mine_uav_control::Quaternion(), body_from_sensor),
+              pitch, 1e-12);
+}
+
+TEST(LioMountAlignment, GravityAlignmentAddsNoRotationWhenAlreadyAligned) {
+  mine_uav_control::Quaternion body_from_sensor;
+  ASSERT_TRUE(mine_uav_control::gravityAlignmentRotation(
+      mine_uav_control::Vector3(0.0, 0.0, 1.0),
+      mine_uav_control::Vector3(0.0, 0.0, 9.81),
+      &body_from_sensor));
+  EXPECT_NEAR(body_from_sensor.x, 0.0, 1e-12);
+  EXPECT_NEAR(body_from_sensor.y, 0.0, 1e-12);
+  EXPECT_NEAR(body_from_sensor.z, 0.0, 1e-12);
+  EXPECT_NEAR(body_from_sensor.w, 1.0, 1e-12);
+}
+
+TEST(LioMountAlignment, PitchSignMakesSensorForwardPointDownward) {
   const auto body_from_sensor = mine_uav_control::quaternionFromRpy(
       0.0, 25.0 * kPi / 180.0, 0.0);
   const auto sensor_forward_in_body = mine_uav_control::rotateVector(
@@ -121,7 +169,7 @@ TEST(FastlioMountAlignment, PitchSignMakesSensorForwardPointDownward) {
   EXPECT_LT(sensor_forward_in_body.z, 0.0);
 }
 
-TEST(FastlioMountAlignment, RecordedLandingResidualIsRemovedByBodyPitch) {
+TEST(LioMountAlignment, RecordedLandingResidualIsRemovedByBodyPitch) {
   const auto alignment = mine_uav_control::makeMountAlignment(
       mine_uav_control::Quaternion(), 0.0, 25.0 * kPi / 180.0,
       -90.9 * kPi / 180.0, true, true);
@@ -134,7 +182,7 @@ TEST(FastlioMountAlignment, RecordedLandingResidualIsRemovedByBodyPitch) {
   EXPECT_GT(std::abs(corrected.x), 1.0);
 }
 
-TEST(FastlioMountAlignment, LeverArmRemovesRotationOnlyTranslation) {
+TEST(LioMountAlignment, LeverArmRemovesRotationOnlyTranslation) {
   const mine_uav_control::Vector3 lever(0.133803, -0.011364, 0.173245);
   const auto body_rotation = mine_uav_control::quaternionFromRpy(
       0.12, -0.08, 0.5);
@@ -156,7 +204,7 @@ TEST(FastlioMountAlignment, LeverArmRemovesRotationOnlyTranslation) {
   EXPECT_NEAR(corrected.z, 0.0, 1e-12);
 }
 
-TEST(FastlioMountAlignment, RotationIncrementCanBeBoundedlyExtrapolated) {
+TEST(LioMountAlignment, RotationIncrementCanBeBoundedlyExtrapolated) {
   const auto ten_degrees = mine_uav_control::quaternionFromRpy(
       0.0, 0.0, 10.0 * kPi / 180.0);
   const auto fifteen_degrees =

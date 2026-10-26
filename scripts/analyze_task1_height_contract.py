@@ -14,7 +14,7 @@ import rosbag
 
 
 COMMAND_TOPIC = "/planning/pos_cmd"
-ALIGNMENT_TOPIC = "/mine_uav/task1/fastlio_to_px4_alignment"
+ALIGNMENT_TOPIC = "/mine_uav/task1/lio_to_px4_alignment"
 
 
 def audit(bag_path, min_height, max_height, alignment_z=None, tolerance=1e-6):

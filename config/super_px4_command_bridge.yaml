@@ -4,6 +4,7 @@ output_topic: /mine_uav/setpoint_cmd
 # this gravity-aligned frame.  Only the captured origin translation remains for
 # the command bridge to apply.
 alignment_topic: /mine_uav/task1/planning_to_px4_alignment
+sensor_position_topic: /mine_uav/task1/lio_sensor_position_in_body
 expected_frame: task1_planning
 
 # SUPER commands must remain fresh. A timeout latches the operator gate off.
@@ -13,35 +14,40 @@ output_rate: 50.0
 
 # Current real-flight speed contract. Launch files may still apply a different
 # limit for a deliberately isolated simulation.
-max_speed: 0.8
-max_measured_speed: 0.8
+max_speed: 1.1
+max_measured_speed: 1.1
 # Govern the velocity PX4's position loop will request, not just SUPER's
 # feed-forward velocity. These gains must match the aircraft's MPC_XY_P and
 # MPC_Z_P values. Routine limiting continues the task; a much larger tracking
 # error remains a fault instead of being hidden by an extreme counter-command.
-max_predicted_speed: 0.7
-# The latest real flight showed that regulating around the nominal 0.6 m/s
-# planner speed repeatedly cut and restored feed-forward velocity. Keep the
-# full 0.7 m/s closed-loop request allowance through normal cruise, then apply
-# a smooth proportional ceiling only above 0.65 m/s. If measured speed crosses
-# the independent 0.8 m/s hard limit, keep governing for 1.5 continuous
+max_predicted_speed: 1.1
+# Preserve headroom above the nominal 0.9 m/s SUPER trajectory instead of
+# cutting its feed-forward term during normal cruise. If measured speed crosses
+# the independent 1.1 m/s hard limit, keep governing for 1.5 continuous
 # seconds; recover normally if speed returns to the safe range in that window.
-measured_speed_target: 0.65
+measured_speed_target: 1.0
 measured_speed_feedback_gain: 1.0
 measured_speed_governor_floor: 0.35
 measured_speed_governor_reduction_rate: 0.80
 measured_speed_governor_recovery_rate: 0.50
 overspeed_duration: 1.5
-tracking_position_gain_xy: 0.9
+tracking_position_gain_xy: 0.75
 tracking_position_gain_z: 1.0
 max_governor_tracking_error: 0.65
 # OFFBOARD may only engage from the same stable-hover envelope used by the
 # five-metre operator. This is checked before the mode request, not afterward.
-max_offboard_entry_speed: 0.25
+max_offboard_entry_speed: 0.30
 max_acceleration: 1.25
-max_horizontal_radius: 40.0
-min_height: -0.5
-max_height: 1.8
+# 0 disables the optional home-centred horizontal command fence. Production
+# exploration ends on a verified terminal/no-route condition or low battery,
+# not at a fixed distance. Bounded SITL scenarios may override this positively.
+max_horizontal_radius: 0.0
+# Height limits use the levelled task1_planning frame, before alignment into
+# PX4 local coordinates. Keep these identical to SUPER flight_min_z/max_z so
+# an inclined Task-4 route cannot be accepted by SUPER and rejected later by
+# the command bridge merely because the per-flight alignment offset changed.
+min_height: -5.0
+max_height: 8.0
 height_clamp_tolerance: 0.25
 # Independent live obstacle guard. The cloud and task odometry share the
 # gravity-aligned planning frame. Horizontal clearance and vertical relevance
@@ -52,6 +58,10 @@ obstacle_safety_enabled: true
 obstacle_cloud_topic: /mine_uav/task1/cloud_registered
 task_odometry_topic: /mine_uav/task1/odometry
 obstacle_cloud_timeout: 0.35
+# A short producer scheduling/timebase gap first performs a continuous brake
+# and fixed OFFBOARD hold. Only a sustained loss exits to POSCTL. This exceeds
+# Omni-LIVO's 0.5 s state-stale diagnostic threshold while remaining bounded.
+obstacle_cloud_fault_timeout: 2.0
 live_horizontal_clearance: 0.65
 # Planning-floor monitoring radius. Any current return inside 0.8 m freezes one
 # measured-pose hold immediately. It is not a hard-fault radius: a transient
@@ -63,7 +73,10 @@ obstacle_monitor_horizontal_clearance: 0.8
 # obstacle inside 0.65 m requests verified return while localization and the
 # cloud remain healthy; that new trajectory must increase obstacle clearance.
 # A cloud timeout remains an immediate exit because monitoring is unavailable.
-obstacle_persistence_duration: 3.0
+# Five continuous 10 Hz observations are enough to start a verified replan.
+# Replanning now overlaps the 1.5 s braking ramp instead of adding a three
+# second stationary wait before avoidance begins.
+obstacle_persistence_duration: 0.5
 obstacle_replan_topic: /mine_uav/exploration/obstacle_replan
 # Bounded time for the newly verified trajectory to leave the old soft zone.
 # Hard 0.65 m collision protection remains active throughout this window.
@@ -84,10 +97,16 @@ obstacle_min_z: 0.0
 # Incomplete evidence joins the
 # same bounded hover-and-monitor state instead of causing an immediate exit.
 coverage_guard_distance: 2.5
-coverage_lateral_half_width: 2.5
+# Only the projected vehicle lane needs completeness gating. The independent
+# 0.65/0.8 m cylinder still protects side walls at every bearing; using 2.5 m
+# here made sparse side-wall returns freeze a clear forward trajectory.
+coverage_lateral_half_width: 1.0
 coverage_vertical_uncertainty_margin: 0.2
 coverage_min_points: 30
-coverage_min_horizontal_span: 0.6
+# The 2026-10-26 panel produced a stable 0.52--0.60 m registered span. Keeping
+# the threshold at exactly 0.60 m made readiness chatter and repeatedly pause
+# and release while the aircraft continued toward it.
+coverage_min_horizontal_span: 0.5
 # A wall edge, post or low obstacle need not span 0.6 m vertically to be a
 # complete surface. Point population and horizontal extent reject speckles.
 coverage_min_vertical_span: 0.0
@@ -111,18 +130,27 @@ max_initial_yaw_error: 0.70
 # published hold. Larger gaps remain held in OFFBOARD and request return.
 max_managed_reacquire_distance: 1.5
 max_managed_reacquire_yaw_error: 2.6
-# Reject a restarted/re-aligned Fast-LIO frame while an autonomous task is
+# Reject a restarted/re-aligned Omni-LIVO frame while an autonomous task is
 # active. This is the full 3-D rotation threshold (radians), not yaw only.
 max_alignment_rotation_change: 0.05
 exploration_status_topic: "/mine_uav/exploration/status"
+execution_authorization_topic: "/mine_uav/super/execution_enable"
 use_acceleration: true
 
 # Automatic control authorization comes from the mission scheduler (physical
-# CH7 by default). The bridge prestreams a hold target, then requests OFFBOARD.
+# the selected exploration task). The bridge prestreams a hold target, then requests OFFBOARD.
 auto_enable_topic: /mine_uav/mission/auto_enable
 automatic_mode_switch: true
 require_armed_for_offboard: true
 prestream_duration: 1.0
+# A transient speed estimate at the entry boundary restarts the stable
+# prestream window instead of aborting the mission immediately. A vehicle that
+# never settles still fails closed after this bounded wait.
+prestream_stability_timeout: 15.0
+# POSCTL remains under the pilot during prestream. Brief estimator scheduling
+# jitter restarts the complete prestream window; a persistent loss still
+# rejects the start within this bounded interval.
+preoffboard_vision_recovery_timeout: 2.0
 mode_request_interval: 1.0
 offboard_mode: OFFBOARD
 fallback_mode: POSCTL

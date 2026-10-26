@@ -55,6 +55,7 @@
       <param name="temporary_sensor_roll_in_body_deg" value="0.0"/>
       <param name="temporary_sensor_pitch_in_body_deg" value="0.0"/>
       <param name="temporary_sensor_yaw_in_body_deg" value="0.0"/>
+      <param name="auto_calibrate_mount_from_gravity" value="false"/>
       <param name="sensor_position_in_body_x" value="0.0"/>
       <param name="sensor_position_in_body_y" value="0.0"/>
       <param name="sensor_position_in_body_z" value="0.0"/>

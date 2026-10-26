@@ -2,6 +2,13 @@
 cloud_topic: "/mine_uav/task1/cloud_registered"
 odom_topic: "/mine_uav/task1/odometry"
 
+# Task 1 remains the goaf mission. Both goaf and tunnel profiles use the same
+# normal exploration/verified-return state machine. Only the tunnel profile
+# may apply the optional corridor-centering and narrowing-preview preferences.
+# Tunnel return reuses the same live 8 m narrowing preview so lateral alignment
+# begins before the aircraft reaches a surveyed throat.
+mission_profile: "goaf"
+
 # SUPER 任务模式的原子目标/取消话题；原生点击模式仍可单独使用 /goal。
 goal_command_topic: "/mine_uav/super/goal_command"
 world_frame: "task1_planning"
@@ -15,7 +22,7 @@ mission_enable_topic: "/mine_uav/mission/goaf_enable"
 # raises auto_enable, so map warmup can never start OFFBOARD by itself.
 initial_goal_accepted_topic: "/mine_uav/exploration/accepted_initial_goal_id"
 
-# task1_perception_gate 已把 Fast-LIO2 点云和位姿调平到 task1_planning。
+# task1_perception_gate 已把 Omni-LIVO 点云和位姿调平到 task1_planning。
 # 本节点仍严格拒绝其他坐标系，避免把原始倾斜点云写进地图。
 strict_cloud_frame: true
 
@@ -54,17 +61,27 @@ protect_traversed_centerline: true
 traversed_centerline_radius: 0.35
 traversed_centerline_step: 0.25
 
-# Home在CH7允许任务时的空中悬停点捕获。无障碍时，任务级观察目标限于
+# Home在当前任务通道允许任务时的空中悬停点捕获。无障碍时，任务级观察目标限于
 # home -0.30 m 到 +0.20 m，并优先使用 cruise_height_above_home=0。
 # 这只约束任务级普通目标；SUPER 遇障时仍可在三维安全走廊内上下绕行。
 # 这是相对 home 的高度，不得再叠加起飞高度。
 min_observation_height_above_home: -0.30
 max_observation_height_above_home: 0.20
+# Task 4 is an inclined tunnel, so its height contract is absolute in the
+# levelled task1_planning frame and matches SUPER super_planner.flight_*_z.
+# Short goals remain centred on the aircraft's current height and may climb or
+# descend only through observed, connected free voxels.
+tunnel_min_planning_height: -5.0
+tunnel_max_planning_height: 8.0
 
 # 观察点选择与覆盖策略。
-frontier_search_radius: 30.0
-# 水平安全围栏；候选观察点不得离任务起点超过该距离。
-max_exploration_radius_from_home: 35.0
+# Rolling local window: the longest configured task preview is 15 m. A 20 m
+# radius preserves 5 m of recertification margin without repeatedly flooding
+# the already traversed 30 m history on every 0.5 s decision tick.
+frontier_search_radius: 20.0
+# 真机任务不按距 home 的水平距离截断探索；0 表示关闭该可选围栏。
+# 返航仍由已确认尽头/无硬安全路线或低电量触发。有界 SITL 场景可显式设置正数。
+max_exploration_radius_from_home: 0.0
 min_goal_distance: 2.0
 candidate_spacing: 3.0
 min_unknown_neighbors: 1
@@ -110,8 +127,16 @@ corridor_preview_lateral_half_width: 4.0
 corridor_preview_lateral_step: 0.25
 corridor_preview_max_lateral_slope: 1.0
 corridor_preview_min_slices: 6
+# Preview steering needs at least three adjacent 0.25 m centre cells. A
+# one-cell tail is commonly an unobserved bend edge, not a 0.25 m corridor.
+# The normal route planner still evaluates it with the unchanged 0.8 m hard
+# vehicle clearance; this threshold only suppresses speculative early turns.
+corridor_preview_min_reliable_center_band_width: 0.75
 corridor_preview_min_center_shift: 0.25
 corridor_preview_min_width_contraction: 0.5
+# This is a preview slew preference, not permission to leave the scenario's
+# forward_goal_lateral_search_width. Candidate generation applies that final
+# bound, so narrow tunnel overlays may safely keep a smaller search width.
 corridor_preview_max_goal_shift: 1.0
 front_obstacle_range: 6.0
 # Side-wall relief can fill the narrow forward cone near the entrance. It may
@@ -124,8 +149,16 @@ front_obstacle_sector_deg: 24.0
 # A closed wall must be a surface, not a single return. Requiring population
 # and 2-D extent rejects ground slices, dust speckles and isolated supports.
 front_obstacle_min_points: 20
+# Real panel evidence in the 2026-10-26 flight spanned roughly 0.6 x 0.6 m in
+# the registered cloud. The old 1.0/0.8 m gate misclassified it as noise, so
+# the task layer kept issuing forward goals through the visible panel.
 front_obstacle_min_lateral_span: 1.0
 front_obstacle_min_vertical_span: 0.8
+# Task 1's goaf contains smaller man-made panels than the Task 4 tunnel wall
+# model. Keep Task 4's frozen detector tuning while recognizing the panel
+# measured in the 2026-10-26 Task 1 flight.
+goaf_front_obstacle_min_lateral_span: 0.5
+goaf_front_obstacle_min_vertical_span: 0.5
 # While either side wall is visible, keep task-level goals in the entry-axis
 # corridor. SUPER may still deviate locally around an obstacle.
 forward_corridor_half_width: 4.0
@@ -144,13 +177,15 @@ max_task_lateral_offset: 10.0
 forward_progress_weight: 2.0
 forward_lateral_penalty: 2.0
 forward_height_penalty: 1.0
-# Hand the next short segment to SUPER with two metres still available, so a
-# successful handover preserves motion without replacing the goal too early.
-forward_goal_handover_distance: 2.0
-# Keep task-level planning local. A remote frontier still selects the branch,
-# while SUPER receives at most a four-metre, currently verified segment and
-# remains responsible for collision-free local deviations within that segment.
+# The 2026-10-24 23:02 flight showed 1.4--3.8 s stops because the former 2 m
+# handover window was shorter than a large-map decision pass. Three metres at
+# the 0.9 m/s nominal speed leaves at least 3.3 s for a verified successor,
+# while the separate 0.5 m progress gate prevents immediate goal churn.
+forward_goal_handover_distance: 3.0
+# Generic/tunnel value retained for Task 4 compatibility. Task 1's goaf-only
+# override below uses more of the long-range LiDAR observation.
 forward_lookahead_distance: 4.0
+goaf_forward_lookahead_distance: 6.0
 # A remote frontier expresses a direction, not a single long trajectory.
 # Convert it to a short, directly verified segment before handing it to SUPER.
 max_frontier_goal_distance: 4.0
@@ -162,7 +197,11 @@ forward_lookahead_step: 0.5
 exploration_goal_queue_enabled: true
 exploration_goal_queue_max_future_goals: 3
 exploration_goal_queue_horizon: 10.0
-exploration_goal_queue_spacing: 2.5
+# A 15 m goaf preview holds the active 6 m leg plus rolling 3.5 m successors.
+# Only one successor is submitted at each rolling handover, and every cached
+# leg is re-certified against the newest task and SUPER maps first.
+goaf_exploration_goal_queue_horizon: 15.0
+exploration_goal_queue_spacing: 3.5
 # Do not pre-commit the queue all the way to the current observed boundary.
 exploration_goal_queue_end_reserve: 1.0
 # If the straight entry-axis look-ahead ends at a bend, search the same
@@ -176,9 +215,11 @@ connected_turn_min_new_space: 1.0
 cruise_height_above_home: 0.0
 return_breadcrumb_spacing: 1.0
 super_occupied_topic: "/fsm_node/rog_map/occ"
-# Short live-map segments let SUPER retain a feasible local corridor. The
-# surveyed outbound lane is preferred; a verified detour is still allowed.
-return_segment_length: 1.5
+# Three-metre live-map legs retain a feasible local corridor while leaving
+# enough distance for the normal two-metre rolling handover.  The former
+# 1.5 m leg could never reach that handover gate, so every breadcrumb ended at
+# rest and repeatedly invoked SUPER's yaw prealignment.
+return_segment_length: 3.0
 return_goal_handover_distance: 2.0
 # Return goals stay below the observation ceiling by default. A scenario can
 # set a smaller cap to leave room below its bridge flight-volume limit.
@@ -244,16 +285,23 @@ wall_coverage_end_approach_distance: 6.0
 # 当雷达已经看见完整尽头、普通frontier消失但飞机仍太远时，主动生成一个
 # 距尽头墙该距离的观察点，保证任务真正推进到采空区深处。
 wall_coverage_end_standoff_distance: 3.0
+# Task 1 does not need to approach the terminal wall to the generic 3 m
+# observation stand-off. Once both the accumulated 4 m-wide centre-connected
+# wall model and the live multi-frame front detector agree, cancel exploration
+# and start verified breadcrumb return at 5 m. Task 4 keeps its bend-following
+# tunnel policy and does not consume this rule.
+task1_end_wall_return_enabled: true
+task1_end_wall_return_distance: 5.0
 three_wall_confirm_cycles: 4
 
 goal_reached_distance: 1.0
 goal_timeout: 30.0
 
-# 完成前至少到达一个观察点。只要已经产生实际运动，连续 10 秒没有任何可执行的
+# 完成前至少到达一个观察点。只要已经产生实际运动，连续 7 秒没有任何可执行的
 # 硬安全探索路段就开始实时地图返航；严格完成策略关闭时它也兼作无 frontier 完成门。
 min_goals_before_complete: 1
 min_data_duration: 5.0
-no_frontier_timeout: 10.0
+no_frontier_timeout: 7.0
 
 # 健康检查和任务事件。
 decision_rate: 2.0
@@ -263,16 +311,28 @@ data_timeout: 1.0
 active_goal_data_grace: 6.0
 sync_queue_size: 20
 sync_slop: 0.08
+# This PX4 installation has no current sensor, configured capacity, or
+# internal-resistance model. Its reported percentage fell to 45% in hover and
+# rebounded to 65% after landing, so percentage must not authorize, reject, or
+# return a mission. Re-enable these checks only after reliable current/capacity
+# estimation is installed and flight-validated. Voltage return remains active.
+battery_start_guard_enabled: false
+battery_percentage_return_enabled: false
+battery_start_minimum_percentage: 0.50
+battery_start_minimum_voltage: 22.2
 battery_return_threshold: 0.20
-# Percentage estimates are quantized and can touch exactly 20% for one sample.
-# Require a sustained low reading; the independent voltage threshold below
-# remains an immediate, latched return trigger.
 battery_return_confirm_duration: 3.0
 battery_return_hysteresis: 0.03
+# Sole active automatic battery policy on the current hardware.
 battery_return_voltage: 21.6
 # Real and SITL missions capture home after reaching an airborne hover, so
 # return to the same task-start altitude.
 return_home_height_offset: 0.0
+# Treat the captured airborne launch area as reached after two consecutive
+# observations inside this radius.  Requiring SUPER to accept an effectively
+# zero-length final goal can otherwise strand the state machine centimetres
+# from home even though the aircraft has already returned safely.
+return_home_arrival_radius: 0.75
 return_max_height_above_home: 0.20
 battery_topic: "/mavros/battery"
 return_request_topic: "/mine_uav/exploration/return_home"

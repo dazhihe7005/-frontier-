@@ -9,21 +9,30 @@
     <param name="command_fault_topic" value="/test/mission/command_fault"/>
     <param name="initial_goal_accepted_topic"
            value="/test/mission/accepted_initial_goal_id"/>
+    <param name="goal_command_topic" value="/test/mission/goal_command"/>
+    <param name="super_goal_accepted_topic"
+           value="/test/mission/super_accepted_goal_id"/>
     <param name="switch_stable_time" value="0.12"/>
     <param name="rc_timeout" value="0.5"/>
     <param name="odometry_timeout" value="0.5"/>
     <param name="mavros_state_timeout" value="0.45"/>
     <param name="shaft_status_timeout" value="0.35"/>
     <param name="shaft_start_timeout" value="0.8"/>
+    <param name="shaft_ready_timeout" value="0.35"/>
+    <param name="task3_ready_timeout" value="0.35"/>
+    <param name="task3_start_timeout" value="0.8"/>
     <param name="start_max_speed" value="0.25"/>
     <param name="start_max_vertical_speed" value="0.10"/>
     <param name="start_stable_time" value="0.20"/>
     <param name="start_check_timeout" value="1.0"/>
     <param name="initial_goal_accept_timeout" value="1.2"/>
     <param name="shaft_task_available" value="true"/>
+    <param name="task3_task_available" value="true"/>
+    <param name="tunnel_trigger_channel" value="6"/>
+    <param name="tunnel_task_available" value="true"/>
     <param name="require_mavros_connection" value="true"/>
     <param name="decision_rate" value="30.0"/>
   </node>
   <test test-name="mission_scheduler_edges" pkg="mine_uav_control"
-        type="test_mission_scheduler_edges.py" time-limit="40"/>
+        type="test_mission_scheduler_edges.py" time-limit="45"/>
 </launch>

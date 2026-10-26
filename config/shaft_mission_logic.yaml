@@ -1,10 +1,12 @@
-# Task 2 logic-only prototype. No PX4 publisher is connected.
+# Task 2 production sensor contract. The assisted-task router is the only
+# component allowed to forward this node's vertical intent to PX4.
 # Positive relative depth is downward; velocity intent uses ROS ENU (+z up).
-# Required source/frame intentionally blank outside explicit SITL or test launch.
-# Without a validated independent depth producer and downward sensor, no motion.
-required_depth_source: ""
-required_range_frame: ""
-max_depth_sigma_m: 0.25
+required_depth_source: "omnilivo_planning_odometry"
+required_range_frame: "stp23_down"
+depth_topic: "/mine_uav/shaft/depth_estimate"
+range_topic: "/mine_uav/task3/downward_range"
+# The mission permits about 5 m accumulated entry-relative LIO depth error.
+max_depth_sigma_m: 5.0
 descent_speed: 0.5
 return_speed: 0.5
 # Downward laser: at <=5 m, decelerate immediately, confirm the reading, then
@@ -14,7 +16,7 @@ bottom_stop_margin: 0.8
 bottom_confirm_seconds: 0.3
 max_depth: 450.0
 max_duration: 1800.0
-entrance_tolerance: 0.5
+entrance_tolerance: 5.0
 max_depth_jump: 2.0
 max_acceleration: 0.5
 input_timeout: 0.4

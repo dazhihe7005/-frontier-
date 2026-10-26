@@ -33,6 +33,16 @@ inline bool persistentHardIntrusionRequiresVerifiedReturn(
       hard_clearance_intrusion;
 }
 
+// Both the hard cylinder and the surrounding planning zone require the first
+// replacement trajectory to increase clearance.  The distinction is only
+// whether the mission requests verified return or a local replan; accepting
+// an arbitrary new trajectory in the soft zone can send the aircraft toward
+// the same wall simply because its trajectory id changed.
+inline bool persistentObstacleReplanRequiresAwayMotion(
+    ObstacleMonitorAction action) {
+  return action == ObstacleMonitorAction::kPersistent;
+}
+
 inline bool plannedMotionIncreasesHorizontalClearance(
     const ObstaclePoint& vehicle, const ObstaclePoint& obstacle,
     const ObstaclePoint& target, double velocity_x, double velocity_y,
@@ -52,6 +62,21 @@ inline bool plannedMotionIncreasesHorizontalClearance(
       (velocity_x * away_x + velocity_y * away_y) / current_distance;
   return target_distance >= current_distance + minimum_target_gain ||
       outward_speed >= minimum_outward_speed;
+}
+
+// A live return trajectory has already been checked against the task and
+// SUPER maps. If tracking error puts the vehicle just inside the planning
+// monitor radius, freezing an explicitly outward trajectory can trap the
+// vehicle beside the wall forever. Only the soft 0.65--0.8 m band gets this
+// exception; the independent hard cylinder remains unconditional.
+inline bool verifiedReturnSoftZoneEscapeAllowed(
+    bool returning_home, bool have_valid_command,
+    bool monitor_clearance_intrusion, bool hard_clearance_intrusion,
+    const ObstaclePoint& vehicle, const ObstaclePoint& obstacle,
+    const ObstaclePoint& target, double velocity_x, double velocity_y) {
+  return returning_home && have_valid_command && monitor_clearance_intrusion &&
+      !hard_clearance_intrusion && plannedMotionIncreasesHorizontalClearance(
+          vehicle, obstacle, target, velocity_x, velocity_y);
 }
 
 // A newly observed obstacle first causes a fixed-position hold. Persistence
@@ -278,9 +303,39 @@ struct SurfaceCoverageResult {
   bool complete{false};
   std::size_t point_count{0};
   double nearest_horizontal{std::numeric_limits<double>::infinity()};
+  ObstaclePoint nearest_obstacle;
   double horizontal_span{0.0};
   double vertical_span{0.0};
 };
+
+// Debounce surface completeness in both directions. A single sparse lidar
+// packet must not alternate the command bridge between flight and hold, while
+// a newly persistent incomplete surface still stops the approach promptly.
+inline bool updateSurfaceCoverageReadiness(
+    bool obstacle_nearby, bool complete, int confirm_frames,
+    int reject_frames, int* complete_streak, int* incomplete_streak,
+    bool* ready) {
+  if (complete_streak == nullptr || incomplete_streak == nullptr ||
+      ready == nullptr) {
+    return false;
+  }
+  confirm_frames = std::max(1, confirm_frames);
+  reject_frames = std::max(1, reject_frames);
+  if (!obstacle_nearby) {
+    *complete_streak = 0;
+    *incomplete_streak = 0;
+    *ready = true;
+  } else if (complete) {
+    *complete_streak = std::min(confirm_frames, *complete_streak + 1);
+    *incomplete_streak = 0;
+    if (*complete_streak >= confirm_frames) *ready = true;
+  } else {
+    *complete_streak = 0;
+    *incomplete_streak = std::min(reject_frames, *incomplete_streak + 1);
+    if (*incomplete_streak >= reject_frames) *ready = false;
+  }
+  return !obstacle_nearby || *ready;
+}
 
 inline SurfaceCoverageResult evaluateForwardObstacleCoverage(
     const std::vector<ObstaclePoint>& points, const ObstaclePoint& vehicle,
@@ -320,8 +375,11 @@ inline SurfaceCoverageResult evaluateForwardObstacleCoverage(
       continue;
     }
     ++result.point_count;
-    result.nearest_horizontal = std::min(
-        result.nearest_horizontal, std::hypot(dx, dy));
+    const double horizontal = std::hypot(dx, dy);
+    if (horizontal < result.nearest_horizontal) {
+      result.nearest_horizontal = horizontal;
+      result.nearest_obstacle = point;
+    }
     min_forward = std::min(min_forward, forward);
     max_forward = std::max(max_forward, forward);
     min_lateral = std::min(min_lateral, lateral);

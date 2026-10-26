@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-"""Register a Gazebo body-frame 3D lidar cloud like Fast-LIO2 output.
+"""Register a Gazebo body-frame 3D lidar cloud from an arbitrary LIO pose.
 
 The Gazebo ray sensor publishes points in ``mid360_link``.  This node applies
 the current PX4/MAVROS body pose and the configured sensor mounting offset,
 then publishes the registered cloud in ``camera_init`` on the same topic used
-by the real Fast-LIO2/SUPER integration.  It is simulation-only.
+by the real localization/SUPER integration.  It is simulation-only.
 """
 
 import copy
@@ -23,13 +23,13 @@ from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud, PointCloud2
 
 
-class GazeboMid360FastlioAdapter:
+class GazeboMid360LioAdapter:
     def __init__(self):
         self.world_frame = rospy.get_param("~world_frame", "camera_init")
         self.raw_cloud_topic = rospy.get_param(
             "~raw_cloud_topic", "/mine_uav/sitl/mid360/points"
         )
-        self.odom_topic = rospy.get_param("~odom_topic", "/Odometry")
+        self.odom_topic = rospy.get_param("~odom_topic", "/omnilivo/odometry")
         self.output_topic = rospy.get_param("~output_topic", "/cloud_registered")
         self.px4_pose_topic = rospy.get_param("~px4_pose_topic", "")
         self.mavros_state_topic = rospy.get_param(
@@ -48,7 +48,12 @@ class GazeboMid360FastlioAdapter:
             0.05, float(rospy.get_param("~surface_tolerance", 0.35))
         )
         self._world_boxes = self._load_static_boxes(self.world_geometry_file)
-        self._link_history = deque(maxlen=100)
+        self.max_link_pose_delta = max(
+            0.02, float(rospy.get_param("~max_link_pose_delta", 0.15))
+        )
+        # LinkStates has no header. Keep enough receive-time history to pair
+        # the 10 Hz ray image despite Python/Gazebo scheduling jitter.
+        self._link_history = deque(maxlen=500)
         self.sensor_offset = rospy.get_param(
             "~sensor_offset", [0.1315, 0.0, 0.223]
         )
@@ -202,14 +207,14 @@ class GazeboMid360FastlioAdapter:
         for model in root.findall(".//world/model"):
             if model.findtext("static", "false").strip().lower() != "true":
                 continue
-            model_pose = GazeboMid360FastlioAdapter._box_pose(model.findtext("pose"))
+            model_pose = GazeboMid360LioAdapter._box_pose(model.findtext("pose"))
             for link in model.findall("link"):
-                link_pose = GazeboMid360FastlioAdapter._box_pose(link.findtext("pose"))
+                link_pose = GazeboMid360LioAdapter._box_pose(link.findtext("pose"))
                 for collision in link.findall("collision"):
                     size_text = collision.findtext("geometry/box/size")
                     if not size_text:
                         continue
-                    collision_pose = GazeboMid360FastlioAdapter._box_pose(
+                    collision_pose = GazeboMid360LioAdapter._box_pose(
                         collision.findtext("pose")
                     )
                     size = tuple(float(value) for value in size_text.split())
@@ -333,7 +338,7 @@ class GazeboMid360FastlioAdapter:
         the body frame first; the mask dimensions then retain their physical
         meaning regardless of mounting angle.
         """
-        rotated = GazeboMid360FastlioAdapter._rotate(
+        rotated = GazeboMid360LioAdapter._rotate(
             sensor_rotation, sensor_point
         )
         body_point = tuple(
@@ -354,7 +359,7 @@ class GazeboMid360FastlioAdapter:
             armed = self._armed
             link_history = list(self._link_history)
         if odom is None:
-            rospy.logwarn_throttle(2.0, "MID360 cloud waiting for /Odometry")
+            rospy.logwarn_throttle(2.0, "MID360 cloud waiting for LIO odometry")
             return
 
         now = rospy.Time.now()
@@ -367,7 +372,7 @@ class GazeboMid360FastlioAdapter:
 
         planner_odom = copy.deepcopy(odom)
         # The Gazebo ray cloud is sampled after the most recently received
-        # Fast-LIO pose. Placing current rays at that older pose writes a
+        # LIO pose. Placing current rays at that older pose writes a
         # travel-direction-dependent wall offset into the map; the offset
         # reverses on the return and can fill a previously free corridor.
         # Predict only the short measured timestamp gap, with a velocity cap
@@ -418,7 +423,7 @@ class GazeboMid360FastlioAdapter:
                     if (previous_alignment is None or
                             abs(previous_alignment - self._height_alignment) > 0.10):
                         rospy.loginfo(
-                            "Planner height aligned: FAST-LIO z %.3f, PX4 baro z %.3f, "
+                            "Planner height aligned: LIO z %.3f, PX4 baro z %.3f, "
                             "offset %.3f%s",
                             odom.pose.pose.position.z,
                             px4_height,
@@ -426,7 +431,7 @@ class GazeboMid360FastlioAdapter:
                             " (ground update)" if previous_alignment is not None else "",
                         )
                 height_alignment = self._height_alignment
-            # Task one requires MID360/FAST-LIO2 horizontal localization, while
+            # Task one requires MID360/LIO horizontal localization, while
             # PX4's 1018 profile deliberately retains barometric height.  Use
             # that same height for both the planning cloud and planner odometry
             # so vertical lidar drift cannot move the map through the vehicle.
@@ -441,8 +446,15 @@ class GazeboMid360FastlioAdapter:
                 link_history,
                 key=lambda item: abs((item[0] - cloud.header.stamp).to_sec()),
             )
-            if abs((stamp - cloud.header.stamp).to_sec()) > 0.04:
-                rospy.logwarn_throttle(2.0, "MID360 sensor pose is not synchronized")
+            link_pose_delta = abs((stamp - cloud.header.stamp).to_sec())
+            if link_pose_delta > self.max_link_pose_delta:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "MID360 sensor pose is not synchronized (delta %.3f s, "
+                    "limit %.3f s)",
+                    link_pose_delta,
+                    self.max_link_pose_delta,
+                )
                 return
             rotation = self._rotation_matrix(sensor_pose.orientation)
             sensor_world = sensor_pose.position
@@ -513,7 +525,7 @@ class GazeboMid360FastlioAdapter:
             # self return becomes a false obstacle around the takeoff point
             # and makes SUPER's CIRI corridor infeasible.  This filter is
             # deliberately expressed in the UAV body frame and is only for
-            # the simulation adapter; real Fast-LIO2 data must not use it.
+            # the simulation adapter; real localization data must not use it.
             if (
                 self.self_filter_enable
                 and self._inside_body_self_filter(
@@ -548,7 +560,7 @@ class GazeboMid360FastlioAdapter:
             return
 
         header = cloud.header
-        # The registered cloud and pose form one synthetic Fast-LIO2 sample.
+        # The registered cloud and pose form one synchronized LIO sample.
         # Give both the acquisition timestamp after predicting the pose to
         # that time; the downstream synchronizer then receives a real pair.
         header.stamp = planner_odom.header.stamp
@@ -615,6 +627,6 @@ class GazeboMid360FastlioAdapter:
 
 
 if __name__ == "__main__":
-    rospy.init_node("gazebo_mid360_fastlio_adapter")
-    GazeboMid360FastlioAdapter()
+    rospy.init_node("gazebo_mid360_lio_adapter")
+    GazeboMid360LioAdapter()
     rospy.spin()

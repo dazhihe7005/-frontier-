@@ -1,0 +1,17 @@
+<launch>
+  <node pkg="mine_uav_control" type="lio_px4_vision_bridge"
+        name="omnilivo_px4_vision_bridge_test" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/omnilivo_px4_vision_bridge.yaml"/>
+    <param name="temporary_sensor_pitch_in_body_deg" value="0.0"/>
+    <param name="auto_calibrate_mount_from_gravity" value="true"/>
+    <param name="gravity_alignment_duration" value="0.3"/>
+    <param name="gravity_min_samples" value="10"/>
+    <param name="jump_recovery_stable_samples" value="3"/>
+    <param name="sensor_position_in_body_x" value="0.0"/>
+    <param name="sensor_position_in_body_y" value="0.0"/>
+    <param name="sensor_position_in_body_z" value="0.0"/>
+  </node>
+  <test test-name="omnilivo_px4_vision_bridge" pkg="mine_uav_control"
+        type="test_omnilivo_px4_vision_bridge.py" time-limit="45"/>
+</launch>

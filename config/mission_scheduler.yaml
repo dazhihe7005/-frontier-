@@ -1,37 +1,54 @@
-# ROS RC indexes are zero-based. Confirm physical CH7 and CH11 in MAVROS/QGC.
+# ROS RC indexes are zero-based. Confirm physical CH9/CH6/CH7/CH11 in MAVROS/QGC.
 rc_topic: "/mavros/rc/in"
-goaf_trigger_channel: 6
+# Task 1 (goaf): physical CH9.
+goaf_trigger_channel: 8
 shaft_trigger_channel: 10
 
-# CH7 and CH11 are direction-independent edge triggers. The first stable
-# reading after startup only establishes a baseline. Either low->high or
-# high->low starts Task 1 while idle; another CH7 edge cancels a pending or
-# active Task 1. Simultaneous task edges are rejected and tasks remain mutual
-# exclusive.
+# Task 3 pressure control: physical CH6, selected by the user on 2026-10-25.
+# The pressure controller remains isolated from MAVROS; the shared assisted
+# router is the sole final command owner and publishes readiness only in OFFBOARD.
+task3_trigger_channel: 5
+task3_task_available: true
+task3_ready_timeout: 0.6
+task3_start_timeout: 4.0
+
+# Task 4 (tunnel): physical CH7. The user confirmed this production mapping on
+# 2026-10-21; it remains independent from Task 1's physical CH9 switch.
+tunnel_trigger_channel: 6
+tunnel_task_available: true
+
+# CH9, CH6, CH7 and CH11 are direction-independent edge triggers. All movement
+# while disarmed is ignored. After arming, the first stable endpoint only
+# establishes a baseline. Either low->high or high->low then starts the assigned
+# task while idle; another edge on the same channel cancels its pending or
+# active task. The middle position remains neutral and does not generate an
+# event. Simultaneous task edges are rejected and tasks remain mutual exclusive.
 low_threshold: 1300
 high_threshold: 1700
 switch_stable_time: 0.5
 rc_timeout: 1.0
 mavros_state_timeout: 2.5
 
-# Task 2 remains blocked in production until its real sensor and PX4 control
-# chain is validated. Its dedicated SITL launch may override this flag.
-shaft_task_available: false
+# Task 2 is production-routable; missing Omni/cloud/depth/range data still
+# blocks command readiness, so enabling the channel does not bypass sensors.
+shaft_task_available: true
 # Task 2 must publish status continuously. Revoke authority if its node dies
 # or if it never reaches DESCENDING/RETURNING after being selected.
 shaft_status_timeout: 0.6
 shaft_start_timeout: 4.0
+shaft_command_ready_topic: "/mine_uav/task2/command_ready"
+shaft_ready_timeout: 0.6
 
 # Task-one start gate uses the levelled planning odometry, not the raw tilted
-# Fast-LIO frame. A CH7 edge only requests Task 1; the scheduler waits
+# Omni-LIVO frame. A CH9 edge only requests Task 1; the scheduler waits
 # for a continuously stable, armed hover before opening the planning gate.
 odometry_topic: "/mine_uav/task1/odometry"
 alignment_topic: "/mine_uav/task1/planning_to_px4_alignment"
 expected_planning_frame: "task1_planning"
 odometry_timeout: 0.5
 require_odometry: true
-start_max_speed: 0.25
-start_max_vertical_speed: 0.10
+start_max_speed: 0.30
+start_max_vertical_speed: 0.20
 start_stable_time: 1.0
 start_check_timeout: 15.0
 
@@ -39,6 +56,10 @@ start_check_timeout: 15.0
 # beginning of every mission epoch and the exact first goal ID only after SUPER
 # accepts it. Until then auto_enable remains false.
 initial_goal_accepted_topic: "/mine_uav/exploration/accepted_initial_goal_id"
+# Direct lifecycle observation prevents the safety handoff from waiting behind
+# the exploration node's CPU-heavy synchronized point-cloud callback.
+goal_command_topic: "/mine_uav/super/goal_command"
+super_goal_accepted_topic: "/mine_uav/super/accepted_goal_id"
 initial_goal_accept_timeout: 30.0
 
 # Any command-bridge safety fault revokes both planning and automatic authority,
@@ -54,6 +75,10 @@ active_task_topic: "/mine_uav/mission/active_task"
 auto_enable_topic: "/mine_uav/mission/auto_enable"
 goaf_enable_topic: "/mine_uav/mission/goaf_enable"
 shaft_enable_topic: "/mine_uav/mission/shaft_enable"
+task3_enable_topic: "/mine_uav/mission/task3_enable"
+task3_command_ready_topic: "/mine_uav/task3/command_ready"
+tunnel_enable_topic: "/mine_uav/mission/tunnel_enable"
+exploration_enable_topic: "/mine_uav/mission/exploration_enable"
 return_home_topic: "/mine_uav/mission/return_home"
 switch_event_topic: "/mine_uav/mission/switch_event"
 status_topic: "/mine_uav/mission/status"

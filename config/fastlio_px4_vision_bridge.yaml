@@ -12,6 +12,11 @@ timestamp_timeout: 0.6
 max_input_jump: 2.0
 max_input_speed: 2.0
 max_input_angular_speed: 2.0
+max_physical_angular_speed: 4.0
+max_input_orientation_jump: 0.75
+high_angular_rate_orientation_stddev: 0.35
+jump_recovery_stable_samples: 5
+auto_enable_topic: "/mine_uav/mission/auto_enable"
 max_prediction_horizon: 0.35
 
 # The 10 Hz Fast-LIO input is republished at 30 Hz. Position and attitude are
@@ -39,14 +44,19 @@ zero_initial_z: true
 zero_initial_yaw: true
 zero_initial_roll_pitch: true
 
-# MID360 installation compensation in ROS FLU convention. The temporary
-# -90.9-degree yaw workaround was removed after restoring the radar to point
-# forward. The physical 25-degree forward/down tilt remains and must still be
-# applied to odometry, covariance, attitude and SUPER commands so horizontal
-# travel does not leak into PX4's height estimate.
-temporary_sensor_roll_in_body_deg: 0.0
-temporary_sensor_pitch_in_body_deg: 25.0
-temporary_sensor_yaw_in_body_deg: 0.0
+# Retained Fast-LIO compatibility path: derive roll/pitch from the stationary
+# Livox/PX4 gravity streams too, so this fallback cannot silently reintroduce
+# the former fixed mounting angle. Rotation about gravity is not estimated.
+auto_calibrate_mount_from_gravity: true
+sensor_imu_topic: "/livox/imu"
+body_imu_topic: "/mavros/imu/data_raw"
+gravity_alignment_duration: 2.0
+gravity_imu_timeout: 0.2
+gravity_min_samples: 40
+gravity_max_angular_speed: 0.15
+gravity_max_direction_spread_deg: 5.0
+gravity_max_accel_norm_relative_spread: 0.15
+gravity_alignment_max_tilt_deg: 60.0
 
 # FAST-LIO /Odometry is located at the MID360 internal IMU. This body-FLU
 # lever arm combines the CAD lidar position [0.1315, 0, 0.223] m with the

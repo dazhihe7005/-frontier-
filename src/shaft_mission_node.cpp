@@ -21,26 +21,38 @@ class ShaftMissionNode {
     private_nh_.param("control_rate", control_rate_, 20.0);
     private_nh_.param<std::string>("required_depth_source", required_depth_source_, "");
     private_nh_.param<std::string>("required_range_frame", required_range_frame_, "");
+    private_nh_.param<std::string>("enable_topic", enable_topic_,
+                                   "/mine_uav/mission/shaft_enable");
+    private_nh_.param<std::string>("depth_topic", depth_topic_,
+                                   "/mine_uav/shaft/depth_estimate");
+    private_nh_.param<std::string>("range_topic", range_topic_,
+                                   "/mine_uav/shaft/bottom_range");
+    private_nh_.param<std::string>("velocity_intent_topic", velocity_intent_topic_,
+                                   "/mine_uav/shaft/velocity_intent_enu");
+    private_nh_.param<std::string>("status_topic", status_topic_,
+                                   "/mine_uav/shaft/status");
+    private_nh_.param<std::string>("input_gate_topic", input_gate_topic_,
+                                   "/mine_uav/shaft/input_gate");
     private_nh_.param("max_depth_sigma_m", max_depth_sigma_m_, 0.25);
     if (!std::isfinite(control_rate_) || control_rate_ <= 0.0 ||
         !std::isfinite(input_timeout_) || input_timeout_ <= 0.0) {
       throw std::invalid_argument("shaft input_timeout and control_rate must be positive");
     }
-    enable_sub_ = nh_.subscribe("/mine_uav/mission/shaft_enable", 1,
+    enable_sub_ = nh_.subscribe(enable_topic_, 1,
                                 &ShaftMissionNode::enableCallback, this);
-    depth_sub_ = nh_.subscribe("/mine_uav/shaft/depth_estimate", 10,
+    depth_sub_ = nh_.subscribe(depth_topic_, 10,
                                &ShaftMissionNode::depthCallback, this);
-    range_sub_ = nh_.subscribe("/mine_uav/shaft/bottom_range", 10,
+    range_sub_ = nh_.subscribe(range_topic_, 10,
                                &ShaftMissionNode::rangeCallback, this);
     command_pub_ = nh_.advertise<geometry_msgs::TwistStamped>(
-        "/mine_uav/shaft/velocity_intent_enu", 10);
+        velocity_intent_topic_, 10);
     status_pub_ = nh_.advertise<std_msgs::String>(
-        "/mine_uav/shaft/status", 1, true);
+        status_topic_, 1, true);
     gate_pub_ = nh_.advertise<std_msgs::String>(
-        "/mine_uav/shaft/input_gate", 1, true);
+        input_gate_topic_, 1, true);
     timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate_),
                              &ShaftMissionNode::tick, this);
-    ROS_WARN("Shaft mission emits abstract velocity intent only; no PX4 output is connected");
+    ROS_INFO("Shaft mission publishes gated vertical intent for the assisted PX4 router");
   }
 
  private:
@@ -211,6 +223,12 @@ class ShaftMissionNode {
   std::string range_frame_;
   std::string required_depth_source_;
   std::string required_range_frame_;
+  std::string enable_topic_;
+  std::string depth_topic_;
+  std::string range_topic_;
+  std::string velocity_intent_topic_;
+  std::string status_topic_;
+  std::string input_gate_topic_;
   std::string last_gate_;
   double range_{INFINITY};
   double range_min_{0.0};

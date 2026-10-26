@@ -1,5 +1,8 @@
 #pragma once
 
+// Estimator-agnostic rigid-body alignment shared by Omni-LIVO production and
+// the retained Fast-LIO SITL compatibility path.
+
 #include <algorithm>
 #include <cmath>
 
@@ -82,6 +85,60 @@ inline Vector3 rotateVector(const Quaternion& rotation,
       input.z + q.w * tz + (q.x * ty - q.y * tx)};
 }
 
+inline double vectorNorm(const Vector3& input) {
+  return std::sqrt(input.x * input.x + input.y * input.y +
+                   input.z * input.z);
+}
+
+inline Vector3 normalizedVector(const Vector3& input) {
+  const double norm = vectorNorm(input);
+  if (!std::isfinite(norm) || norm < 1e-12) {
+    return Vector3();
+  }
+  return Vector3(input.x / norm, input.y / norm, input.z / norm);
+}
+
+inline double vectorDot(const Vector3& a, const Vector3& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline Vector3 vectorCross(const Vector3& a, const Vector3& b) {
+  return Vector3(a.y * b.z - a.z * b.y,
+                 a.z * b.x - a.x * b.z,
+                 a.x * b.y - a.y * b.x);
+}
+
+// Return the minimum-angle rotation that maps one measured gravity direction
+// onto another. Gravity observes roll/pitch only; this deliberately adds no
+// unobservable twist about the gravity axis.
+inline bool gravityAlignmentRotation(const Vector3& sensor_gravity,
+                                     const Vector3& body_gravity,
+                                     Quaternion* body_from_sensor) {
+  if (body_from_sensor == nullptr || vectorNorm(sensor_gravity) < 1e-12 ||
+      vectorNorm(body_gravity) < 1e-12) {
+    return false;
+  }
+  const Vector3 from = normalizedVector(sensor_gravity);
+  const Vector3 to = normalizedVector(body_gravity);
+  const double dot = std::max(-1.0, std::min(1.0, vectorDot(from, to)));
+  if (dot > 1.0 - 1e-12) {
+    *body_from_sensor = Quaternion();
+    return true;
+  }
+  if (dot < -1.0 + 1e-9) {
+    const Vector3 reference = std::abs(from.x) < 0.9
+        ? Vector3(1.0, 0.0, 0.0)
+        : Vector3(0.0, 1.0, 0.0);
+    const Vector3 axis = normalizedVector(vectorCross(from, reference));
+    *body_from_sensor = Quaternion(axis.x, axis.y, axis.z, 0.0);
+    return true;
+  }
+  const Vector3 axis = vectorCross(from, to);
+  *body_from_sensor = normalized(
+      Quaternion(axis.x, axis.y, axis.z, 1.0 + dot));
+  return true;
+}
+
 inline double yawFromQuaternion(const Quaternion& input) {
   const Quaternion q = normalized(input);
   return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
@@ -144,22 +201,24 @@ inline Quaternion bodyOrientationInPlanningFrame(
                   sensor_from_body);
 }
 
-inline MountAlignment makeMountAlignment(
+// The level planning frame deliberately starts with aircraft yaw zero, while
+// PX4's local ENU attitude already carries its magnetometer/EKF heading.  The
+// external-vision pose must start at that same heading; otherwise enabling EV
+// yaw injects a large artificial innovation and Commander can reject POSCTL
+// arming until the two yaw estimates slowly converge.
+inline Quaternion planningToReferenceHeading(
+    const Quaternion& reference_body_orientation,
+    const Quaternion& initial_body_in_planning) {
+  const double yaw_offset = yawFromQuaternion(reference_body_orientation) -
+                            yawFromQuaternion(initial_body_in_planning);
+  return quaternionFromRpy(0.0, 0.0, yaw_offset);
+}
+
+inline MountAlignment makeMountAlignmentFromBodyFromSensor(
     const Quaternion& sensor_orientation_in_map,
-    double sensor_roll_in_body, double sensor_pitch_in_body,
-    double sensor_yaw_in_body, bool zero_initial_roll_pitch,
+    const Quaternion& body_from_sensor, bool zero_initial_roll_pitch,
     bool zero_initial_yaw) {
   MountAlignment result;
-  // These are physical mounting corrections about the aircraft body axes.
-  // Apply yaw first, then the body-frame down-tilt. This is Rx * Ry * Rz,
-  // intentionally different from a conventional sensor-local RPY Euler
-  // composition. The 2026-10-13 flight log distinguishes the two orders:
-  // body-frame pitch removes the 0.53 m landing residual, sensor-local pitch
-  // leaves about 0.40 m behind.
-  const Quaternion body_from_sensor = multiply(
-      multiply(quaternionFromRpy(sensor_roll_in_body, 0.0, 0.0),
-               quaternionFromRpy(0.0, sensor_pitch_in_body, 0.0)),
-      quaternionFromRpy(0.0, 0.0, sensor_yaw_in_body));
   result.sensor_from_body = conjugate(body_from_sensor);
   const Quaternion initial_body_in_map =
       multiply(sensor_orientation_in_map, result.sensor_from_body);
@@ -173,6 +232,26 @@ inline MountAlignment makeMountAlignment(
         0.0, 0.0, -yawFromQuaternion(initial_body_in_map));
   }
   return result;
+}
+
+inline MountAlignment makeMountAlignment(
+    const Quaternion& sensor_orientation_in_map,
+    double sensor_roll_in_body, double sensor_pitch_in_body,
+    double sensor_yaw_in_body, bool zero_initial_roll_pitch,
+    bool zero_initial_yaw) {
+  // These are physical mounting corrections about the aircraft body axes.
+  // Apply yaw first, then the body-frame down-tilt. This is Rx * Ry * Rz,
+  // intentionally different from a conventional sensor-local RPY Euler
+  // composition. The 2026-10-13 flight log distinguishes the two orders:
+  // body-frame pitch removes the 0.53 m landing residual, sensor-local pitch
+  // leaves about 0.40 m behind.
+  const Quaternion body_from_sensor = multiply(
+      multiply(quaternionFromRpy(sensor_roll_in_body, 0.0, 0.0),
+               quaternionFromRpy(0.0, sensor_pitch_in_body, 0.0)),
+      quaternionFromRpy(0.0, 0.0, sensor_yaw_in_body));
+  return makeMountAlignmentFromBodyFromSensor(
+      sensor_orientation_in_map, body_from_sensor,
+      zero_initial_roll_pitch, zero_initial_yaw);
 }
 
 // Kept for compatibility with the original yaw-only tests and callers.

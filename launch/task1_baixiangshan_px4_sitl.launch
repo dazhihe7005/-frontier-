@@ -1,7 +1,7 @@
 <launch>
-  <!-- Autonomous exploration of the surveyed Bai Xiang Shan tunnel model.
-       This wrapper keeps the canonical 1018 no-GPS vehicle and sensor chain,
-       but expands only the scenario-specific search and altitude bounds. -->
+  <!-- Backward-compatible filename for the Task-4 tunnel SITL. It keeps the
+       canonical 1018 no-GPS vehicle and the previously flight-tested Task-1
+       tunnel tuning, but the scheduler now reports active_task=4. -->
   <arg name="gui" default="true"/>
   <arg name="rviz" default="true"/>
   <arg name="allow_auto_arm" default="true"/>
@@ -15,10 +15,15 @@
     <arg name="rviz" value="$(arg rviz)"/>
     <arg name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <arg name="auto_enable_delay" value="$(arg auto_enable_delay)"/>
+    <!-- Task 4 uses the confirmed physical CH7/index 6 mapping. Task 1 now
+         uses physical CH9/index 8, so both remain independently selectable. -->
+    <arg name="sitl_exploration_trigger_channel" value="6"/>
+    <arg name="tunnel_trigger_channel" value="6"/>
+    <arg name="tunnel_task_available" value="true"/>
     <arg name="takeoff_height" value="$(arg takeoff_height)"/>
     <!-- The irregular-mesh contact settles before arming, and PX4's
          barometric height reference is allowed to converge independently of
-         FAST-LIO (external vision remains XY-only). The generic operator
+         Omni-LIVO (external vision remains XY-only). The generic operator
          waits for a stable ground Z, then commands a relative 1.5 m climb. -->
     <arg name="vision_stable_duration" value="3.0"/>
     <arg name="world" value="$(find mine_uav_control)/worlds/baixianshan_tunnel_sitl.world"/>
@@ -35,6 +40,10 @@
     <arg name="spawn_yaw" value="0.0"/>
     <arg name="takeoff_yaw_offset" value="0.0"/>
     <arg name="mission_heading_offset" value="0.0"/>
+    <!-- Retain the already validated tunnel-only guidance layer unchanged. -->
+    <arg name="mission_profile" value="tunnel"/>
+    <arg name="corridor_centering_enabled" value="true"/>
+    <arg name="corridor_preview_enabled" value="true"/>
     <!-- At this selected start, the chosen main-drift direction is
          camera_init +X. -->
     <arg name="use_absolute_mission_heading" value="true"/>
@@ -81,7 +90,7 @@
     <!-- Once the vehicle has stopped progressing at a closed, already
          surveyed boundary, wait long enough for map closure (4 s) but avoid
          a half-minute stationary gap before the verified return. -->
-    <arg name="no_frontier_timeout" value="8.0"/>
+    <arg name="no_frontier_timeout" value="7.0"/>
     <arg name="return_map_timeout" value="8.0"/>
     <arg name="return_home_arrival_radius" value="0.75"/>
     <arg name="min_forward_super_clearance" value="1.10"/>
@@ -94,6 +103,8 @@
     <arg name="dead_end_reversal_delay" value="4.0"/>
     <arg name="min_observation_height_above_home" value="0.0"/>
     <arg name="max_observation_height_above_home" value="7.0"/>
+    <arg name="tunnel_min_planning_height" value="-3.0"/>
+    <arg name="tunnel_max_planning_height" value="8.0"/>
     <arg name="cruise_height_above_home" value="0.0"/>
     <arg name="bridge_max_horizontal_radius" value="220.0"/>
     <arg name="bridge_min_height" value="-3.0"/>

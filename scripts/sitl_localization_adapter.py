@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Expose PX4 SITL odometry through the Fast-LIO2 task-one contract.
+"""Expose PX4 SITL odometry through the generic LIO task-one contract.
 
 This node only adapts localization and publishes visualization/health data. It
 does not emulate RC input, arm PX4, change flight mode, or generate lidar data.
@@ -33,7 +33,7 @@ class SitlLocalizationAdapter:
             "/mine_uav/sitl/px4_path", Path, queue_size=1, latch=True
         )
         self.alignment_pub = rospy.Publisher(
-            "/mine_uav/task1/fastlio_to_px4_alignment",
+            "/mine_uav/task1/lio_to_px4_alignment",
             TransformStamped,
             queue_size=1,
             latch=True,

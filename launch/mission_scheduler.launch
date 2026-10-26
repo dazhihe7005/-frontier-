@@ -4,7 +4,8 @@
   <node pkg="mine_uav_control"
         type="mission_scheduler"
         name="mission_scheduler"
-        output="screen">
+        output="screen"
+        required="true">
     <rosparam command="load" file="$(arg config)" />
   </node>
 </launch>

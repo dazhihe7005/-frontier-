@@ -20,6 +20,7 @@
 #include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/String.h>
+#include <std_msgs/UInt8.h>
 #include <std_msgs/UInt64.h>
 #include <std_srvs/SetBool.h>
 #include <std_srvs/Trigger.h>
@@ -29,6 +30,7 @@
 #include <pcl/point_types.h>
 
 #include "mine_uav_control/corridor_centering.hpp"
+#include "mine_uav_control/exploration_mission_profile.hpp"
 
 namespace mine_uav_control {
 
@@ -130,10 +132,14 @@ class SuperExplorationDecider {
 
   void synchronizedCallback(const Cloud::ConstPtr& cloud,
                             const Odom::ConstPtr& odom);
+  void odometryProgressCallback(const Odom::ConstPtr& odom);
   void freeRayCallback(const Cloud::ConstPtr& cloud);
   void superOccupiedCallback(const Cloud::ConstPtr& cloud);
   void decisionTimerCallback(const ros::TimerEvent& event);
   void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
+  void activeTaskCallback(const std_msgs::UInt8::ConstPtr& message);
+  void updateScheduledMissionSelection();
+  void setMissionEnabled(bool enabled, const std::string& source);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
   void obstacleReplanCallback(const std_msgs::Empty::ConstPtr& msg);
   void rejectedGoalCallback(const std_msgs::UInt64::ConstPtr& msg);
@@ -145,10 +151,16 @@ class SuperExplorationDecider {
                      std_srvs::Trigger::Response& response);
 
   bool loadParameters();
+  bool batteryReadyForMissionStart(std::string* detail = nullptr) const;
+  ros::Time freshnessReferenceTime() const;
   bool dataIsFresh() const;
   void updateMap(const sensor_msgs::PointCloud2& cloud,
                  const geometry_msgs::PoseStamped& pose);
-  void updateDirectionalEvidence(const sensor_msgs::PointCloud2& cloud,
+  void updateMap(const pcl::PointCloud<pcl::PointXYZ>& input,
+                 const ros::Time& cloud_stamp,
+                 const geometry_msgs::PoseStamped& pose);
+  void updateDirectionalEvidence(
+                                 const pcl::PointCloud<pcl::PointXYZ>& input,
                                  const geometry_msgs::PoseStamped& pose);
   void updateCorridorCentering(
       const std::vector<double>& left_wall_laterals,
@@ -156,11 +168,27 @@ class SuperExplorationDecider {
       double vehicle_lateral,
       bool front_obstacle_visible);
   bool corridorCenteringActive() const;
+  bool corridorGuidanceEnabled() const;
+  double minimumMissionObservationHeight() const;
+  double maximumMissionObservationHeight() const;
+  double preferredMissionObservationHeight() const;
+  double maximumReturnHeight() const;
+  bool missionObservationHeightAllowed(double height,
+                                       double margin = 0.0) const;
+  double effectiveForwardLookaheadDistance() const;
+  double effectiveExplorationGoalQueueHorizon() const;
   void resetCorridorCentering();
   CorridorPreviewEstimate estimateForwardCorridorPreview(
       const VoxelSet& reachable, double current_progress,
       double current_lateral) const;
+  void updateCorridorPreviewPreference(const VoxelSet& reachable);
+  void resetCorridorPreviewPreference();
+  CorridorPreviewEstimate estimateReturnCorridorPreview(
+      const geometry_msgs::Point& start, double return_heading) const;
+  bool applyReturnCorridorPreview(const geometry_msgs::Point& start,
+                                  geometry_msgs::Point* target) const;
   ThreeWallCoverage evaluateThreeWallCoverage() const;
+  bool task1EndWallReturnReady(const ThreeWallCoverage& coverage) const;
   MapClosureStatus evaluateMapClosure(
       const std::vector<FrontierCandidate>& candidates,
       const VoxelSet& reachable,
@@ -178,6 +206,9 @@ class SuperExplorationDecider {
   bool isOccupied(const VoxelKey& key) const;
   bool isClearForVehicle(const VoxelKey& key,
                          double horizontal_radius = -1.0) const;
+  void rebuildDecisionClearanceIndex();
+  bool decisionGridIndex(const VoxelKey& key, std::size_t* index) const;
+  bool decisionGridCoversClearance(const VoxelKey& key) const;
   bool isKnownFree(const VoxelKey& key) const;
   VoxelSet reachableFreeVoxels() const;
   std::vector<FrontierCandidate> findFrontiers(VoxelSet& reachable) const;
@@ -206,7 +237,8 @@ class SuperExplorationDecider {
   bool publishLateralDetourGoal(
       const VoxelSet& reachable,
       const std::vector<FrontierCandidate>& candidates);
-  bool publishConnectedTurnContinuation(const VoxelSet& reachable);
+  bool publishConnectedTurnContinuation(
+      const VoxelSet& reachable, bool continuous_handover = false);
   bool reverseMissionHeadingAtDeadEnd(const MapClosureStatus& closure);
   bool tryForwardHandover(const VoxelSet& reachable);
   bool publishEndApproachGoal(const ThreeWallCoverage& coverage);
@@ -250,10 +282,12 @@ class SuperExplorationDecider {
   std::unique_ptr<Synchronizer> synchronizer_;
 
   ros::Subscriber return_request_subscriber_;
+  ros::Subscriber progress_odometry_subscriber_;
   ros::Subscriber obstacle_replan_subscriber_;
   ros::Subscriber rejected_goal_subscriber_;
   ros::Subscriber accepted_goal_subscriber_;
   ros::Subscriber mission_enable_subscriber_;
+  ros::Subscriber active_task_subscriber_;
   ros::Subscriber battery_subscriber_;
   ros::Subscriber free_ray_subscriber_;
   ros::Subscriber super_occupied_subscriber_;
@@ -271,6 +305,42 @@ class SuperExplorationDecider {
 
   std::unordered_map<VoxelKey, uint8_t, VoxelKeyHash> voxels_;
   std::unordered_map<VoxelKey, int16_t, VoxelKeyHash> occupancy_evidence_;
+  // One decision repeatedly asks the same vehicle-envelope question during
+  // flood fill, frontier extraction, closure evaluation, and queue
+  // validation. The map is immutable on this node's single callback thread
+  // for the duration of that decision, so cache both safety radii once.
+  mutable std::unordered_map<VoxelKey, bool, VoxelKeyHash>
+      decision_vehicle_clearance_cache_;
+  mutable std::unordered_map<VoxelKey, bool, VoxelKeyHash>
+      decision_preferred_clearance_cache_;
+  bool decision_clearance_cache_active_{false};
+  // A decision can test more than 100k reachable cells. Scanning hundreds of
+  // neighboring hash cells for every test made runtime grow to 4--10 seconds.
+  // Build one exact occupied-voxel spatial index for the immutable decision
+  // snapshot and retain the same anisotropic clearance predicate per query.
+  pcl::PointCloud<pcl::PointXYZ>::Ptr decision_occupied_points_{
+      new pcl::PointCloud<pcl::PointXYZ>};
+  std::vector<VoxelKey> decision_occupied_keys_;
+  // Reachability asks the same free/blocked questions millions of times. A
+  // compact local grid avoids repeated unordered-map/set probes while keeping
+  // the exact voxel states and anisotropic hard-clearance stencil. Bounds are
+  // clipped to known voxels inside the rolling decision window, so a large
+  // configured radius never allocates an empty cubic world.
+  VoxelKey decision_grid_center_;
+  VoxelKey decision_grid_min_;
+  int decision_grid_size_x_{0};
+  int decision_grid_size_y_{0};
+  int decision_grid_size_z_{0};
+  int decision_grid_core_radius_cells_{0};
+  std::vector<uint8_t> decision_grid_free_;
+  std::vector<uint8_t> decision_grid_blocked_;
+  pcl::KdTreeFLANN<pcl::PointXYZ> decision_occupied_tree_;
+  bool decision_clearance_index_ready_{false};
+  mutable std::vector<int> decision_clearance_indices_;
+  mutable std::vector<float> decision_clearance_squared_distances_;
+  bool decision_forward_route_evaluated_{false};
+  bool decision_forward_route_available_{false};
+  LocalRouteCandidate decision_forward_route_;
   VoxelSet last_scan_hits_;
   ros::Time last_scan_stamp_;
   std::vector<geometry_msgs::Point> covered_goals_;
@@ -290,6 +360,9 @@ class SuperExplorationDecider {
   bool have_last_centerline_position_{false};
 
   geometry_msgs::PoseStamped current_pose_;
+  geometry_msgs::PoseStamped latest_progress_pose_;
+  ros::Time last_progress_odometry_time_;
+  bool have_progress_odometry_{false};
   geometry_msgs::PoseStamped home_pose_;
   geometry_msgs::PoseStamped current_goal_;
   uint64_t next_goal_id_{1};
@@ -298,6 +371,12 @@ class SuperExplorationDecider {
   uint64_t initial_accepted_goal_id_{0};
   double active_goal_initial_distance_{0.0};
   ros::Time last_sync_time_;
+  // decisionTimerCallback runs on the same ROS callback queue as the map
+  // subscribers.  A large accumulated map can make one decision take longer
+  // than the nominal freshness timeout, but the map cannot change underneath
+  // that callback.  Hold its entry time so one immutable snapshot does not
+  // declare itself stale halfway through its own validation pass.
+  ros::Time decision_snapshot_time_;
   ros::Time first_data_time_;
   ros::Time last_frontier_time_;
   ros::Time last_motion_progress_time_;
@@ -327,6 +406,16 @@ class SuperExplorationDecider {
   // Only normal outbound exploration goals may consume the rolling queue.
   // Return, end-wall, and lateral escape goals always plan from fresh state.
   bool active_goal_allows_rolling_handover_{false};
+  // Task 4 follows a tunnel centreline rather than the fixed entry axis. A
+  // significant bend is only committed after SUPER accepts that goal. Once
+  // committed, stale entry-axis/frontier choices must not pull the aircraft
+  // back across the junction while it is finishing the selected branch.
+  bool active_goal_commits_tunnel_heading_{false};
+  double active_goal_tunnel_heading_yaw_{0.0};
+  bool active_goal_updates_exploration_heading_{false};
+  double active_goal_exploration_heading_yaw_{0.0};
+  bool tunnel_route_locked_{false};
+  double tunnel_route_heading_yaw_{0.0};
   bool have_last_exploration_route_heading_{false};
   double last_exploration_route_heading_yaw_{0.0};
   bool exploration_started_{false};
@@ -335,9 +424,12 @@ class SuperExplorationDecider {
   bool mission_finished_{false};
   bool enabled_{true};
   // In the laboratory test mode, autonomy must be started by a fresh
-  // scheduler enable transition (CH7 low -> high), never by a stale latched
+  // scheduler enable transition for the selected task, never by a stale latched
   // state or by the first odometry message seen at node startup.
   bool require_mission_enable_edge_{false};
+  bool follow_active_task_profile_{false};
+  bool scheduler_mission_enabled_{false};
+  uint8_t scheduler_active_task_{0};
   bool mission_start_pending_{false};
   bool return_requested_{false};
   bool have_battery_{false};
@@ -354,6 +446,9 @@ class SuperExplorationDecider {
   std::size_t map_growth_reference_count_{0};
 
   double mission_heading_yaw_{0.0};
+  ExplorationMissionProfile mission_profile_{
+      ExplorationMissionProfile::kGoaf};
+  std::string mission_profile_name_{"goaf"};
   // Scenario-only rotation from the vehicle yaw captured at task start to
   // the preferred outbound exploration direction.
   double mission_heading_offset_{0.0};
@@ -384,6 +479,7 @@ class SuperExplorationDecider {
   std::string return_request_topic_;
   std::string obstacle_replan_topic_;
   std::string mission_enable_topic_;
+  std::string active_task_topic_;
   std::string battery_topic_;
   std::string status_topic_;
   std::string finished_topic_;
@@ -396,12 +492,14 @@ class SuperExplorationDecider {
   double voxel_resolution_{0.5};
   double max_map_radius_{40.0};
   double raycast_max_range_{30.0};
-  double frontier_search_radius_{30.0};
-  double max_exploration_radius_from_home_{35.0};
+  double frontier_search_radius_{20.0};
+  // Optional scenario fence. Zero disables distance-based exploration
+  // termination; production missions use terminal/no-route and battery return.
+  double max_exploration_radius_from_home_{0.0};
   double min_goal_distance_{2.0};
   double goal_reached_distance_{1.0};
   double goal_timeout_{30.0};
-  double no_frontier_timeout_{10.0};
+  double no_frontier_timeout_{7.0};
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
   double vehicle_radius_{0.4};
@@ -415,10 +513,21 @@ class SuperExplorationDecider {
   double vertical_vehicle_clearance_above_{0.5};
   double min_observation_height_above_home_{-0.25};
   double max_observation_height_above_home_{0.3};
+  // Task 4 follows an inclined connected tunnel in the absolute levelled
+  // planning frame. These limits intentionally mirror SUPER's flight_min_z
+  // and flight_max_z instead of remaining tied to the launch-hover height.
+  double tunnel_min_planning_height_{-5.0};
+  double tunnel_max_planning_height_{8.0};
   double data_timeout_{1.0};
   double active_goal_data_grace_{2.0};
   double decision_rate_{2.0};
   double sync_slop_{0.08};
+  // Percentage-based policy is optional because PX4 installations without a
+  // current sensor/capacity model report a load-dependent voltage estimate.
+  bool battery_start_guard_enabled_{true};
+  bool battery_percentage_return_enabled_{true};
+  double battery_start_minimum_percentage_{0.50};
+  double battery_start_minimum_voltage_{22.2};
   double battery_return_threshold_{0.20};
   double battery_return_confirm_duration_{3.0};
   double battery_return_hysteresis_{0.03};
@@ -427,6 +536,9 @@ class SuperExplorationDecider {
   double return_max_height_above_home_{0.3};
   double return_home_arrival_radius_{0.0};
   double return_breadcrumb_spacing_{4.0};
+  // Task 4 replays bends closely; the common four-metre trace is too sparse
+  // for a strict no-branch return around a narrow corner.
+  double tunnel_return_breadcrumb_spacing_{1.0};
   double return_segment_length_{3.0};
   double return_goal_handover_distance_{2.0};
   double return_map_timeout_{2.0};
@@ -459,14 +571,20 @@ class SuperExplorationDecider {
   double corridor_preview_lateral_step_{0.25};
   double corridor_preview_max_lateral_slope_{1.0};
   int corridor_preview_min_slices_{6};
+  double corridor_preview_min_reliable_center_band_width_{0.75};
   double corridor_preview_min_center_shift_{0.25};
   double corridor_preview_min_width_contraction_{0.5};
   double corridor_preview_max_goal_shift_{1.0};
+  bool corridor_preview_preference_valid_{false};
+  double corridor_preview_preferred_lateral_{0.0};
+  int corridor_preview_missing_streak_{0};
   double front_obstacle_range_{6.0};
   double front_obstacle_min_progress_{8.0};
   double front_obstacle_sector_deg_{24.0};
   double front_obstacle_min_lateral_span_{1.0};
   double front_obstacle_min_vertical_span_{0.8};
+  double goaf_front_obstacle_min_lateral_span_{0.5};
+  double goaf_front_obstacle_min_vertical_span_{0.5};
   double forward_corridor_half_width_{2.0};
   double forward_goal_lateral_search_width_{2.0};
   double lateral_route_switch_clearance_advantage_{0.25};
@@ -474,8 +592,9 @@ class SuperExplorationDecider {
   double forward_progress_weight_{2.0};
   double forward_lateral_penalty_{2.0};
   double forward_height_penalty_{1.0};
-  double forward_goal_handover_distance_{2.0};
+  double forward_goal_handover_distance_{3.0};
   double forward_lookahead_distance_{4.0};
+  double goaf_forward_lookahead_distance_{-1.0};
   double max_frontier_goal_distance_{4.0};
   double max_frontier_goal_vertical_step_{0.5};
   double max_outbound_backtrack_{2.0};
@@ -483,11 +602,15 @@ class SuperExplorationDecider {
   bool exploration_goal_queue_enabled_{true};
   int exploration_goal_queue_max_future_goals_{3};
   double exploration_goal_queue_horizon_{10.0};
-  double exploration_goal_queue_spacing_{2.5};
+  double goaf_exploration_goal_queue_horizon_{-1.0};
+  double exploration_goal_queue_spacing_{3.5};
   double exploration_goal_queue_end_reserve_{1.0};
   bool connected_turn_continuation_enabled_{true};
   double connected_turn_max_angle_deg_{80.0};
   double connected_turn_min_new_space_{1.0};
+  double tunnel_route_lock_min_turn_deg_{35.0};
+  double tunnel_connected_turn_max_angle_deg_{120.0};
+  double tunnel_straight_preference_angle_deg_{35.0};
   double cruise_height_above_home_{0.0};
   double directional_vertical_tolerance_{1.5};
   double directional_floor_exclusion_{0.5};
@@ -503,6 +626,8 @@ class SuperExplorationDecider {
   double wall_coverage_end_center_half_width_{1.0};
   double wall_coverage_end_approach_distance_{6.0};
   double wall_coverage_end_standoff_distance_{3.0};
+  bool task1_end_wall_return_enabled_{true};
+  double task1_end_wall_return_distance_{5.0};
   int side_wall_missing_confirm_frames_{8};
   int front_obstacle_confirm_frames_{3};
   int front_obstacle_min_points_{20};

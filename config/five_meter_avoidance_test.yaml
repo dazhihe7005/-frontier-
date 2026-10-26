@@ -9,6 +9,8 @@ alignment_topic: /mine_uav/task1/planning_to_px4_alignment
 world_frame: task1_planning
 
 # MAVROS RC channel indexes are zero based: 6 is physical CH7.
+# CH7 is now also Task 4's production trigger. This isolated five-metre test
+# must never run alongside mission_scheduler or the normal exploration stack.
 trigger_channel: 6
 low_threshold: 1300
 high_threshold: 1700

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
-"""Emulate the task-one pilot procedure in PX4 SITL only.
+"""Emulate the shared exploration pilot procedure in PX4 SITL only.
 
 The node pre-streams a hover setpoint, enters OFFBOARD, arms, climbs to the
-configured height, holds for one second, and only then raises emulated CH7.
-It does not publish Fast-LIO2 odometry or lidar data.
+configured height, holds for one second, and only then raises the configured
+emulated exploration switch.
+It does not publish localization odometry or lidar data.
 """
 
 import math
@@ -26,6 +27,9 @@ class SitlTaskOperator:
         )
         self.allow_auto_arm = bool(rospy.get_param("~allow_auto_arm", True))
         self.takeoff_height = max(0.5, float(rospy.get_param("~takeoff_height", 1.5)))
+        self.takeoff_climb_rate = min(
+            0.7, max(0.1, float(rospy.get_param("~takeoff_climb_rate", 0.35)))
+        )
         self.ground_z_stable_duration = max(
             1.0, float(rospy.get_param("~ground_z_stable_duration", 3.0))
         )
@@ -54,6 +58,14 @@ class SitlTaskOperator:
             2.0, float(rospy.get_param("~auto_enable_delay", 8.0))
         )
         self.task_switch_pwm = int(rospy.get_param("~task_switch_pwm", 1000))
+        configured_trigger = int(
+            rospy.get_param("~exploration_trigger_channel", -1)
+        )
+        if configured_trigger < 0:
+            configured_trigger = 10 if self.task_switch_pwm >= 1700 else 6
+        if configured_trigger > 17:
+            raise ValueError("exploration_trigger_channel must be in [0, 17]")
+        self.exploration_trigger_channel = configured_trigger
         self.bridge_ready_topic = rospy.get_param(
             "~bridge_ready_topic", "/mine_uav/task1/command_ready"
         )
@@ -71,11 +83,15 @@ class SitlTaskOperator:
         self._ground_z_history = deque(maxlen=400)
         self._start = rospy.Time.now()
         self._origin = None
+        self._takeoff_command_z = None
+        self._takeoff_command_stamp = rospy.Time(0)
         self._prestream_start = rospy.Time(0)
         self._hover_start = rospy.Time(0)
         self._last_mode_request = rospy.Time(0)
         self._last_arm_request = rospy.Time(0)
         self._ready = False
+        self._takeoff_arm_seen = False
+        self._takeoff_aborted = False
         self._bridge_handoff_complete = False
         self._vision_streaming_since = rospy.Time(0)
 
@@ -96,6 +112,15 @@ class SitlTaskOperator:
 
     def _state_callback(self, message):
         with self._lock:
+            if message.armed:
+                self._takeoff_arm_seen = True
+            elif (self._takeoff_arm_seen and self._state.armed and
+                  not self._ready):
+                self._takeoff_aborted = True
+                rospy.logerr(
+                    "SITL pre-task takeoff disarmed unexpectedly; automatic "
+                    "re-arm is latched off for this run"
+                )
             self._state = message
 
     def _odom_callback(self, message):
@@ -132,7 +157,7 @@ class SitlTaskOperator:
             # leave OFFBOARD before SUPER finishes its first plan. Never
             # resume this publisher after the bridge has taken ownership.
             self._publish_takeoff_target(now)
-        # Once the simulated pilot raises CH7, keep it high for this launch.
+        # Once the simulated pilot raises the task switch, keep it high.
         # Dropping it merely because AUTO.LAND disarmed the vehicle creates a
         # second switch edge and can start task one again immediately after a
         # successful mission.
@@ -141,16 +166,27 @@ class SitlTaskOperator:
     def _publish_rc(self, auto_enabled):
         message = RCIn()
         message.header.stamp = rospy.Time.now()
-        message.channels = [1500] * 11
-        # Legacy task_switch_pwm selects the SITL scenario only. Publish one
-        # stable edge on CH7 for task one or CH11 for task two; CH6 is unused.
+        message.channels = [1500] * max(
+            11, self.exploration_trigger_channel + 1
+        )
+        # Keep known task channels at a stable baseline, then raise exactly the
+        # configured exploration channel. task_switch_pwm remains a fallback
+        # for older Task-1/Task-2 launch files.
         message.channels[6] = 1000
+        message.channels[8] = 1000
+        message.channels[9] = 1000
         message.channels[10] = 1000
-        trigger_index = 10 if self.task_switch_pwm >= 1700 else 6
-        message.channels[trigger_index] = 2000 if auto_enabled else 1000
+        message.channels[self.exploration_trigger_channel] = (
+            2000 if auto_enabled else 1000
+        )
         self.rc_pub.publish(message)
 
     def _advance_takeoff(self, now, state, odom, ground_z_history):
+        if self._takeoff_aborted:
+            rospy.logerr_throttle(
+                5.0, "SITL takeoff aborted; restart the regression before retrying"
+            )
+            return
         if odom is None or not state.connected:
             return
         if not rospy.get_param("/use_sim_time", False):
@@ -161,7 +197,7 @@ class SitlTaskOperator:
         if (vision_streaming_since.is_zero() or
                 (now - vision_streaming_since).to_sec() < self.vision_stable_duration):
             rospy.loginfo_throttle(
-                2.0, "Waiting for stable FAST-LIO2 external vision before SITL takeoff"
+                2.0, "Waiting for stable LIO external vision before SITL takeoff"
             )
             return
         if self._origin is None:
@@ -188,6 +224,8 @@ class SitlTaskOperator:
                 pose.position.z,
                 pose.orientation,
             )
+            self._takeoff_command_z = self._origin[2]
+            self._takeoff_command_stamp = now
             self._prestream_start = now
             rospy.loginfo(
                 "SITL pre-task takeoff: ground z=%.2f, target z=%.2f",
@@ -195,7 +233,11 @@ class SitlTaskOperator:
                 self._origin[2] + self.takeoff_height,
             )
 
-        target = self._publish_takeoff_target(now)
+        # A position step to the full takeoff altitude lets PX4 climb at its
+        # own (much higher) default limit and invalidates the Task-1 speed
+        # regression.  Ramp only after arming, below the production 0.8 m/s
+        # mission limit.
+        target = self._publish_takeoff_target(now, advance=state.armed)
 
         if (now - self._prestream_start).to_sec() < self.prestream_duration:
             return
@@ -228,13 +270,22 @@ class SitlTaskOperator:
         else:
             self._hover_start = rospy.Time(0)
 
-    def _publish_takeoff_target(self, now):
+    def _publish_takeoff_target(self, now, advance=False):
         target = PoseStamped()
         target.header.stamp = now
         target.header.frame_id = "map"
         target.pose.position.x = self._origin[0]
         target.pose.position.y = self._origin[1]
-        target.pose.position.z = self._origin[2] + self.takeoff_height
+        final_z = self._origin[2] + self.takeoff_height
+        if self._takeoff_command_z is None:
+            self._takeoff_command_z = self._origin[2]
+        if advance:
+            dt = max(0.0, min(0.2, (now - self._takeoff_command_stamp).to_sec()))
+            self._takeoff_command_z = min(
+                final_z, self._takeoff_command_z + self.takeoff_climb_rate * dt
+            )
+        self._takeoff_command_stamp = now
+        target.pose.position.z = self._takeoff_command_z
         target_yaw = (
             self._yaw_from_quaternion(self._origin[3]) +
             self.takeoff_yaw_offset

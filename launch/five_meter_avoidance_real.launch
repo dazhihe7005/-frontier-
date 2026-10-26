@@ -72,7 +72,12 @@
   <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>
 
   <node pkg="mine_uav_control" type="task1_perception_gate"
-        name="five_meter_perception_gate" output="screen" required="true"/>
+        name="five_meter_perception_gate" output="screen" required="true">
+    <!-- This disabled-by-default historical flight check intentionally keeps
+         its Fast-LIO input while sharing the generic LIO alignment bridge. -->
+    <param name="input_cloud_topic" value="/cloud_registered"/>
+    <param name="input_odom_topic" value="/Odometry"/>
+  </node>
 
   <node pkg="mine_uav_control" type="five_meter_avoidance_test"
         name="five_meter_avoidance_test" output="screen" required="true">

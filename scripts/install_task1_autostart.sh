@@ -16,5 +16,6 @@ sudo systemctl enable mine-uav-task1.service
 
 echo 'enabled mine-uav-task1.service for the next boot'
 echo 'disabled mine-uav-five-meter.service for the next boot'
+echo 'sender will start before the radar/camera/PX4 hardware waits'
 echo 'enabled the preflight clock guard; NTP is restored when Task-1 stops'
 echo 'no physical flight stack was started or stopped in this session'

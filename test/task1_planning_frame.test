@@ -2,6 +2,13 @@
   <node pkg="mine_uav_control" type="task1_perception_gate"
         name="task1_perception_gate_test" output="screen" required="true">
     <param name="require_vision_healthy" value="false"/>
+    <param name="require_vision_heading_alignment" value="true"/>
+    <param name="additional_cloud_enable_topic"
+           value="/test/mission/task3_enable"/>
+    <param name="auxiliary_input_odom_topic"
+           value="/test/omnilivo/control_odometry"/>
+    <param name="auxiliary_output_odom_topic"
+           value="/test/task3/obstacle_odometry"/>
   </node>
   <test test-name="task1_planning_frame" pkg="mine_uav_control"
         type="test_task1_planning_frame.py" time-limit="30"/>

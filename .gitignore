@@ -3,6 +3,7 @@ build/
 devel/
 install/
 log/
+.catkin_tools/
 
 # Python cache
 __pycache__/

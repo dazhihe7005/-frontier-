@@ -1,0 +1,87 @@
+# Control-facing state is the latest corrected LIO/VIO state propagated with
+# fresh IMU samples on a callback queue independent of mapping computation.
+input_topic: "/omnilivo/control_odometry"
+output_topic: "/mavros/vision_pose/pose_cov"
+input_frame: "camera_init"
+output_frame: "odom"
+output_child_frame: "base_link"
+
+# Re-publish the validated IMU-rate state to PX4 at a bounded external-vision
+# rate. The corrected map/odometry stream remains the planner input.
+publish_rate: 30.0
+data_timeout: 0.3
+timestamp_timeout: 0.6
+max_input_jump: 2.0
+# Translation still fails closed. For rotation, 2 rad/s is the prediction
+# threshold; continuous finite motion below the physical limit stays online
+# with prediction paused and covariance raised.
+max_input_speed: 2.0
+max_input_angular_speed: 2.0
+max_physical_angular_speed: 4.0
+max_input_orientation_jump: 0.75
+high_angular_rate_orientation_stddev: 0.35
+# Reject the first rate outlier without forwarding it. A second consecutive
+# over-limit sample still latches the fail-closed bridge within about 0.2 s at
+# the 10 Hz LiDAR rate. Position jumps and timestamp faults remain immediate.
+input_rate_fault_confirm_samples: 2
+# A discontinuity latch clears only with automatic authority removed and a
+# stable run of samples. Recovery preserves alignment and never re-origins an
+# armed aircraft.
+jump_recovery_stable_samples: 5
+auto_enable_topic: "/mine_uav/mission/auto_enable"
+max_prediction_horizon: 0.35
+prediction_position_noise_rate: 0.15
+prediction_orientation_noise_rate: 0.20
+position_stddev: 0.05
+orientation_stddev: 0.10
+max_input_position_variance: 4.0
+
+# Stop PX4 external vision on Omni-LIVO translation degeneracy, stale health,
+# invalid covariance, timestamp faults, jumps, or MAVROS loss.
+require_localization_health: true
+localization_health_topic: "/omnilivo/localization_healthy"
+localization_health_timeout: 0.5
+# Omni-LIVO's IMU propagation can cross its optimized-anchor boundary for one
+# or two callbacks under load. Keep streaming through those sub-300 ms false
+# pulses, but fail closed on a sustained unhealthy state or a stale topic.
+localization_unhealthy_grace: 0.30
+
+zero_initial_xy: true
+zero_initial_z: true
+zero_initial_yaw: true
+zero_initial_roll_pitch: true
+
+# Derive the MID360-to-body roll/pitch from the two stationary gravity vectors
+# on every process start. No fixed mounting angle is used. Rotation about the
+# gravity axis is intentionally unobserved and is not estimated.
+auto_calibrate_mount_from_gravity: true
+sensor_imu_topic: "/livox/imu"
+body_imu_topic: "/mavros/imu/data_raw"
+gravity_alignment_duration: 2.0
+gravity_imu_timeout: 0.2
+gravity_min_samples: 40
+gravity_max_angular_speed: 0.15
+gravity_max_direction_spread_deg: 5.0
+gravity_max_accel_norm_relative_spread: 0.15
+# This is only a fail-closed plausibility bound, not an angle compensation.
+gravity_alignment_max_tilt_deg: 60.0
+
+# Body-FLU position of the MID360 internal IMU: CAD lidar position plus the
+# calibrated lidar-to-IMU translation. PX4 EKF2_EV_POS_X/Y/Z stay zero.
+sensor_position_in_body_x: 0.133803
+sensor_position_in_body_y: -0.011364
+sensor_position_in_body_z: 0.173245
+
+require_mavros_connection: true
+allow_alignment_while_armed: false
+# A display-mode change must never establish a new flight origin.
+auto_realign_after_odometry_timeout: false
+
+# Preserve the task/planner convention (initial yaw zero), but start PX4
+# external vision at PX4's already-established EKF heading. This prevents an
+# artificial yaw innovation from delaying POSCTL arming when the aircraft is
+# powered on at a different compass heading.
+align_vision_heading_to_mavros: true
+mavros_attitude_topic: "/mavros/imu/data"
+mavros_attitude_timeout: 0.5
+vision_heading_alignment_topic: "/mine_uav/task1/vision_heading_from_planning"

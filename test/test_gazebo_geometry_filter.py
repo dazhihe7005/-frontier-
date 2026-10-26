@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
-    "gazebo_mid360_adapter", ROOT / "scripts/gazebo_mid360_fastlio_adapter.py"
+    "gazebo_mid360_adapter", ROOT / "scripts/gazebo_mid360_lio_adapter.py"
 )
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
@@ -19,8 +19,8 @@ spec.loader.exec_module(module)
 
 class GazeboGeometryFilterTest(unittest.TestCase):
     def setUp(self):
-        self.adapter = module.GazeboMid360FastlioAdapter.__new__(
-            module.GazeboMid360FastlioAdapter
+        self.adapter = module.GazeboMid360LioAdapter.__new__(
+            module.GazeboMid360LioAdapter
         )
         self.adapter._world_boxes = self.adapter._load_static_boxes(
             str(ROOT / "worlds/goaf_40x40x30_platform.world")
@@ -38,6 +38,13 @@ class GazeboGeometryFilterTest(unittest.TestCase):
         )
         self.assertAlmostEqual(distance, 19.8, places=2)
         self.assertGreater(distance - 0.35, 19.0)
+
+    def test_omnilivo_regression_world_is_supported(self):
+        boxes = self.adapter._load_static_boxes(
+            str(ROOT / "worlds/omnilivo_regression_40x40x30.world")
+        )
+        # Six chamber/platform surfaces plus six asymmetric landmarks.
+        self.assertEqual(len(boxes), 12)
 
     def test_all_wrappers_use_physical_mid360s_mount(self):
         paths = [

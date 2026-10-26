@@ -54,8 +54,15 @@ add_executable(offboard_bridge
 )
 target_link_libraries(offboard_bridge ${catkin_LIBRARIES})
 
+add_executable(lio_px4_vision_bridge
+  src/lio_px4_vision_bridge.cpp
+)
+target_link_libraries(lio_px4_vision_bridge ${catkin_LIBRARIES})
+
+# Compatibility executable for the isolated Fast-LIO SITL launch files. Both
+# paths use the same estimator-agnostic, safety-gated implementation.
 add_executable(fastlio_px4_vision_bridge
-  src/fastlio_px4_vision_bridge.cpp
+  src/lio_px4_vision_bridge.cpp
 )
 target_link_libraries(fastlio_px4_vision_bridge ${catkin_LIBRARIES})
 
@@ -114,7 +121,10 @@ if(CATKIN_ENABLE_TESTING)
   add_rostest(test/super_bridge_manual_override.test)
   add_rostest(test/five_meter_command_fault_abort.test)
   add_rostest(test/task1_planning_frame.test)
+  add_rostest(test/omnilivo_px4_vision_bridge.test)
   add_rostest(test/shaft_mission_ros.test)
+  add_rostest(test/assisted_task_px4_router.test)
+  add_rostest(test/assisted_task3_px4_router.test)
   add_rostest(test/mission_scheduler_edges.test)
   catkin_add_nosetests(test/test_sitl_shaft_router_lifecycle.py)
   catkin_add_nosetests(test/test_sitl_shaft_depth_drift.py)
@@ -122,8 +132,11 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_sitl_px4_z_failure_injector.py)
   catkin_add_nosetests(test/test_sitl_shaft_optical_flow_depth.py)
   catkin_add_nosetests(test/test_task1_sitl_downward_range_filter.py)
+  catkin_add_nosetests(test/test_omnilivo_shaft_depth.py)
+  catkin_add_nosetests(test/test_assisted_task_px4_router.py)
   catkin_add_nosetests(test/test_px4_ulog_downloader.py)
   catkin_add_nosetests(test/test_task1_safety_config.py)
+  catkin_add_nosetests(test/test_omnilivo_production_migration.py)
   catkin_add_nosetests(test/test_gazebo_geometry_filter.py)
   add_rostest_gtest(test_super_goal_publication
     test/super_goal_publication.test
@@ -159,17 +172,24 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_observation_height_band)
     target_link_libraries(test_observation_height_band ${GTEST_MAIN_LIBRARIES})
   endif()
+  catkin_add_gtest(test_exploration_mission_profile
+    test/test_exploration_mission_profile.cpp
+  )
+  if(TARGET test_exploration_mission_profile)
+    target_link_libraries(test_exploration_mission_profile
+                          ${GTEST_MAIN_LIBRARIES})
+  endif()
   catkin_add_gtest(test_five_meter_avoidance_logic
     test/test_five_meter_avoidance_logic.cpp
   )
   if(TARGET test_five_meter_avoidance_logic)
     target_link_libraries(test_five_meter_avoidance_logic ${GTEST_MAIN_LIBRARIES})
   endif()
-  catkin_add_gtest(test_fastlio_mount_alignment
-    test/test_fastlio_mount_alignment.cpp
+  catkin_add_gtest(test_lio_mount_alignment
+    test/test_lio_mount_alignment.cpp
   )
-  if(TARGET test_fastlio_mount_alignment)
-    target_link_libraries(test_fastlio_mount_alignment ${GTEST_MAIN_LIBRARIES})
+  if(TARGET test_lio_mount_alignment)
+    target_link_libraries(test_lio_mount_alignment ${GTEST_MAIN_LIBRARIES})
   endif()
   catkin_add_gtest(test_obstacle_safety
     test/test_obstacle_safety.cpp
@@ -190,7 +210,7 @@ if(CATKIN_ENABLE_TESTING)
 endif()
 
 install(TARGETS arc_trajectory arc_trajectory_node offboard_bridge
-                fastlio_px4_vision_bridge
+                lio_px4_vision_bridge fastlio_px4_vision_bridge
                 pointcloud1_to_pointcloud2
                 super_px4_command_bridge
                 super_exploration_decider_lib super_exploration_decider
@@ -207,12 +227,14 @@ install(DIRECTORY include/${PROJECT_NAME}/
 
 catkin_install_python(PROGRAMS
   scripts/task1_sitl_downward_range_filter.py
+  scripts/omnilivo_shaft_depth.py
+  scripts/assisted_task_px4_router.py
   scripts/task1_real_time_guard.py
   scripts/px4_ulog_downloader.py
   scripts/analyze_task1_height_contract.py
   scripts/analyze_task1_sitl_bag.py
   scripts/ground_station.py
-  scripts/gazebo_mid360_fastlio_adapter.py
+  scripts/gazebo_mid360_lio_adapter.py
   scripts/fastlio_shaft_depth.py
   scripts/generate_rock_shaft_mesh.py
   scripts/sitl_localization_adapter.py

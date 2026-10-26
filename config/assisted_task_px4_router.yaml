@@ -1,0 +1,33 @@
+# Tasks 2/3 share one final command owner. Neither controller may publish to
+# MAVROS directly. The router never arms PX4 and exits to POSCTL on any fault.
+rate: 30.0
+input_timeout: 0.50
+# Production MAVROS publishes these health summaries at about 1 Hz. Keep their
+# freshness separate from the fast pose/controller timeout so a valid sample
+# does not expire halfway through every publish period.
+state_timeout: 1.50
+estimator_timeout: 1.50
+prestream_duration: 1.0
+mode_request_interval: 1.0
+offboard_mode: "OFFBOARD"
+fallback_mode: "POSCTL"
+expected_frame: "task1_planning"
+# Defense-in-depth at the final PX4 owner. The router also has a compiled
+# 1.6 m/s ceiling, independent of the pressure controller's own hard cap.
+task3_max_horizontal_speed: 1.60
+
+# Horizontal slice used to build the Task-2 local clearance field.
+vertical_below: 0.50
+vertical_above: 0.50
+max_points: 100000
+
+# Max-clearance preference and CBF-style safety envelope.
+hard_distance: 1.00
+release_distance: 1.20
+brake_distance: 1.80
+max_horizontal_speed: 0.25
+max_horizontal_acceleration: 0.40
+escape_speed: 0.10
+center_gain: 0.50
+
+output_topic: "/mine_uav/setpoint_cmd"

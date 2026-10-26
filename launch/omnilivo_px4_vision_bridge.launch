@@ -1,0 +1,11 @@
+<launch>
+  <arg name="config"
+       default="$(find mine_uav_control)/config/omnilivo_px4_vision_bridge.yaml" />
+
+  <node pkg="mine_uav_control"
+        type="lio_px4_vision_bridge"
+        name="omnilivo_px4_vision_bridge"
+        output="screen" required="true">
+    <rosparam command="load" file="$(arg config)" />
+  </node>
+</launch>

@@ -36,7 +36,7 @@ class PointCloud1ToPointCloud2 {
           static_cast<double>(point.y) * point.y +
           static_cast<double>(point.z) * point.z);
       // gazebo_ros_block_laser encodes a missed ray as a finite point exactly
-      // at max_range.  Feeding those points to FAST-LIO2 creates a moving
+      // at max_range.  Feeding those points to a LIO creates a moving
       // spherical shell and destroys translational scan matching.
       if (std::isfinite(range) && range >= min_range_ &&
           range < maximum_valid_range) {
@@ -52,25 +52,34 @@ class PointCloud1ToPointCloud2 {
     output.is_dense = false;
 
     sensor_msgs::PointCloud2Modifier modifier(output);
+    // Omni-LIVO's standard/L515 path deserializes PointXYZRGB, while a few
+    // legacy simulation consumers still look for intensity.  Publish both
+    // neutral-valued fields so the Gazebo adapter is losslessly compatible
+    // with either consumer.  The production Livox CustomMsg path does not
+    // pass through this converter.
     modifier.setPointCloud2Fields(
-        4, "x", 1, sensor_msgs::PointField::FLOAT32,
+        5, "x", 1, sensor_msgs::PointField::FLOAT32,
         "y", 1, sensor_msgs::PointField::FLOAT32,
         "z", 1, sensor_msgs::PointField::FLOAT32,
+        "rgb", 1, sensor_msgs::PointField::FLOAT32,
         "intensity", 1, sensor_msgs::PointField::FLOAT32);
     modifier.resize(valid_points.size());
 
     sensor_msgs::PointCloud2Iterator<float> x(output, "x");
     sensor_msgs::PointCloud2Iterator<float> y(output, "y");
     sensor_msgs::PointCloud2Iterator<float> z(output, "z");
+    sensor_msgs::PointCloud2Iterator<float> rgb(output, "rgb");
     sensor_msgs::PointCloud2Iterator<float> intensity(output, "intensity");
     for (const auto* point : valid_points) {
       *x = point->x;
       *y = point->y;
       *z = point->z;
+      *rgb = 0.0F;
       *intensity = 0.0F;
       ++x;
       ++y;
       ++z;
+      ++rgb;
       ++intensity;
     }
     ROS_INFO_STREAM_THROTTLE(

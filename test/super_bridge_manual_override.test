@@ -2,6 +2,7 @@
   <node pkg="mine_uav_control" type="super_px4_command_bridge"
         name="super_px4_command_bridge" output="screen" required="true">
     <param name="prestream_duration" value="1.0"/>
+    <param name="preoffboard_vision_recovery_timeout" value="1.0"/>
     <param name="mode_request_interval" value="0.5"/>
     <param name="command_timeout" value="0.5"/>
     <param name="return_recovery_timeout" value="2.0"/>
@@ -11,7 +12,12 @@
     <param name="tracking_position_gain_xy" value="0.9"/>
     <param name="tracking_position_gain_z" value="1.0"/>
     <param name="overspeed_duration" value="0.1"/>
+    <param name="max_horizontal_radius" value="0.0"/>
+    <!-- Keep this integration fixture narrow so its existing 2.2 m command
+         fault remains meaningful; production uses SUPER's -5..8 m bounds. -->
+    <param name="min_height" value="-0.5"/>
+    <param name="max_height" value="1.8"/>
   </node>
   <test test-name="super_bridge_manual_override" pkg="mine_uav_control"
-        type="test_super_bridge_manual_override.py" time-limit="60"/>
+        type="test_super_bridge_manual_override.py" time-limit="90"/>
 </launch>

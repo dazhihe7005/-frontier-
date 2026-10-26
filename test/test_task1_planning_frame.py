@@ -19,21 +19,33 @@ class PlanningFrameTest(unittest.TestCase):
     def setUp(self):
         self._lock = threading.Lock()
         self._odom = None
+        self._auxiliary_odom = None
         self._cloud = None
         self._alignment = None
         self._mission_pub = rospy.Publisher(
             "/mine_uav/mission/goaf_enable", Bool, queue_size=1, latch=True)
+        self._task3_pub = rospy.Publisher(
+            "/test/mission/task3_enable", Bool, queue_size=1, latch=True)
         self._alignment_pub = rospy.Publisher(
-            "/mine_uav/task1/fastlio_to_px4_alignment",
+            "/mine_uav/task1/lio_to_px4_alignment",
             TransformStamped, queue_size=1, latch=True)
         self._sensor_rotation_pub = rospy.Publisher(
-            "/mine_uav/task1/fastlio_sensor_from_body_rotation",
+            "/mine_uav/task1/lio_sensor_from_body_rotation",
             QuaternionStamped, queue_size=1, latch=True)
-        self._odom_pub = rospy.Publisher("/Odometry", Odometry, queue_size=2)
+        self._heading_alignment_pub = rospy.Publisher(
+            "/mine_uav/task1/vision_heading_from_planning",
+            QuaternionStamped, queue_size=1, latch=True)
+        self._odom_pub = rospy.Publisher(
+            "/omnilivo/odometry", Odometry, queue_size=2)
+        self._auxiliary_odom_pub = rospy.Publisher(
+            "/test/omnilivo/control_odometry", Odometry, queue_size=20)
         self._cloud_pub = rospy.Publisher(
-            "/cloud_registered", PointCloud2, queue_size=2)
+            "/omnilivo/cloud_registered", PointCloud2, queue_size=2)
         self._odom_sub = rospy.Subscriber(
             "/mine_uav/task1/odometry", Odometry, self._odom_callback)
+        self._auxiliary_odom_sub = rospy.Subscriber(
+            "/test/task3/obstacle_odometry", Odometry,
+            self._auxiliary_odom_callback)
         self._cloud_sub = rospy.Subscriber(
             "/mine_uav/task1/cloud_registered",
             PointCloud2, self._cloud_callback)
@@ -43,12 +55,17 @@ class PlanningFrameTest(unittest.TestCase):
 
     def tearDown(self):
         self._odom_sub.unregister()
+        self._auxiliary_odom_sub.unregister()
         self._cloud_sub.unregister()
         self._planning_alignment_sub.unregister()
 
     def _odom_callback(self, message):
         with self._lock:
             self._odom = message
+
+    def _auxiliary_odom_callback(self, message):
+        with self._lock:
+            self._auxiliary_odom = message
 
     def _cloud_callback(self, message):
         with self._lock:
@@ -76,14 +93,24 @@ class PlanningFrameTest(unittest.TestCase):
         sensor_rotation.quaternion.y = -math.sin(half)
         sensor_rotation.quaternion.w = math.cos(half)
 
+        heading_alignment = QuaternionStamped()
+        heading_alignment.header.frame_id = "odom"
+        heading_alignment.quaternion.z = math.sin(math.pi / 4.0)
+        heading_alignment.quaternion.w = math.cos(math.pi / 4.0)
+
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline and not rospy.is_shutdown():
             stamp = rospy.Time.now()
             source_alignment.header.stamp = stamp
             sensor_rotation.header.stamp = stamp
+            heading_alignment.header.stamp = stamp
             self._alignment_pub.publish(source_alignment)
             self._sensor_rotation_pub.publish(sensor_rotation)
-            self._mission_pub.publish(Bool(data=True))
+            self._heading_alignment_pub.publish(heading_alignment)
+            # The planner mission remains disabled. Task 3 opens only the
+            # shared levelled cloud feed used by its obstacle guard.
+            self._mission_pub.publish(Bool(data=False))
+            self._task3_pub.publish(Bool(data=True))
 
             odom = Odometry()
             odom.header.stamp = stamp
@@ -92,6 +119,12 @@ class PlanningFrameTest(unittest.TestCase):
             odom.pose.pose.position.z = 5.0 * math.sin(pitch)
             odom.pose.pose.orientation.w = 1.0
             self._odom_pub.publish(odom)
+            auxiliary_odom = Odometry()
+            auxiliary_odom.header = odom.header
+            auxiliary_odom.pose.pose.position.x = 4.0 * math.cos(pitch)
+            auxiliary_odom.pose.pose.position.z = 4.0 * math.sin(pitch)
+            auxiliary_odom.pose.pose.orientation.w = 1.0
+            self._auxiliary_odom_pub.publish(auxiliary_odom)
             cloud = point_cloud2.create_cloud_xyz32(
                 odom.header,
                 [(odom.pose.pose.position.x, 0.0,
@@ -100,6 +133,7 @@ class PlanningFrameTest(unittest.TestCase):
 
             with self._lock:
                 complete = (self._odom is not None and
+                            self._auxiliary_odom is not None and
                             self._cloud is not None and
                             self._alignment is not None)
             if complete:
@@ -108,9 +142,11 @@ class PlanningFrameTest(unittest.TestCase):
 
         with self._lock:
             output_odom = self._odom
+            output_auxiliary_odom = self._auxiliary_odom
             output_cloud = self._cloud
             output_alignment = self._alignment
         self.assertIsNotNone(output_odom)
+        self.assertIsNotNone(output_auxiliary_odom)
         self.assertIsNotNone(output_cloud)
         self.assertIsNotNone(output_alignment)
         self.assertEqual(output_odom.header.frame_id, "task1_planning")
@@ -123,6 +159,17 @@ class PlanningFrameTest(unittest.TestCase):
         self.assertAlmostEqual(abs(output_odom.pose.pose.orientation.w), 1.0,
                                places=5)
 
+        self.assertEqual(output_auxiliary_odom.header.frame_id,
+                         "task1_planning")
+        self.assertAlmostEqual(
+            output_auxiliary_odom.pose.pose.position.x, 4.0, places=5)
+        self.assertAlmostEqual(
+            output_auxiliary_odom.pose.pose.position.y, 0.0, places=5)
+        self.assertAlmostEqual(
+            output_auxiliary_odom.pose.pose.position.z, 0.0, places=5)
+        self.assertAlmostEqual(
+            abs(output_auxiliary_odom.pose.pose.orientation.w), 1.0, places=5)
+
         point = next(point_cloud2.read_points(
             output_cloud, field_names=("x", "y", "z"), skip_nans=False))
         self.assertEqual(output_cloud.header.frame_id, "task1_planning")
@@ -131,13 +178,15 @@ class PlanningFrameTest(unittest.TestCase):
         self.assertAlmostEqual(point[2], 0.0, places=5)
 
         self.assertEqual(output_alignment.child_frame_id, "task1_planning")
-        self.assertAlmostEqual(output_alignment.transform.translation.x, 1.0)
-        self.assertAlmostEqual(output_alignment.transform.translation.y, 2.0)
+        self.assertAlmostEqual(output_alignment.transform.translation.x, -2.0)
+        self.assertAlmostEqual(output_alignment.transform.translation.y, 1.0)
         self.assertAlmostEqual(output_alignment.transform.translation.z, 3.0)
         self.assertAlmostEqual(output_alignment.transform.rotation.x, 0.0)
         self.assertAlmostEqual(output_alignment.transform.rotation.y, 0.0)
-        self.assertAlmostEqual(output_alignment.transform.rotation.z, 0.0)
-        self.assertAlmostEqual(output_alignment.transform.rotation.w, 1.0)
+        self.assertAlmostEqual(output_alignment.transform.rotation.z,
+                               math.sin(math.pi / 4.0))
+        self.assertAlmostEqual(output_alignment.transform.rotation.w,
+                               math.cos(math.pi / 4.0))
 
 
 if __name__ == "__main__":

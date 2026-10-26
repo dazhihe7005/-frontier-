@@ -20,8 +20,11 @@ struct CorridorPreviewEstimate {
   bool valid{false};
   double target_lateral{0.0};
   double lookahead{0.0};
-  double near_width{0.0};
-  double minimum_width{0.0};
+  // Width of the connected band in which the aircraft centre can be placed
+  // while retaining hard vehicle clearance. This is deliberately not named
+  // corridor width: an unknown/occluded map edge is not a physical wall.
+  double near_center_band_width{0.0};
+  double minimum_center_band_width{0.0};
   double center_shift{0.0};
   std::size_t slices{0};
 };
@@ -114,7 +117,8 @@ inline CorridorPreviewEstimate estimateCorridorPreview(
     double first_forward, double forward_step,
     double lateral_min, double lateral_step,
     double current_lateral, double max_lateral_slope,
-    std::size_t minimum_slices) {
+    std::size_t minimum_slices,
+    double minimum_reliable_center_band_width = 0.0) {
   CorridorPreviewEstimate estimate;
   if (passable.empty() || passable.front().empty() ||
       !std::isfinite(first_forward) || first_forward <= 0.0 ||
@@ -123,7 +127,9 @@ inline CorridorPreviewEstimate estimateCorridorPreview(
       !std::isfinite(lateral_step) || lateral_step <= 0.0 ||
       !std::isfinite(current_lateral) ||
       !std::isfinite(max_lateral_slope) || max_lateral_slope <= 0.0 ||
-      minimum_slices == 0) {
+      minimum_slices == 0 ||
+      !std::isfinite(minimum_reliable_center_band_width) ||
+      minimum_reliable_center_band_width < 0.0) {
     return estimate;
   }
   const std::size_t columns = passable.front().size();
@@ -167,7 +173,14 @@ inline CorridorPreviewEstimate estimateCorridorPreview(
         (row == 0 ? first_forward : forward_step) + 1e-9;
     bool row_reachable = false;
     for (std::size_t column = 0; column < columns; ++column) {
-      if (!passable[row][column]) continue;
+      // A one-cell tail usually means that the sensor has not yet observed
+      // the rest of a visually open bend. It remains available to the normal
+      // hard-safe route planner, but is too weak to steer the *preview*.
+      if (!passable[row][column] ||
+          run_width[row][column] + 1e-9 <
+              minimum_reliable_center_band_width) {
+        continue;
+      }
       const double lateral = lateral_min + column * lateral_step;
       double best_cost = infinity;
       int best_predecessor = -1;
@@ -208,15 +221,18 @@ inline CorridorPreviewEstimate estimateCorridorPreview(
   }
   if (!std::isfinite(previous_cost[selected])) return estimate;
 
-  estimate.minimum_width = std::numeric_limits<double>::infinity();
+  estimate.minimum_center_band_width =
+      std::numeric_limits<double>::infinity();
   int column = static_cast<int>(selected);
   for (std::size_t reverse = reached_slices; reverse > 0; --reverse) {
     const std::size_t row = reverse - 1;
     if (column < 0) return CorridorPreviewEstimate{};
     const std::size_t path_column = static_cast<std::size_t>(column);
-    if (row == 0) estimate.near_width = run_width[row][path_column];
-    estimate.minimum_width = std::min(
-        estimate.minimum_width, run_width[row][path_column]);
+    if (row == 0) {
+      estimate.near_center_band_width = run_width[row][path_column];
+    }
+    estimate.minimum_center_band_width = std::min(
+        estimate.minimum_center_band_width, run_width[row][path_column]);
     column = predecessor[row][path_column];
   }
   estimate.valid = true;

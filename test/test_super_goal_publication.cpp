@@ -13,11 +13,114 @@ namespace mine_uav_control {
 
 class SuperExplorationDeciderTestPeer {
  public:
+  static bool schedulerSelectsOnlyTheProfileForTheActiveExplorationTask(
+      SuperExplorationDecider& decider) {
+    decider.follow_active_task_profile_ = true;
+    decider.enabled_ = false;
+
+    auto enabled = boost::make_shared<std_msgs::Bool>();
+    enabled->data = true;
+    decider.missionEnableCallback(enabled);
+    if (decider.enabled_) return false;  // No task identity yet.
+
+    auto task = boost::make_shared<std_msgs::UInt8>();
+    task->data = 4;
+    decider.activeTaskCallback(task);
+    if (!decider.enabled_ ||
+        decider.mission_profile_ != ExplorationMissionProfile::kTunnel ||
+        !decider.corridorGuidanceEnabled()) {
+      return false;
+    }
+
+    task->data = 0;
+    decider.activeTaskCallback(task);
+    if (decider.enabled_) return false;
+    enabled->data = false;
+    decider.missionEnableCallback(enabled);
+
+    task->data = 1;
+    decider.activeTaskCallback(task);
+    enabled->data = true;
+    decider.missionEnableCallback(enabled);
+    return decider.enabled_ &&
+        decider.mission_profile_ == ExplorationMissionProfile::kGoaf &&
+        !decider.corridorGuidanceEnabled();
+  }
+
   static void publish(SuperExplorationDecider& decider,
                       const geometry_msgs::PoseStamped& goal,
                       const std::string& reason,
                       bool continuous_handover = false) {
     decider.publishGoal(goal, reason, continuous_handover);
+  }
+
+  static bool goafUsesLongerPreviewWithoutRetuningTunnel(
+      SuperExplorationDecider& decider) {
+    decider.forward_lookahead_distance_ = 4.0;
+    decider.goaf_forward_lookahead_distance_ = 6.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.goaf_exploration_goal_queue_horizon_ = 15.0;
+    decider.mission_profile_ = ExplorationMissionProfile::kGoaf;
+    if (decider.effectiveForwardLookaheadDistance() != 6.0 ||
+        decider.effectiveExplorationGoalQueueHorizon() != 15.0) {
+      return false;
+    }
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    return decider.effectiveForwardLookaheadDistance() == 4.0 &&
+        decider.effectiveExplorationGoalQueueHorizon() == 10.0;
+  }
+
+  static bool batteryAdmissionRequiresOutboundAndReturnReserve(
+      SuperExplorationDecider& decider) {
+    decider.battery_start_guard_enabled_ = true;
+    decider.battery_start_minimum_percentage_ = 0.50;
+    decider.battery_start_minimum_voltage_ = 22.2;
+    decider.have_battery_ = false;
+    decider.battery_percentage_ = -1.0;
+    decider.battery_voltage_ = -1.0;
+    if (decider.batteryReadyForMissionStart()) return false;
+
+    decider.have_battery_ = true;
+    decider.battery_percentage_ = 0.29;
+    decider.battery_voltage_ = 22.12;
+    if (decider.batteryReadyForMissionStart()) return false;
+
+    decider.battery_percentage_ = 0.75;
+    if (decider.batteryReadyForMissionStart()) return false;
+
+    decider.battery_voltage_ = 23.5;
+    return decider.batteryReadyForMissionStart();
+  }
+
+  static bool task1ReturnsAtFiveMetresFromConfirmedEndWall(
+      SuperExplorationDecider& decider) {
+    decider.task1_end_wall_return_enabled_ = true;
+    decider.task1_end_wall_return_distance_ = 5.0;
+    decider.front_obstacle_confirm_frames_ = 3;
+    decider.front_obstacle_streak_ = 3;
+    decider.mission_profile_ = ExplorationMissionProfile::kGoaf;
+    SuperExplorationDecider::ThreeWallCoverage coverage;
+    coverage.end_wall_found = true;
+    coverage.end_depth = 40.0;
+    coverage.vehicle_progress = 35.0;
+    if (!decider.task1EndWallReturnReady(coverage)) return false;
+    coverage.vehicle_progress = 34.9;
+    if (decider.task1EndWallReturnReady(coverage)) return false;
+    coverage.vehicle_progress = 35.0;
+    decider.front_obstacle_streak_ = 2;
+    if (decider.task1EndWallReturnReady(coverage)) return false;
+    decider.front_obstacle_streak_ = 3;
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    return !decider.task1EndWallReturnReady(coverage);
+  }
+
+  static bool disabledBatteryAdmissionIgnoresUnreliablePercentage(
+      SuperExplorationDecider& decider) {
+    decider.battery_start_guard_enabled_ = false;
+    decider.have_battery_ = false;
+    decider.battery_percentage_ = -1.0;
+    decider.battery_voltage_ = -1.0;
+    return decider.batteryReadyForMissionStart();
   }
 
   static bool forwardLookaheadVariantsKeepHandoverSemantics(
@@ -38,6 +141,7 @@ class SuperExplorationDeciderTestPeer {
 
   static bool corridorCenteringRequiresStableTwoSidedEvidence(
       SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
     decider.have_home_ = true;
     decider.corridor_centering_enabled_ = true;
     decider.corridor_centering_min_wall_points_ = 4;
@@ -303,6 +407,34 @@ class SuperExplorationDeciderTestPeer {
            decider.current_goal_.pose.position.x < 4.0;
   }
 
+  static bool acceptedReturnGoalPassedWhilePlanningNeverCommandsTurnAway(
+      SuperExplorationDecider& decider) {
+    decider.enabled_ = true;
+    decider.have_data_ = true;
+    decider.have_home_ = true;
+    decider.returning_home_ = true;
+    decider.last_sync_time_ = ros::Time::now();
+    decider.super_occupied_stamp_ = decider.last_sync_time_;
+    decider.goal_sent_time_ = decider.last_sync_time_;
+    decider.data_timeout_ = 100.0;
+    decider.return_segment_length_ = 3.0;
+    decider.current_pose_.pose.position.x = 4.8;
+    // Reproduce the final flight's delayed acceptance: the aircraft has
+    // already moved more than a metre closer to home than goal 47.
+    decider.current_goal_.pose.position.x = 5.9;
+    decider.active_goal_id_ = 47;
+    decider.accepted_goal_id_ = 47;
+    decider.have_active_goal_ = true;
+    decider.active_goal_initial_distance_ = 1.1;
+    for (double x = 0.0; x <= 7.0; x += 0.25)
+      decider.voxels_[decider.positionToKey(x, 0.0, 0.0)] =
+          SuperExplorationDecider::FREE;
+
+    decider.decisionTimerCallback(ros::TimerEvent());
+    return decider.have_active_goal_ && decider.active_goal_id_ != 47 &&
+           decider.current_goal_.pose.position.x < 4.8;
+  }
+
   static bool returnPrefersSurveyedLane(
       SuperExplorationDecider& decider) {
     decider.have_home_ = true;
@@ -336,6 +468,7 @@ class SuperExplorationDeciderTestPeer {
     decider.enabled_ = true;
     decider.have_home_ = true;
     decider.have_data_ = true;
+    decider.exploration_started_ = true;
     decider.last_sync_time_ = ros::Time::now();
     decider.super_occupied_stamp_ = decider.last_sync_time_;
     decider.current_pose_.pose.position.x = 4.0;
@@ -365,10 +498,11 @@ class SuperExplorationDeciderTestPeer {
 
   static bool lowPercentageRequiresSustainedConfirmation(
       SuperExplorationDecider& decider) {
+    decider.battery_percentage_return_enabled_ = true;
     decider.enabled_ = true;
     decider.have_home_ = true;
     decider.have_data_ = true;
-    decider.exploration_started_ = false;
+    decider.exploration_started_ = true;
     decider.data_timeout_ = 100.0;
     decider.battery_return_confirm_duration_ = 3.0;
     decider.last_sync_time_ = ros::Time::now();
@@ -504,6 +638,42 @@ class SuperExplorationDeciderTestPeer {
     }
     return decider.publishFreshReturnGoal("test_height_ceiling") &&
            decider.current_goal_.pose.position.z <= 1.7 + 1e-6;
+  }
+
+  static bool tunnelReturnRetracesInclinedBreadcrumbs(
+      SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.tunnel_min_planning_height_ = -5.0;
+    decider.tunnel_max_planning_height_ = 8.0;
+    decider.have_home_ = true;
+    decider.have_data_ = true;
+    decider.last_sync_time_ = ros::Time::now();
+    decider.super_occupied_stamp_ = decider.last_sync_time_;
+    decider.home_pose_.pose.position.z = 1.5;
+    decider.home_pose_.pose.orientation.w = 1.0;
+    decider.current_pose_.pose.position.x = 4.0;
+    decider.current_pose_.pose.position.z = 3.5;
+    for (double x : {0.0, 2.0, 4.0}) {
+      geometry_msgs::PoseStamped breadcrumb;
+      breadcrumb.pose.position.x = x;
+      breadcrumb.pose.position.z = 1.5 + 0.5 * x;
+      breadcrumb.pose.orientation.w = 1.0;
+      decider.outbound_breadcrumbs_.push_back(breadcrumb);
+    }
+    for (double x = 0.0; x <= 4.0; x += 0.25) {
+      const double center_z = 1.5 + 0.5 * x;
+      for (double y = -1.0; y <= 1.0; y += 0.25) {
+        for (double dz = -0.75; dz <= 0.75; dz += 0.25) {
+          decider.voxels_[decider.positionToKey(x, y, center_z + dz)] =
+              SuperExplorationDecider::FREE;
+        }
+      }
+    }
+    decider.beginReturnHome("test_inclined_tunnel_return");
+    return decider.returning_home_ && decider.have_active_goal_ &&
+           decider.current_goal_.pose.position.x < 4.0 &&
+           decider.current_goal_.pose.position.z > 1.7 &&
+           decider.current_goal_.pose.position.z < 3.5;
   }
 
   static bool returnChecksSuperObstacleAndFreshness(
@@ -749,6 +919,60 @@ class SuperExplorationDeciderTestPeer {
     std::vector<SuperExplorationDecider::FrontierCandidate> candidates;
     return decider.evaluateMapClosure(candidates, reachable, true)
         .reachable_forward_passage;
+  }
+
+  static bool zeroMissionRadiusAllowsDistantForwardPassage(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.home_pose_.pose.position.x = 0.0;
+    decider.current_pose_.pose.position.x = 50.0;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.max_exploration_radius_from_home_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.forward_lookahead_distance_ = 4.0;
+    decider.forward_lookahead_step_ = 0.5;
+    decider.forward_goal_lateral_search_width_ = 0.0;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (double x = 50.0; x <= 54.0 + 1e-9;
+         x += 0.5 * decider.voxel_resolution_) {
+      const auto key = decider.positionToKey(x, 0.0, 0.0);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    std::vector<SuperExplorationDecider::FrontierCandidate> candidates;
+    const auto closure = decider.evaluateMapClosure(
+        candidates, reachable, true);
+    return closure.max_reachable_progress > 53.0 &&
+           closure.reachable_forward_passage;
+  }
+
+  static bool tunnelHeightContractFollowsCurrentIncline(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.home_pose_.pose.position.z = 1.5;
+    decider.current_pose_.pose.position.z = 4.25;
+    decider.min_observation_height_above_home_ = -0.3;
+    decider.max_observation_height_above_home_ = 0.2;
+    decider.cruise_height_above_home_ = 0.0;
+    decider.tunnel_min_planning_height_ = -5.0;
+    decider.tunnel_max_planning_height_ = 8.0;
+
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    const bool tunnel_ok =
+        std::abs(decider.preferredMissionObservationHeight() - 4.25) < 1e-9 &&
+        decider.missionObservationHeightAllowed(7.5) &&
+        !decider.missionObservationHeightAllowed(8.1) &&
+        std::abs(decider.maximumReturnHeight() - 8.0) < 1e-9;
+
+    decider.mission_profile_ = ExplorationMissionProfile::kGoaf;
+    const bool goaf_stays_level =
+        std::abs(decider.preferredMissionObservationHeight() - 1.5) < 1e-9 &&
+        decider.missionObservationHeightAllowed(1.65) &&
+        !decider.missionObservationHeightAllowed(4.25);
+    return tunnel_ok && goaf_stays_level;
   }
 
   static bool smallMapCountDropKeepsStableTimer(
@@ -1004,7 +1228,7 @@ class SuperExplorationDeciderTestPeer {
     decider.data_timeout_ = 100.0;
     decider.dead_end_backtracking_ = true;
     decider.goal_reached_distance_ = 1.0;
-    decider.voxel_resolution_ = 0.5;
+    decider.voxel_resolution_ = 0.25;
     decider.current_pose_.pose.position.x = 0.45;
     decider.current_goal_.pose.position.x = 1.0;
     decider.current_goal_.pose.orientation.w = 1.0;
@@ -1020,7 +1244,90 @@ class SuperExplorationDeciderTestPeer {
     decider.current_pose_.pose.position.x = 0.6;
     decider.last_sync_time_ = ros::Time::now();
     decider.decisionTimerCallback(ros::TimerEvent());
-    return outside_half_metre && decider.active_goal_id_ != 7;
+    const bool outside_one_voxel = decider.have_active_goal_ &&
+        decider.active_goal_id_ == 7;
+    decider.current_pose_.pose.position.x = 0.8;
+    decider.last_sync_time_ = ros::Time::now();
+    decider.decisionTimerCallback(ros::TimerEvent());
+    return outside_half_metre && outside_one_voxel &&
+        decider.active_goal_id_ != 7;
+  }
+
+  static bool returnPreviewCentersBeforeOffsetNarrowing(
+      SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.corridor_preview_enabled_ = true;
+    decider.corridor_preview_min_slices_ = 6;
+    decider.corridor_preview_min_reliable_center_band_width_ = 0.75;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.return_map_timeout_ = 100.0;
+    decider.vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    geometry_msgs::Point start;
+    start.x = 10.0;
+    geometry_msgs::Point target;
+    target.x = 8.5;
+
+    // Returning along -X: the first two metres are broad, then the connected
+    // safe-centre band contracts around +Y. The short return goal must begin
+    // moving laterally before the vehicle reaches that throat.
+    for (double x = 1.5; x <= 10.0; x += 0.25) {
+      const bool narrow = x <= 7.0;
+      const double min_y = narrow ? 0.5 : -2.0;
+      const double max_y = narrow ? 1.5 : 2.0;
+      for (double y = min_y; y <= max_y + 1e-9; y += 0.25) {
+        decider.voxels_[decider.positionToKey(x, y, 0.0)] =
+            SuperExplorationDecider::FREE;
+      }
+    }
+    return decider.applyReturnCorridorPreview(start, &target) &&
+        target.y >= 0.25 && target.y <= 1.0;
+  }
+
+  static bool forwardPreviewIsSlewLimitedAndHeldAcrossSparseFrames(
+      SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.have_home_ = true;
+    decider.corridor_preview_enabled_ = true;
+    decider.corridor_preview_min_slices_ = 6;
+    decider.corridor_preview_min_reliable_center_band_width_ = 0.75;
+    decider.corridor_centering_release_frames_ = 3;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.vertical_vehicle_clearance_below_ = 0.1;
+    decider.vertical_vehicle_clearance_above_ = 0.1;
+    decider.cruise_height_above_home_ = 0.0;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.current_pose_.pose.position.x = 0.0;
+    decider.current_pose_.pose.position.y = 0.0;
+    SuperExplorationDecider::VoxelSet reachable;
+    for (double x = 1.0; x <= 8.0 + 1e-9; x += 0.25) {
+      const bool narrow = x >= 3.0;
+      const double min_y = narrow ? 0.5 : -2.0;
+      const double max_y = narrow ? 1.5 : 2.0;
+      for (double y = min_y; y <= max_y + 1e-9; y += 0.25) {
+        const auto key = decider.positionToKey(x, y, 0.0);
+        decider.voxels_[key] = SuperExplorationDecider::FREE;
+        reachable.insert(key);
+      }
+    }
+    decider.updateCorridorPreviewPreference(reachable);
+    if (!decider.corridor_preview_preference_valid_ ||
+        decider.corridor_preview_preferred_lateral_ <= 0.0 ||
+        decider.corridor_preview_preferred_lateral_ > 0.25 + 1e-9) {
+      return false;
+    }
+    const double first = decider.corridor_preview_preferred_lateral_;
+    SuperExplorationDecider::VoxelSet empty;
+    decider.updateCorridorPreviewPreference(empty);
+    decider.updateCorridorPreviewPreference(empty);
+    if (!decider.corridor_preview_preference_valid_ ||
+        std::abs(decider.corridor_preview_preferred_lateral_ - first) > 1e-9) {
+      return false;
+    }
+    decider.updateCorridorPreviewPreference(empty);
+    return !decider.corridor_preview_preference_valid_;
   }
 
   static bool executingReturnDoesNotUseAPoseToGoalStraightLine(
@@ -1393,6 +1700,89 @@ class SuperExplorationDeciderTestPeer {
            !decider.isClearForVehicle({0, 0, 0}, 1.5);
   }
 
+  static bool indexedClearanceMatchesExactVoxelScan(
+      SuperExplorationDecider& decider) {
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.8;
+    decider.preferred_vehicle_radius_ = 1.1;
+    decider.vertical_vehicle_clearance_below_ = 0.5;
+    decider.vertical_vehicle_clearance_above_ = 0.5;
+    for (const VoxelKey occupied : {
+             VoxelKey{0, 0, 0}, VoxelKey{4, 0, 0},
+             VoxelKey{-3, 2, 2}, VoxelKey{8, 1, -2},
+             VoxelKey{20, 20, 20}}) {
+      decider.voxels_[occupied] = SuperExplorationDecider::OCCUPIED;
+    }
+    const std::vector<VoxelKey> queries{
+        {0, 0, 0}, {1, 0, 0}, {7, 1, 0}, {10, 1, 0},
+        {-1, 2, 0}, {20, 20, 17}, {30, 30, 30}};
+    std::vector<bool> exact;
+    decider.decision_clearance_cache_active_ = false;
+    for (const VoxelKey& query : queries) {
+      exact.push_back(decider.isClearForVehicle(query, 0.8));
+      exact.push_back(decider.isClearForVehicle(query, 1.1));
+    }
+    decider.decision_vehicle_clearance_cache_.clear();
+    decider.decision_preferred_clearance_cache_.clear();
+    decider.decision_clearance_cache_active_ = true;
+    decider.rebuildDecisionClearanceIndex();
+    std::size_t index = 0;
+    for (const VoxelKey& query : queries) {
+      if (decider.isClearForVehicle(query, 0.8) != exact[index++]) {
+        return false;
+      }
+      if (decider.isClearForVehicle(query, 1.1) != exact[index++]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static double representativeIndexedReachabilityMilliseconds(
+      SuperExplorationDecider& decider, std::size_t* reachable_count) {
+    decider.voxels_.clear();
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.8;
+    decider.preferred_vehicle_radius_ = 1.1;
+    decider.vertical_vehicle_clearance_below_ = 0.5;
+    decider.vertical_vehicle_clearance_above_ = 0.5;
+    decider.have_home_ = true;
+    decider.current_pose_.pose.position.x = 0.125;
+    decider.current_pose_.pose.position.y = 0.125;
+    decider.current_pose_.pose.position.z = 0.125;
+    decider.home_pose_ = decider.current_pose_;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.frontier_search_radius_ = 100.0;
+    decider.max_task_lateral_offset_ = 100.0;
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.tunnel_min_planning_height_ = -100.0;
+    decider.tunnel_max_planning_height_ = 100.0;
+    decider.max_reachable_voxels_ = 300000;
+
+    // Roughly the same number of known-free cells as the slowest decision in
+    // the 2026-10-24 22:39 flight. Occupied side/roof/floor voxels exercise
+    // spatial-index queries rather than the empty-map fast path.
+    for (int x = 0; x < 200; ++x) {
+      for (int y = -15; y <= 15; ++y) {
+        for (int z = -12; z <= 12; ++z) {
+          const bool boundary = y == -15 || y == 15 || z == -12 || z == 12;
+          decider.voxels_[{x, y, z}] = boundary
+              ? SuperExplorationDecider::OCCUPIED
+              : SuperExplorationDecider::FREE;
+        }
+      }
+    }
+    decider.decision_vehicle_clearance_cache_.clear();
+    decider.decision_preferred_clearance_cache_.clear();
+    decider.decision_clearance_cache_active_ = true;
+    const auto start = std::chrono::steady_clock::now();
+    decider.rebuildDecisionClearanceIndex();
+    const auto reachable = decider.reachableFreeVoxels();
+    const auto finish = std::chrono::steady_clock::now();
+    *reachable_count = reachable.size();
+    return std::chrono::duration<double, std::milli>(finish - start).count();
+  }
+
   static bool oneSidedForwardSelectionPrioritizesComfortClearance(
       SuperExplorationDecider& decider) {
     decider.have_home_ = true;
@@ -1461,6 +1851,7 @@ class SuperExplorationDeciderTestPeer {
 
   static bool forwardSelectionUsesConfirmedCorridorCenter(
       SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
     decider.have_home_ = true;
     decider.mission_heading_yaw_ = 0.0;
     decider.min_goal_distance_ = 1.0;
@@ -1495,6 +1886,7 @@ class SuperExplorationDeciderTestPeer {
 
   static bool medialAxisDominatesComfortUntilCenteringIsUnavailable(
       SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
     decider.have_home_ = true;
     decider.super_occupied_stamp_ = ros::Time::now();
     decider.mission_heading_yaw_ = 0.0;
@@ -1760,6 +2152,43 @@ class SuperExplorationDeciderTestPeer {
     return yaw < -1.5 && yaw > -1.7;
   }
 
+  static bool lateralDetourDoesNotReverseOntoOutboundBreadcrumbs(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.connected_turn_min_new_space_ = 1.0;
+    decider.current_pose_.pose.position.x = 8.0;
+    decider.current_pose_.pose.position.y = -4.0;
+    decider.front_obstacle_streak_ =
+        decider.front_obstacle_confirm_frames_;
+
+    for (double y = 0.0; y >= -4.0; y -= 0.5) {
+      geometry_msgs::PoseStamped breadcrumb;
+      breadcrumb.pose.position.x = 8.0;
+      breadcrumb.pose.position.y = y;
+      breadcrumb.pose.orientation.w = 1.0;
+      decider.outbound_breadcrumbs_.push_back(breadcrumb);
+    }
+
+    SuperExplorationDecider::FrontierCandidate old_lane;
+    old_lane.goal.pose.position.x = 8.0;
+    old_lane.goal.pose.position.y = 0.0;
+    old_lane.unknown_neighbors = 20;
+    SuperExplorationDecider::VoxelSet reachable;
+    for (double y = -4.0; y <= 0.0; y += 0.125) {
+      const auto key = decider.positionToKey(7.75, y, 0.0);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    return !decider.publishLateralDetourGoal(reachable, {old_lane});
+  }
+
   static bool connectedTurnFollowsKnownFreeBendWithoutFrontier(
       SuperExplorationDecider& decider) {
     decider.have_home_ = true;
@@ -1803,6 +2232,396 @@ class SuperExplorationDeciderTestPeer {
     return yaw < -1.5 && yaw > -1.7;
   }
 
+  static bool tunnelHeadingCommitsOnlyAfterSuperAcceptance(
+      SuperExplorationDecider& decider) {
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.have_last_exploration_route_heading_ = true;
+    decider.last_exploration_route_heading_yaw_ = 0.0;
+    decider.current_pose_.pose.position.x = 1.0;
+
+    geometry_msgs::PoseStamped bend;
+    bend.pose.position.x = 1.0;
+    bend.pose.position.y = -3.0;
+    bend.pose.orientation.w = 1.0;
+    decider.publishGoal(bend, "frontier_fallback");
+    if (!decider.active_goal_commits_tunnel_heading_ ||
+        decider.tunnel_route_locked_) {
+      return false;
+    }
+
+    std_msgs::UInt64 rejected;
+    rejected.data = decider.active_goal_id_;
+    decider.rejectedGoalCallback(
+        boost::make_shared<std_msgs::UInt64>(rejected));
+    if (decider.tunnel_route_locked_) return false;
+
+    decider.publishGoal(bend, "frontier_fallback");
+    std_msgs::UInt64 accepted;
+    accepted.data = decider.active_goal_id_;
+    decider.acceptedGoalCallback(
+        boost::make_shared<std_msgs::UInt64>(accepted));
+    return decider.tunnel_route_locked_ &&
+        std::abs(decider.tunnel_route_heading_yaw_ + 0.5 * M_PI) < 1e-9;
+  }
+
+  static bool lockedTunnelHandoverCannotReturnToEntryAxis(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.tunnel_route_locked_ = true;
+    decider.tunnel_route_heading_yaw_ = -0.5 * M_PI;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 1.0;
+    decider.max_frontier_goal_distance_ = 3.0;
+    decider.connected_turn_max_angle_deg_ = 80.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({8, 0, 0});
+    decider.current_goal_.pose.position = decider.keyToPoint({8, -2, 0});
+    decider.have_active_goal_ = true;
+    decider.active_goal_id_ = 12;
+    decider.accepted_goal_id_ = 12;
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int x = 8; x <= 16; ++x) {
+      const VoxelKey key{x, 0, 0};
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    return !decider.tryForwardHandover(reachable) &&
+        decider.active_goal_id_ == 12;
+  }
+
+  static bool lockedTunnelRouteCanContinueBeyondEntryAxisBand(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.tunnel_route_locked_ = true;
+    decider.tunnel_route_heading_yaw_ = -0.5 * M_PI;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_task_lateral_offset_ = 2.0;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.connected_turn_max_angle_deg_ = 80.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({32, -16, 0});
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int y = -16; y >= -40; --y) {
+      const VoxelKey key{32, y, 0};
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+      reachable.insert(key);
+    }
+    return decider.publishConnectedTurnContinuation(reachable) &&
+        decider.current_goal_.pose.position.y < -6.0;
+  }
+
+  static bool lockedTunnelAllowsSharpBranchWhenCurrentRouteEnds(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.tunnel_route_locked_ = true;
+    decider.tunnel_route_heading_yaw_ = 0.0;
+    decider.tunnel_connected_turn_max_angle_deg_ = 120.0;
+    decider.tunnel_straight_preference_angle_deg_ = 35.0;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({32, 0, 0});
+
+    SuperExplorationDecider::VoxelSet reachable;
+    reachable.insert({32, 0, 0});
+    decider.voxels_[{32, 0, 0}] = SuperExplorationDecider::FREE;
+    // The current +X passage is closed. The only connected continuation first
+    // steps left, then turns down: its local endpoint is about 100 degrees
+    // from the accepted tangent and must remain explorable, not be mistaken
+    // for a terminal branch.
+    reachable.insert({31, 0, 0});
+    decider.voxels_[{31, 0, 0}] = SuperExplorationDecider::FREE;
+    for (int y = -1; y >= -24; --y) {
+      reachable.insert({31, y, 0});
+      decider.voxels_[{31, y, 0}] = SuperExplorationDecider::FREE;
+    }
+    if (!decider.publishConnectedTurnContinuation(reachable)) return false;
+    const double yaw = std::atan2(
+        decider.current_goal_.pose.position.y -
+            decider.current_pose_.pose.position.y,
+        decider.current_goal_.pose.position.x -
+            decider.current_pose_.pose.position.x);
+    return std::abs(yaw) > 0.5 * M_PI &&
+        std::abs(yaw) < 120.0 * M_PI / 180.0 + 1e-9;
+  }
+
+  static bool lockedTunnelPrefersCurrentRouteOverAvailableSideBranch(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.tunnel_route_locked_ = true;
+    decider.tunnel_route_heading_yaw_ = 0.0;
+    decider.tunnel_connected_turn_max_angle_deg_ = 120.0;
+    decider.tunnel_straight_preference_angle_deg_ = 35.0;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({32, 0, 0});
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int x = 32; x <= 48; ++x) {
+      reachable.insert({x, 0, 0});
+      decider.voxels_[{x, 0, 0}] = SuperExplorationDecider::FREE;
+    }
+    // A longer side branch is already visible at the same junction. The
+    // first-version tunnel policy must keep the accepted +X route while that
+    // route remains executable, rather than chasing the larger side region.
+    for (int y = -1; y >= -24; --y) {
+      reachable.insert({32, y, 0});
+      decider.voxels_[{32, y, 0}] = SuperExplorationDecider::FREE;
+    }
+    if (!decider.publishConnectedTurnContinuation(reachable)) return false;
+    const double dx = decider.current_goal_.pose.position.x -
+                      decider.current_pose_.pose.position.x;
+    const double dy = decider.current_goal_.pose.position.y -
+                      decider.current_pose_.pose.position.y;
+    return dx > 2.0 && std::abs(std::atan2(dy, dx)) < 35.0 * M_PI / 180.0;
+  }
+
+  static bool tunnelBendChoosesClearLeftRouteOverMisleadingRightChord(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.have_last_exploration_route_heading_ = true;
+    decider.last_exploration_route_heading_yaw_ = 0.0;
+    decider.tunnel_route_locked_ = false;
+    decider.tunnel_connected_turn_max_angle_deg_ = 120.0;
+    decider.tunnel_straight_preference_angle_deg_ = 35.0;
+    decider.lateral_route_switch_clearance_advantage_ = 0.25;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_task_lateral_offset_ = 12.0;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({40, 0, 0});
+
+    SuperExplorationDecider::VoxelSet reachable;
+    reachable.insert({40, 0, 0});
+    decider.voxels_[{40, 0, 0}] = SuperExplorationDecider::FREE;
+
+    // The right route first advances 2.5 m, making its four-metre local-goal
+    // chord appear to be a mild 31-degree continuation, then turns 90 degrees
+    // toward a nearby obstacle surface.
+    for (int x = 41; x <= 50; ++x) {
+      reachable.insert({x, 0, 0});
+      decider.voxels_[{x, 0, 0}] = SuperExplorationDecider::FREE;
+    }
+    for (int y = -1; y >= -28; --y) {
+      reachable.insert({50, y, 0});
+      decider.voxels_[{50, y, 0}] = SuperExplorationDecider::FREE;
+    }
+
+    // The left branch turns immediately. Its chord looks like a sharp branch,
+    // but the complete connected route has substantially more clearance.
+    reachable.insert({39, 0, 0});
+    decider.voxels_[{39, 0, 0}] = SuperExplorationDecider::FREE;
+    for (int y = 1; y <= 28; ++y) {
+      reachable.insert({39, y, 0});
+      decider.voxels_[{39, y, 0}] = SuperExplorationDecider::FREE;
+    }
+
+    const geometry_msgs::Point right_corner = decider.keyToPoint({50, 0, 0});
+    for (int y = -24; y <= 0; ++y) {
+      const geometry_msgs::Point route_point = decider.keyToPoint({50, y, 0});
+      decider.super_occupied_points_->push_back(pcl::PointXYZ(
+          static_cast<float>(right_corner.x + 0.6),
+          static_cast<float>(route_point.y),
+          static_cast<float>(route_point.z)));
+    }
+    decider.super_occupied_tree_.setInputCloud(decider.super_occupied_points_);
+
+    if (!decider.publishConnectedTurnContinuation(reachable) ||
+        decider.current_goal_.pose.position.y <= 2.0 ||
+        !decider.active_goal_commits_tunnel_heading_) {
+      return false;
+    }
+    const double commanded_yaw = 2.0 * std::atan2(
+        decider.current_goal_.pose.orientation.z,
+        decider.current_goal_.pose.orientation.w);
+    return commanded_yaw > 1.45 && commanded_yaw < 1.70 &&
+        decider.active_goal_tunnel_heading_yaw_ > 1.45 &&
+        decider.active_goal_tunnel_heading_yaw_ < 1.70;
+  }
+
+  static bool tunnelBendHandsOverBeforeTheStraightGoalStops(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.have_last_exploration_route_heading_ = true;
+    decider.last_exploration_route_heading_yaw_ = 0.0;
+    decider.tunnel_route_locked_ = false;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.forward_lookahead_distance_ = 4.0;
+    decider.forward_lookahead_step_ = 0.5;
+    decider.forward_goal_lateral_search_width_ = 0.0;
+    decider.min_goal_distance_ = 2.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_task_lateral_offset_ = 12.0;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.tunnel_connected_turn_max_angle_deg_ = 120.0;
+    decider.tunnel_straight_preference_angle_deg_ = 35.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({32, 0, 0});
+    decider.current_goal_.pose.position = decider.keyToPoint({40, 0, 0});
+    decider.current_goal_.pose.orientation.w = 1.0;
+    decider.have_active_goal_ = true;
+    decider.active_goal_id_ = 50;
+    decider.accepted_goal_id_ = 50;
+
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int x = 32; x <= 34; ++x) {
+      reachable.insert({x, 0, 0});
+      decider.voxels_[{x, 0, 0}] = SuperExplorationDecider::FREE;
+    }
+    for (int y = -1; y >= -24; --y) {
+      reachable.insert({34, y, 0});
+      decider.voxels_[{34, y, 0}] = SuperExplorationDecider::FREE;
+    }
+
+    if (!decider.tryForwardHandover(reachable) ||
+        decider.active_goal_id_ == 50 ||
+        decider.current_goal_.pose.position.y >= -2.0) {
+      return false;
+    }
+    const double yaw = 2.0 * std::atan2(
+        decider.current_goal_.pose.orientation.z,
+        decider.current_goal_.pose.orientation.w);
+    return yaw < -1.45 && yaw > -1.70;
+  }
+
+  static bool strictTunnelReturnWaitsInsteadOfTakingSideBranch(
+      SuperExplorationDecider& decider) {
+    const ros::Time now = ros::Time::now();
+    decider.have_data_ = true;
+    decider.have_home_ = true;
+    decider.returning_home_ = true;
+    decider.prefer_outbound_breadcrumbs_ = true;
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.last_sync_time_ = now;
+    decider.super_occupied_stamp_ = now;
+    decider.data_timeout_ = 100.0;
+    decider.return_map_timeout_ = 100.0;
+    decider.return_segment_length_ = 3.0;
+    decider.goal_reached_distance_ = 0.25;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.home_pose_.pose.position = decider.keyToPoint({0, 0, 0});
+    decider.current_pose_.pose.position = decider.keyToPoint({8, 8, 0});
+    for (int x = 0; x <= 8; ++x) {
+      for (int y = 0; y <= 8; ++y) {
+        decider.voxels_[{x, y, 0}] = SuperExplorationDecider::FREE;
+      }
+    }
+    geometry_msgs::PoseStamped crumb = decider.home_pose_;
+    decider.outbound_breadcrumbs_.push_back(crumb);
+    crumb.pose.position = decider.keyToPoint({8, 0, 0});
+    decider.outbound_breadcrumbs_.push_back(crumb);
+    crumb.pose.position = decider.current_pose_.pose.position;
+    decider.outbound_breadcrumbs_.push_back(crumb);
+
+    // Block the recorded inward leg immediately behind the aircraft. The
+    // surrounding square remains known free, so the general graph could take
+    // an unvisited side route; strict Task-4 return must hold instead.
+    decider.super_occupied_points_->push_back(pcl::PointXYZ(
+        static_cast<float>(decider.current_pose_.pose.position.x),
+        static_cast<float>(decider.current_pose_.pose.position.y - 0.5),
+        static_cast<float>(decider.current_pose_.pose.position.z)));
+    decider.super_occupied_tree_.setInputCloud(
+        decider.super_occupied_points_);
+    return !decider.publishFreshReturnGoal("strict_trace_test") &&
+        !decider.have_active_goal_;
+  }
+
+  static bool lockedTunnelBranchReturnsAfterCoherentRouteTimeout(
+      SuperExplorationDecider& decider) {
+    const ros::Time now = ros::Time::now();
+    decider.enabled_ = true;
+    decider.have_data_ = true;
+    decider.have_home_ = true;
+    decider.exploration_started_ = true;
+    decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
+    decider.tunnel_route_locked_ = true;
+    decider.tunnel_route_heading_yaw_ = -0.5 * M_PI;
+    decider.last_sync_time_ = now;
+    decider.super_occupied_stamp_ = now;
+    decider.data_timeout_ = 100.0;
+    decider.first_data_time_ = now - ros::Duration(20.0);
+    decider.min_data_duration_ = 1.0;
+    decider.reached_goal_count_ = 2;
+    decider.min_goals_before_complete_ = 1;
+    decider.no_frontier_timeout_ = 2.0;
+    decider.hard_safe_route_unavailable_since_ =
+        now - ros::Duration(3.0);
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({4, -4, 0});
+    decider.home_pose_.pose.position = decider.keyToPoint({0, 0, 0});
+    const VoxelKey current = decider.positionToKey(
+        decider.current_pose_.pose.position.x,
+        decider.current_pose_.pose.position.y,
+        decider.current_pose_.pose.position.z);
+    decider.voxels_[current] = SuperExplorationDecider::FREE;
+
+    decider.decisionTimerCallback(ros::TimerEvent());
+    return decider.returning_home_;
+  }
+
   static bool noRouteTimerClearsOnlyAfterSuperAcceptance(
       SuperExplorationDecider& decider) {
     decider.enabled_ = true;
@@ -1824,6 +2643,30 @@ class SuperExplorationDeciderTestPeer {
     accepted->data = decider.active_goal_id_;
     decider.acceptedGoalCallback(accepted);
     return decider.hard_safe_route_unavailable_since_.isZero();
+  }
+
+  static bool decisionSnapshotDoesNotExpireDuringItsOwnPass(
+      SuperExplorationDecider& decider) {
+    decider.return_map_timeout_ = 1.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.1;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    geometry_msgs::Point point;
+    point.x = 0.25;
+    point.y = 0.25;
+    point.z = 0.25;
+    decider.voxels_[decider.positionToKey(point.x, point.y, point.z)] =
+        SuperExplorationDecider::FREE;
+    decider.super_occupied_stamp_ = ros::Time::now() - ros::Duration(5.0);
+    decider.decision_snapshot_time_ =
+        decider.super_occupied_stamp_ + ros::Duration(0.5);
+    const bool snapshot_clear = decider.returnSegmentClear(
+        point, point, 0.0, false);
+    decider.decision_snapshot_time_ = ros::Time();
+    const bool wall_clock_stale = !decider.returnSegmentClear(
+        point, point, 0.0, false);
+    return snapshot_clear && wall_clock_stale;
   }
 
   static bool unusableRawFrontierDoesNotSuppressStallReturn(
@@ -1992,6 +2835,51 @@ TEST(SuperGoalPublication, StartupReplacementAndResetUseOneOrderedTopic) {
   spinner.stop();
 }
 
+TEST(SuperGoalPublication,
+     SchedulerSelectsOnlyTheProfileForTheActiveExplorationTask) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~scheduled_profile_selection");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  schedulerSelectsOnlyTheProfileForTheActiveExplorationTask(
+                      decider));
+}
+
+TEST(SuperGoalPublication, GoafUsesLongerPreviewWithoutRetuningTunnel) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~goaf_long_preview");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  goafUsesLongerPreviewWithoutRetuningTunnel(decider));
+}
+
+TEST(SuperGoalPublication,
+     BatteryAdmissionRequiresOutboundAndReturnReserve) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~battery_admission");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  batteryAdmissionRequiresOutboundAndReturnReserve(decider));
+}
+
+TEST(SuperGoalPublication,
+     DisabledBatteryAdmissionIgnoresUnreliablePercentage) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~battery_admission_disabled");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  disabledBatteryAdmissionIgnoresUnreliablePercentage(
+                      decider));
+}
+
+TEST(SuperGoalPublication, Task1ReturnsAtFiveMetresFromConfirmedEndWall) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~task1_five_metre_end_wall_return");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  task1ReturnsAtFiveMetresFromConfirmedEndWall(decider));
+}
+
 TEST(SuperGoalPublication, ReturnPrefersSurveyedLaneInOpenSpace) {
   if (!ros::isInitialized()) {
     int argc = 0;
@@ -2041,6 +2929,14 @@ TEST(SuperGoalPublication, ReturnGoalRespectsHeightCeiling) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::returnGoalRespectsHeightCeiling(
       decider));
+}
+
+TEST(SuperGoalPublication, TunnelReturnRetracesInclinedBreadcrumbs) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~inclined_tunnel_return");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  tunnelReturnRetracesInclinedBreadcrumbs(decider));
 }
 
 TEST(SuperGoalPublication, ReturnOffsetStaysInsideTheClearLane) {
@@ -2141,6 +3037,22 @@ TEST(SuperGoalPublication, ShortExecutablePassageIsStillOpen) {
       decider));
 }
 
+TEST(SuperGoalPublication, ZeroMissionRadiusAllowsDistantForwardPassage) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~unlimited_mission_radius");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  zeroMissionRadiusAllowsDistantForwardPassage(decider));
+}
+
+TEST(SuperGoalPublication, TunnelHeightContractFollowsCurrentIncline) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~inclined_tunnel_height_contract");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  tunnelHeightContractFollowsCurrentIncline(decider));
+}
+
 TEST(SuperGoalPublication, SmallMapCountDropKeepsStableTimer) {
   ros::NodeHandle nh;
   ros::NodeHandle private_nh("~stable_map_count");
@@ -2237,6 +3149,22 @@ TEST(SuperGoalPublication, IntermediateReturnWaypointWaitsForActualArrival) {
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::intermediateReturnWaypointWaitsForActualArrival(decider));
 }
 
+TEST(SuperGoalPublication, ReturnPreviewCentersBeforeOffsetNarrowing) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~return_corridor_preview");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  returnPreviewCentersBeforeOffsetNarrowing(decider));
+}
+
+TEST(SuperGoalPublication, ForwardPreviewIsSlewLimitedAndHeldAcrossSparseFrames) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~forward_corridor_preview_latch");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  forwardPreviewIsSlewLimitedAndHeldAcrossSparseFrames(decider));
+}
+
 TEST(SuperGoalPublication, ConfirmedObstacleStillAllowsVerifiedHandover) {
   ros::NodeHandle nh;
   ros::NodeHandle private_nh("~");
@@ -2293,6 +3221,16 @@ TEST(SuperGoalPublication, ReturnHandsOverOnlyAcceptedProgressiveLeg) {
                   returnHandsOverOnlyAcceptedProgressiveLeg(decider));
 }
 
+TEST(SuperGoalPublication,
+     AcceptedReturnGoalPassedWhilePlanningNeverCommandsTurnAway) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  acceptedReturnGoalPassedWhilePlanningNeverCommandsTurnAway(
+                      decider));
+}
+
 TEST(SuperGoalPublication, ExecutingReturnKeepsSupersCertifiedTrajectory) {
   ros::NodeHandle nh;
   ros::NodeHandle private_nh("~");
@@ -2310,6 +3248,14 @@ TEST(SuperGoalPublication, ShortLateralDetourIsNotImmediatelyComplete) {
   SuperExplorationDecider decider(nh, private_nh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   shortLateralDetourIsNotImmediatelyComplete(decider));
+}
+
+TEST(SuperGoalPublication, LateralDetourCannotReverseOntoSurveyedLane) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~lateral_no_outbound_backtrack");
+  SuperExplorationDecider decider(nh, private_nh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  lateralDetourDoesNotReverseOntoOutboundBreadcrumbs(decider));
 }
 
 TEST(SuperGoalPublication, ConnectedBlockedRouteIsNotFrontWallPreempted) {
@@ -2411,6 +3357,30 @@ TEST(SuperGoalPublication, PreferredClearanceIsDistinctFromHardFloor) {
                   preferredClearanceIsDistinctFromHardFloor(decider));
 }
 
+TEST(SuperGoalPublication, IndexedClearanceMatchesExactVoxelScan) {
+  ros::NodeHandle nh, pnh("~");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  indexedClearanceMatchesExactVoxelScan(decider));
+}
+
+TEST(SuperGoalPublication, RepresentativeReachabilityStaysBelowCallbackBudget) {
+  ros::NodeHandle nh, pnh("~");
+  SuperExplorationDecider decider(nh, pnh);
+  std::size_t reachable_count = 0;
+  const double elapsed_ms = SuperExplorationDeciderTestPeer::
+      representativeIndexedReachabilityMilliseconds(
+          decider, &reachable_count);
+  EXPECT_GT(reachable_count, 80000U);
+  // The former three-second budget was already longer than a 0.9 m/s
+  // aircraft's three-metre rolling handover window.  Keep enough margin for
+  // an older NUC under load while making callback regressions fail before
+  // they reintroduce rest-to-rest waypoint transitions.
+  EXPECT_LT(elapsed_ms, 500.0)
+      << "representative flood fill took " << elapsed_ms << " ms for "
+      << reachable_count << " cells";
+}
+
 TEST(SuperGoalPublication,
      OneSidedForwardSelectionPrioritizesComfortClearance) {
   ros::NodeHandle nh, pnh("~");
@@ -2477,11 +3447,35 @@ TEST(SuperGoalPublication, CorridorPreviewAnticipatesOffsetNarrowing) {
     }
   }
   const CorridorPreviewEstimate preview = estimateCorridorPreview(
-      passable, 1.0, 0.5, -2.0, 0.25, 0.0, 1.0, 6);
+      passable, 1.0, 0.5, -2.0, 0.25, 0.0, 1.0, 6, 0.75);
   ASSERT_TRUE(preview.valid);
   EXPECT_EQ(preview.slices, 12u);
   EXPECT_GT(preview.target_lateral, 0.5);
-  EXPECT_GT(preview.near_width - preview.minimum_width, 0.5);
+  EXPECT_GT(preview.near_center_band_width -
+                preview.minimum_center_band_width,
+            0.5);
+}
+
+TEST(SuperGoalPublication, CorridorPreviewDoesNotSteerFromSingleCellTail) {
+  std::vector<std::vector<bool>> passable(
+      12, std::vector<bool>(17, false));
+  for (std::size_t row = 0; row < passable.size(); ++row) {
+    if (row < 8) {
+      for (std::size_t column = 1; column <= 15; ++column) {
+        passable[row][column] = true;
+      }
+    } else {
+      // The distant sensor horizon sees one safe centre cell at +0.5 m. It
+      // must not masquerade as a 0.25 m physical passage and pull the goal.
+      passable[row][10] = true;
+    }
+  }
+  const CorridorPreviewEstimate preview = estimateCorridorPreview(
+      passable, 1.0, 0.5, -2.0, 0.25, 0.0, 1.0, 6, 0.75);
+  ASSERT_TRUE(preview.valid);
+  EXPECT_EQ(preview.slices, 8u);
+  EXPECT_NEAR(preview.target_lateral, 0.0, 0.25);
+  EXPECT_GE(preview.minimum_center_band_width, 0.75);
 }
 
 TEST(SuperGoalPublication, CorridorPreviewRejectsUnreachableLateralJump) {
@@ -2543,11 +3537,128 @@ TEST(SuperGoalPublication, ConnectedTurnFollowsKnownFreeBendWithoutFrontier) {
                   connectedTurnFollowsKnownFreeBendWithoutFrontier(decider));
 }
 
+TEST(SuperGoalPublication, TunnelHeadingCommitsOnlyAfterSuperAcceptance) {
+  ros::NodeHandle nh, pnh("~tunnel_heading_acceptance");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  tunnelHeadingCommitsOnlyAfterSuperAcceptance(decider));
+}
+
+TEST(SuperGoalPublication, LockedTunnelHandoverCannotReturnToEntryAxis) {
+  ros::NodeHandle nh, pnh("~tunnel_entry_axis_guard");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  lockedTunnelHandoverCannotReturnToEntryAxis(decider));
+}
+
+TEST(SuperGoalPublication, LockedTunnelRouteCanContinueBeyondEntryAxisBand) {
+  ros::NodeHandle nh, pnh("~tunnel_local_axis");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  lockedTunnelRouteCanContinueBeyondEntryAxisBand(decider));
+}
+
+TEST(SuperGoalPublication, LockedTunnelAllowsSharpBranchWhenRouteEnds) {
+  ros::NodeHandle nh, pnh("~tunnel_sharp_branch");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  lockedTunnelAllowsSharpBranchWhenCurrentRouteEnds(decider));
+}
+
+TEST(SuperGoalPublication, LockedTunnelPrefersCurrentRouteOverSideBranch) {
+  ros::NodeHandle nh;
+  SuperExplorationDecider decider(
+      nh, ros::NodeHandle("~locked_tunnel_straight_preference"));
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  lockedTunnelPrefersCurrentRouteOverAvailableSideBranch(
+                      decider));
+}
+
+TEST(SuperGoalPublication,
+     TunnelBendChoosesClearLeftRouteOverMisleadingRightChord) {
+  ros::NodeHandle nh;
+  SuperExplorationDecider decider(
+      nh, ros::NodeHandle("~tunnel_bend_whole_route_clearance"));
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  tunnelBendChoosesClearLeftRouteOverMisleadingRightChord(
+                      decider));
+}
+
+TEST(SuperGoalPublication, TunnelBendUsesContinuousPreStopHandover) {
+  ros::NodeHandle nh;
+  ros::NodeHandle private_nh("~tunnel_bend_continuous_handover");
+  private_nh.setParam(
+      "goal_command_topic",
+      "/mine_uav/test/tunnel_bend_continuous_handover_goal_command");
+  SuperExplorationDecider decider(nh, private_nh);
+
+  std::mutex mutex;
+  std::vector<super_planner::GoalCommand> received;
+  auto subscriber = nh.subscribe<super_planner::GoalCommand>(
+      "/mine_uav/test/tunnel_bend_continuous_handover_goal_command", 10,
+      [&](const super_planner::GoalCommand::ConstPtr& message) {
+        std::lock_guard<std::mutex> lock(mutex);
+        received.push_back(*message);
+      });
+  ros::AsyncSpinner spinner(1);
+  spinner.start();
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(5);
+  while (ros::ok() &&
+         SuperExplorationDeciderTestPeer::subscribers(decider) == 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    ros::WallDuration(0.01).sleep();
+  }
+  ASSERT_GT(SuperExplorationDeciderTestPeer::subscribers(decider), 0u);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  tunnelBendHandsOverBeforeTheStraightGoalStops(decider));
+  while (ros::ok() && std::chrono::steady_clock::now() < deadline) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (received.size() >= 2u) break;
+    }
+    ros::WallDuration(0.01).sleep();
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_EQ(received.size(), 2u);
+    EXPECT_EQ(received[0].command,
+              super_planner::GoalCommand::CANCEL_GOAL);
+    EXPECT_EQ(received[0].goal_id, 0u);
+    EXPECT_EQ(received[1].command,
+              super_planner::GoalCommand::SET_GOAL);
+    EXPECT_EQ(received[1].reason, "connected_turn_route");
+  }
+  spinner.stop();
+}
+
+TEST(SuperGoalPublication, StrictTunnelReturnNeverTakesSideBranch) {
+  ros::NodeHandle nh;
+  SuperExplorationDecider decider(
+      nh, ros::NodeHandle("~strict_tunnel_return_trace"));
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  strictTunnelReturnWaitsInsteadOfTakingSideBranch(decider));
+}
+
+TEST(SuperGoalPublication, LockedTunnelBranchReturnsAfterRouteTimeout) {
+  ros::NodeHandle nh, pnh("~tunnel_branch_terminal");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  lockedTunnelBranchReturnsAfterCoherentRouteTimeout(decider));
+}
+
 TEST(SuperGoalPublication, NoRouteTimerClearsOnlyAfterSuperAcceptance) {
   ros::NodeHandle nh, pnh("~no_route_timer_acceptance");
   SuperExplorationDecider decider(nh, pnh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   noRouteTimerClearsOnlyAfterSuperAcceptance(decider));
+}
+
+TEST(SuperGoalPublication, DecisionSnapshotDoesNotExpireDuringItsOwnPass) {
+  ros::NodeHandle nh, pnh("~decision_snapshot_freshness");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  decisionSnapshotDoesNotExpireDuringItsOwnPass(decider));
 }
 
 TEST(SuperGoalPublication, UnusableRawFrontierDoesNotSuppressStallReturn) {

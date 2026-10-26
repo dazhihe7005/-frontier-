@@ -1,0 +1,126 @@
+# Omni-LIVO-only Gazebo regression profile.  Gazebo has no four fisheye
+# cameras, so this intentionally exercises the same LIO backend, health gate,
+# PX4 bridge and downstream planning/safety graph without enabling VIO.
+common:
+  img_en: 0
+  imu_topic: /mavros/imu/data_raw
+  lid_topic: /mine_uav/sitl/mid360/points2
+  lidar_en: 1
+  ros_driver_bug_fix: false
+
+extrin_calib:
+  # Simulated MID360 point -> simulated body/PX4 IMU, both ROS FLU.
+  extrinsic_T: [0.1315, 0.0, 0.203]
+  extrinsic_R: [0.906307787, 0.0, 0.422618262,
+                0.0, 1.0, 0.0,
+                -0.422618262, 0.0, 0.906307787]
+  # Omni-LIVO initializes camera model storage even in LIO-only mode.  This
+  # inert entry is never subscribed for fusion because common/img_en is zero.
+  cameras:
+    - cam_id: 0
+      img_topic: /mine_uav/sitl/unused_fisheye
+      Rcl: [1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0]
+      Pcl: [0.0, 0.0, 0.0]
+
+time_offset:
+  exposure_time_init: 0.0
+  img_time_offset: 0.0
+  imu_time_offset: 0.0
+
+preprocess:
+  blind: 0.5
+  feature_extract_enabled: false
+  filter_size_surf: 0.5
+  # Gazebo is an instantaneous organized ray image.  Omni-LIVO's L515
+  # standard-cloud handler represents that faithfully without fabricated
+  # Livox packet timing.
+  lidar_type: 4
+  point_filter_num: 1
+  scan_line: 32
+
+imu:
+  acc_cov: 0.6
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
+  gravity_est_en: false
+  gyr_cov: 0.3
+  imu_en: true
+  imu_int_frame: 600
+
+lio:
+  beam_err: 0.05
+  dept_err: 0.02
+  layer_init_num: [5, 5, 5, 5, 5]
+  max_iterations: 5
+  max_layer: 2
+  max_points_num: 100
+  min_eigen_value: 0.0025
+  voxel_size: 1.0
+
+local_map:
+  half_map_size: 50
+  map_sliding_en: true
+  max_visual_voxels: 10000
+  sliding_thresh: 4
+
+health:
+  min_effective_features: 30
+  min_translation_eigenvalue: 0.01
+  min_translation_eigenvalue_ratio: 0.05
+  # Acquire at 0.05; once healthy, tolerate the mild directional imbalance
+  # of a long tunnel down to 0.03 while retaining the absolute eigenvalue gate.
+  # Acquisition and recovery still require the stricter 0.05 ratio.
+  min_translation_eigenvalue_ratio_release: 0.03
+  recovery_frames: 5
+  unhealthy_frames: 3
+  unhealthy_position_variance: 25.0
+
+safety:
+  image_subscriber_queue: 2
+  imu_subscriber_queue: 2000
+  lidar_subscriber_queue: 200
+  max_image_buffer_groups: 2
+  max_processing_lag_sec: 3.0
+  max_rss_gib: 12.0
+
+uav:
+  align_output_time_to_ros: true
+  gravity_align_en: true
+  imu_rate_odom: false
+
+publish:
+  blind_rgb_points: 0.45
+  dense_map_en: true
+  direct_mavros_pose_en: false
+  localization_health_topic: /omnilivo/localization_healthy
+  localization_metrics_topic: /omnilivo/localization_metrics
+  odometry_topic: /omnilivo/odometry
+  pub_effect_point_en: false
+  pub_plane_en: false
+  pub_scan_num: 1
+  registered_cloud_topic: /omnilivo/cloud_registered
+
+pcd_save:
+  colmap_output_en: false
+  filter_size_pcd: 0.1
+  interval: -1
+  pcd_save_en: false
+
+evo:
+  pose_output_en: false
+  seq_name: sitl_omnilivo
+
+vio:
+  enable_cross_camera_tracking: false
+  enable_dynamic_covariance: false
+  exposure_estimate_en: false
+  img_point_cov: 100
+  inverse_composition_en: false
+  max_iterations: 5
+  max_total_points: 1
+  normal_en: true
+  outlier_threshold: 100
+  patch_pyrimid_level: 3
+  patch_size: 4

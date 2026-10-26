@@ -9,6 +9,8 @@ trap 'exit 0' INT TERM
 # Boot entry point for the physical five-metre test.  Starting this script does
 # not arm PX4, take off, or generate a goal.  The test node still requires a
 # fresh, debounced CH7 low-to-high edge after launch and all normal safety gates.
+# CH7 is also Task 4's production trigger; never run this isolated test beside
+# mission_scheduler or the normal Task-1/Task-4 exploration stack.
 
 readonly PROJECT_DIR=/home/nuc/frontier-upload
 readonly LOG_ROOT=/home/nuc/flight_logs/five_meter

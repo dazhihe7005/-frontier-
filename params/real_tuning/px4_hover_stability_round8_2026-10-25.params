@@ -1,0 +1,7 @@
+# NOTE: 2026-10-25 hover-feedforward correction from flights 347/348.
+# Apply only while landed and disarmed, then force a readback before flight.
+# The stable-hover thrust setpoint averaged 0.638; 0.630 is a conservative
+# feed-forward update. Vertical P/I/D remain unchanged so the effect of the
+# localization-health debounce and hover-thrust correction stays separable.
+# MAV ID	COMPONENT ID	PARAM NAME	VALUE	(TYPE)
+1	1	MPC_THR_HOVER	0.630	9

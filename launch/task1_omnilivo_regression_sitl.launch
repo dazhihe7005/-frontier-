@@ -1,0 +1,19 @@
+<launch>
+  <!-- Dedicated pre-flight Omni-LIVO regression: simple 40 m chamber, the
+       production Task-1 planner/avoidance/speed contract, and PX4 SITL.  Set
+       allow_auto_arm=false for estimator-only inspection; true exercises the
+       complete simulated takeoff, exploration and return path. -->
+  <arg name="gui" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="allow_auto_arm" default="false"/>
+
+  <include file="$(find mine_uav_control)/launch/task1_40m_platform_sitl.launch">
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
+    <arg name="vehicle_sdf"
+         value="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
+    <arg name="world"
+         value="$(find mine_uav_control)/worlds/omnilivo_regression_40x40x30.world"/>
+  </include>
+</launch>

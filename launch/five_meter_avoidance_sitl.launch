@@ -64,13 +64,14 @@
     <param name="temporary_sensor_roll_in_body_deg" value="0.0"/>
     <param name="temporary_sensor_pitch_in_body_deg" value="0.0"/>
     <param name="temporary_sensor_yaw_in_body_deg" value="0.0"/>
+    <param name="auto_calibrate_mount_from_gravity" value="false"/>
     <param name="sensor_position_in_body_x" value="0.0"/>
     <param name="sensor_position_in_body_y" value="0.0"/>
     <param name="sensor_position_in_body_z" value="0.0"/>
     <param name="require_fastlio_health" value="false"/>
   </node>
 
-  <node pkg="mine_uav_control" type="gazebo_mid360_fastlio_adapter.py"
+  <node pkg="mine_uav_control" type="gazebo_mid360_lio_adapter.py"
         name="five_meter_planner_cloud_adapter" output="screen" required="true">
     <param name="raw_cloud_topic" value="/mine_uav/sitl/mid360/points"/>
     <param name="odom_topic" value="/Odometry"/>

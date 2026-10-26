@@ -1,0 +1,12 @@
+<launch>
+  <node pkg="mine_uav_control" type="assisted_task_px4_router.py"
+        name="assisted_task3_px4_router_test" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/assisted_task_px4_router.yaml"/>
+    <param name="prestream_duration" value="0.10"/>
+    <param name="mode_request_interval" value="0.05"/>
+    <param name="input_timeout" value="0.40"/>
+  </node>
+  <test pkg="mine_uav_control" type="test_assisted_task3_px4_router_ros.py"
+        test-name="assisted_task3_px4_router_ros" time-limit="20"/>
+</launch>

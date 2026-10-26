@@ -11,20 +11,33 @@ inline bool sourcePositionStepAllowed(double distance,double dt,double speed) {
       dt>0.0&&speed>=0.0&&distance<=speed*dt+0.015;
 }
 inline const char* motionTransitionFailure(const MotionSample& before,const MotionSample& after,
-    double dt,double speed,double acceleration,double jerk,double yaw_rate) {
-  if (!std::isfinite(dt)||dt<=0||dt>0.25) return "TIME_DISCONTINUITY";
+    double dt,double speed,double acceleration,double jerk,double yaw_rate,
+    bool require_pva_consistency=true) {
+  if (!std::isfinite(dt)||dt<=0) return "TIME_DISCONTINUITY";
   for (int i=0;i<3;++i) if(!std::isfinite(after.p[i])||!std::isfinite(after.v[i])||!std::isfinite(after.a[i])) return "NONFINITE";
   if(!std::isfinite(after.yaw)) return "NONFINITE";
+  const double dyaw=std::abs(std::atan2(std::sin(after.yaw-before.yaw),std::cos(after.yaw-before.yaw)));
+  if(dt>0.25) {
+    // A delayed OFFBOARD acknowledgement can cross a short estimator-health
+    // gap after the bridge has already frozen its prestream hold.  Resending
+    // that exact, stationary state is continuous even though wall time
+    // advanced; only a moving or changed state is a time discontinuity.
+    const bool unchanged_stationary_hold =
+        delta3(after.p,before.p)<=1e-6 &&
+        norm3(before.v)<=1e-6 && norm3(after.v)<=1e-6 &&
+        norm3(before.a)<=1e-6 && norm3(after.a)<=1e-6 && dyaw<=1e-6;
+    return unchanged_stationary_hold ? nullptr : "TIME_DISCONTINUITY";
+  }
   if(delta3(after.p,before.p)>speed*dt+0.015) return "POSITION_JUMP";
   if(delta3(after.v,before.v)>acceleration*dt+0.025) return "VELOCITY_JUMP";
   if(delta3(after.a,before.a)>jerk*dt+0.04) return "ACCELERATION_JUMP";
-  const double dyaw=std::abs(std::atan2(std::sin(after.yaw-before.yaw),std::cos(after.yaw-before.yaw)));
   if(dyaw>yaw_rate*dt+0.01) return "YAW_JUMP";
   // Position and velocity must describe the SAME motion. Allow one sampling
   // tick of phase error, not an arbitrary blend toward a moving target.
   std::array<double,3> residual;
   for(int i=0;i<3;++i) residual[i]=after.p[i]-before.p[i]-.5*(after.v[i]+before.v[i])*dt;
-  if(norm3(residual)>0.015+jerk*dt*dt*dt/12.0) return "INCONSISTENT_PVA";
+  if(require_pva_consistency&&
+      norm3(residual)>0.015+jerk*dt*dt*dt/12.0) return "INCONSISTENT_PVA";
   return nullptr;
 }
 

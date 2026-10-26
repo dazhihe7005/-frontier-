@@ -6,6 +6,10 @@ fsm:
   click_goal_topic: "/goal"
   goal_command_en: true
   goal_command_topic: "/mine_uav/super/goal_command"
+  # Planning and goal acceptance may complete in POSCTL, but the trajectory
+  # clock stays at t=0 until the PX4 bridge confirms managed OFFBOARD.
+  require_execution_authorization: true
+  execution_authorization_topic: "/mine_uav/super/execution_enable"
   click_height: -10.0
   goal_snap_max_distance: 0.50
   click_yaw_en: true
@@ -74,10 +78,18 @@ super_planner:
   flight_min_z: -5.0
   flight_max_z: 8.0
   yaw_dot_max: 0.6
-  # Flight 20261018_205128 showed visible ~1 s yaw acceleration/deceleration
-  # pulses. At 0.6 m/s, 0.5 s samples the path tangent about every 0.3 m and
-  # still leaves 25 setpoints per yaw segment at the 50 Hz PX4 bridge rate.
-  yaw_tracking_sample_period: 0.5
+  # The planner still publishes yaw continuously (about 100 Hz) and the PX4
+  # bridge streams it at 50 Hz. This value is only the internal tangent-knot
+  # spacing. The 2026-10-23 Task-4 flight showed that 0.5 s knots lag a narrow
+  # turn, so track the path tangent every 0.2 s instead.
+  yaw_tracking_sample_period: 0.2
+  # A rest-to-rest plan with a large heading change starts with a constant-
+  # position yaw segment. The first return leg is deliberately made a rest
+  # plan, so translation cannot resume until the nose faces the certified
+  # return path. Small normal corrections remain fully continuous.
+  yaw_prealign_from_rest: true
+  yaw_prealign_threshold: 0.35
+  yaw_prealign_min_duration: 0.5
   yaw_mode: 1
   mpc_horizon: 15
 
@@ -86,9 +98,9 @@ traj_opt:
     save_log_en: false
     print_optimizer_log: false
   boundary:
-    # Current flight contract: 0.6 m/s nominal planning, 0.7 m/s predicted
-  # closed-loop governance, and 0.8 m/s planner/measured hard limits.
-    max_vel: 0.6
+    # Flight contract: 0.9 m/s nominal SUPER trajectory with a separate
+    # 1.1 m/s companion-side closed-loop and measured hard limit.
+    max_vel: 0.9
     max_acc: 1.0
     max_jerk: 4.0
     max_omg: 2.5
@@ -193,7 +205,7 @@ rog_map:
   robot_center_free_radius: 0.30
   ros_callback:
     enable: true
-    # Only task-gated perception enters ROG-Map. Raw Fast-LIO2 remains
+    # Only task-gated perception enters ROG-Map. Raw Omni-LIVO remains
     # continuously available to PX4 localization and the scheduler.
     cloud_topic: "/mine_uav/task1/cloud_registered"
     odom_topic: "/mine_uav/task1/odometry"
@@ -212,7 +224,7 @@ rog_map:
   intensity_thresh: -10
   point_filt_num: 1
   raycasting:
-    # Return scans must be able to remove old occupied voxels after Fast-LIO
+    # Return scans must be able to remove old occupied voxels after Omni-LIVO
     # aligns a repeated tunnel section differently. Hit-only fusion kept both
     # copies forever and manufactured a sub-2 m throat near the launch pad.
     enable: true

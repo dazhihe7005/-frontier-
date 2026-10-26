@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """ROS integration regression: a CH5/PX4 mode takeover stays manual."""
 
+import math
 import threading
 import time
 import unittest
 
 import rospy
 import rostest
-from geometry_msgs.msg import PoseStamped, TransformStamped, TwistStamped
+from geometry_msgs.msg import (PoseStamped, TransformStamped, TwistStamped,
+                               Vector3Stamped)
 from mavros_msgs.msg import PositionTarget, State
 from mavros_msgs.srv import SetMode, SetModeResponse
 from quadrotor_msgs.msg import PositionCommand
@@ -21,19 +23,24 @@ class ManualOverrideTest(unittest.TestCase):
         self._auto = False
         self._mission = True
         self._alignment_z = 0.0
+        self._alignment_yaw = 0.0
         self._pose_x = 0.0
+        self._pose_y = 0.0
         self._pose_z = 1.5
         self._command_x = 0.0
+        self._command_y = 0.0
         self._command_z = 1.5
         self._command_speed = 0.0
         self._measured_speed = 0.0
         self._exploration_status = "EXPLORING"
         self._returning = False
+        self._vision_healthy = True
         self._trajectory_id = 0
         self._setpoints = []
         self._setpoint_velocities = []
         self._requests = []
         self._return_requests = []
+        self._execution_authorizations = []
         self._status = ""
         self._statuses = []
         self._fault = ""
@@ -52,6 +59,10 @@ class ManualOverrideTest(unittest.TestCase):
         self._alignment_pub = rospy.Publisher(
             "/mine_uav/task1/planning_to_px4_alignment",
             TransformStamped, queue_size=1, latch=True
+        )
+        self._sensor_position_pub = rospy.Publisher(
+            "/mine_uav/task1/lio_sensor_position_in_body",
+            Vector3Stamped, queue_size=1, latch=True
         )
         self._mission_pub = rospy.Publisher(
             "/mine_uav/mission/goaf_enable", Bool, queue_size=1, latch=True
@@ -81,6 +92,10 @@ class ManualOverrideTest(unittest.TestCase):
         self._setpoint_sub = rospy.Subscriber(
             "/mine_uav/setpoint_cmd", PositionTarget, self._setpoint_callback
         )
+        self._execution_authorization_sub = rospy.Subscriber(
+            "/mine_uav/super/execution_enable", Bool,
+            self._execution_authorization_callback
+        )
         self._worker = threading.Thread(target=self._publish_loop, daemon=True)
         self._worker.start()
 
@@ -95,6 +110,7 @@ class ManualOverrideTest(unittest.TestCase):
         self._fault_sub.unregister()
         self._return_request_sub.unregister()
         self._setpoint_sub.unregister()
+        self._execution_authorization_sub.unregister()
         self._service.shutdown("test complete")
 
     def _set_mode(self, request):
@@ -116,6 +132,10 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self._return_requests.append(message.data)
 
+    def _execution_authorization_callback(self, message):
+        with self._lock:
+            self._execution_authorizations.append(message.data)
+
     def _setpoint_callback(self, message):
         with self._lock:
             self._setpoints.append((message.position.z, message.type_mask))
@@ -133,14 +153,18 @@ class ManualOverrideTest(unittest.TestCase):
                 auto = self._auto
                 mission = self._mission
                 alignment_z = self._alignment_z
+                alignment_yaw = self._alignment_yaw
                 pose_x = self._pose_x
+                pose_y = self._pose_y
                 pose_z = self._pose_z
                 command_x = self._command_x
+                command_y = self._command_y
                 command_z = self._command_z
                 command_speed = self._command_speed
                 measured_speed = self._measured_speed
                 exploration_status = self._exploration_status
                 returning = self._returning
+                vision_healthy = self._vision_healthy
                 trajectory_id = self._trajectory_id
             stamp = rospy.Time.now()
             state = State()
@@ -153,8 +177,10 @@ class ManualOverrideTest(unittest.TestCase):
             pose.header.stamp = stamp
             pose.header.frame_id = "map"
             pose.pose.position.x = pose_x
+            pose.pose.position.y = pose_y
             pose.pose.position.z = pose_z
-            pose.pose.orientation.w = 1.0
+            pose.pose.orientation.z = math.sin(0.5 * alignment_yaw)
+            pose.pose.orientation.w = math.cos(0.5 * alignment_yaw)
             self._pose_pub.publish(pose)
             velocity = TwistStamped()
             velocity.header.stamp = stamp
@@ -165,6 +191,7 @@ class ManualOverrideTest(unittest.TestCase):
             command.header.stamp = stamp
             command.header.frame_id = "task1_planning"
             command.position.x = command_x
+            command.position.y = command_y
             command.position.z = command_z
             command.velocity.x = command_speed
             command.trajectory_flag = PositionCommand.TRAJECTORY_STATUS_READY
@@ -172,12 +199,17 @@ class ManualOverrideTest(unittest.TestCase):
             self._command_pub.publish(command)
             alignment = TransformStamped()
             alignment.header.stamp = stamp
-            alignment.transform.rotation.w = 1.0
+            alignment.transform.rotation.z = math.sin(0.5 * alignment_yaw)
+            alignment.transform.rotation.w = math.cos(0.5 * alignment_yaw)
             alignment.transform.translation.z = alignment_z
             self._alignment_pub.publish(alignment)
+            sensor_position = Vector3Stamped()
+            sensor_position.header.stamp = stamp
+            sensor_position.vector.x = 0.1
+            self._sensor_position_pub.publish(sensor_position)
             self._mission_pub.publish(Bool(data=mission))
             self._auto_pub.publish(Bool(data=auto))
-            self._vision_pub.publish(Bool(data=True))
+            self._vision_pub.publish(Bool(data=vision_healthy))
             self._exploration_pub.publish(String(data=exploration_status))
             self._returning_pub.publish(Bool(data=returning))
             self._stop.wait(0.033)
@@ -205,6 +237,8 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self._mode = "OFFBOARD"
         self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self.assertTrue(self._execution_authorizations[-1])
         # Front-wall/map-closure waiting must hold the entry pose, not chase
         # a subsequently drifting localization estimate downward.
         with self._lock:
@@ -263,6 +297,103 @@ class ManualOverrideTest(unittest.TestCase):
             self.assertEqual(self._requests.count("OFFBOARD"),
                              requests_at_alignment_change)
 
+    def test_transient_preoffboard_vision_gap_restarts_prestream(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.3)
+        with self._lock:
+            self._auto = True
+        time.sleep(0.2)
+        with self._lock:
+            self._vision_healthy = False
+            requests_before_recovery = self._requests.count("OFFBOARD")
+        self.assertTrue(self._wait_for(
+            lambda: self._status == "PRESTREAM_WAIT_VISION_RECOVERY"))
+        time.sleep(0.15)
+        with self._lock:
+            self.assertEqual(self._fault, "")
+            self.assertEqual(self._requests.count("OFFBOARD"),
+                             requests_before_recovery)
+            self._vision_healthy = True
+            recovery_time = time.monotonic()
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests,
+                                       timeout=3.0))
+        self.assertGreaterEqual(time.monotonic() - recovery_time, 0.9)
+
+    def test_late_offboard_confirmation_during_vision_gap_stays_unauthorized(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.3)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests,
+                                       timeout=3.0))
+        with self._lock:
+            self._vision_healthy = False
+        self.assertTrue(self._wait_for(
+            lambda: self._status == "PRESTREAM_WAIT_VISION_RECOVERY"))
+        # Reproduce the latest flight: PX4 reports the previously requested
+        # mode after the health gate has already fallen.
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: "POSCTL" in self._requests,
+                                       timeout=2.0))
+        time.sleep(0.15)
+        with self._lock:
+            self.assertEqual(self._fault, "")
+            self.assertFalse(self._execution_authorizations[-1])
+            self.assertNotIn("OUTPUT_DISCONTINUITY_REJECTED", self._statuses)
+            self._mode = "POSCTL"
+            self._vision_healthy = True
+            requests_at_recovery = self._requests.count("OFFBOARD")
+            recovery_time = time.monotonic()
+        self.assertTrue(self._wait_for(
+            lambda: self._requests.count("OFFBOARD") > requests_at_recovery,
+            timeout=3.0))
+        self.assertGreaterEqual(time.monotonic() - recovery_time, 0.9)
+
+    def test_disabled_horizontal_fence_accepts_far_valid_command(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            # A home-centred 40 m fence used to reject this otherwise valid
+            # command. Position and command move together so entry continuity
+            # checks remain satisfied and this isolates flight-volume policy.
+            self._pose_x = 45.0
+            self._command_x = 45.0
+        time.sleep(0.5)
+        with self._lock:
+            self.assertEqual(self._fault, "")
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self.assertNotEqual(self._fault, "HORIZONTAL_GEOFENCE")
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+
+    def test_height_fence_uses_super_planning_frame_before_alignment(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        # Configure the frame alignment while the task is deselected. The
+        # planning command remains inside this fixture's 1.8 m SUPER ceiling,
+        # while the correctly transformed PX4-local setpoint is 2.5 m. A
+        # PX4-local fence would reject it; a SUPER-frame fence must accept it.
+        with self._lock:
+            self._mission = False
+            self._alignment_z = 1.0
+            self._pose_z = 2.5
+            self._command_z = 1.5
+        time.sleep(0.5)
+        with self._lock:
+            self._mission = True
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self.assertNotEqual(self._fault, "HEIGHT_GEOFENCE")
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        self.assertTrue(self._wait_for(
+            lambda: any(abs(z - 2.5) < 0.05 for z, _ in self._setpoints)
+        ))
+
     def test_command_fault_keeps_retrying_return_without_offboard_exit(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
         with self._lock:
@@ -311,6 +442,76 @@ class ManualOverrideTest(unittest.TestCase):
         # The fallback request is a different mode and must not be delayed by
         # the throttle on the immediately preceding OFFBOARD request.
         self.assertLess(time.monotonic() - started, 0.8)
+
+    def test_entry_speed_is_not_rechecked_while_mode_confirmation_is_pending(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            request_count = self._requests.count("OFFBOARD")
+            # This is above the 0.20 m/s entry limit but below the 0.40 m/s
+            # in-flight hard limit.  A mode request is already outstanding,
+            # so a boundary change during MAVROS/PX4 confirmation must not
+            # retroactively invalidate the accepted entry decision.
+            self._measured_speed = 0.21
+        time.sleep(0.2)  # Less than the configured 0.5 s retry interval.
+        with self._lock:
+            self.assertEqual(self._fault, "")
+            self.assertEqual(self._requests.count("OFFBOARD"), request_count)
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+
+    def test_heading_alignment_rotates_command_without_lever_arm_jump(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.5)
+        with self._lock:
+            self._alignment_yaw = math.pi / 2.0
+            self._pose_x = 0.0
+            self._pose_y = 1.0
+            self._command_x = 1.0
+            self._command_speed = 0.1
+        time.sleep(0.3)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        self.assertTrue(self._wait_for(
+            lambda: len(self._setpoint_velocities) >= 5, timeout=3.0))
+        with self._lock:
+            vx, vy, _, px, py, _ = self._setpoint_velocities[-1]
+        # The smooth handoff can advance a few millimetres along the valid
+        # transformed trajectory before this sample is inspected.
+        self.assertAlmostEqual(px, 0.0, delta=0.01)
+        self.assertAlmostEqual(py, 1.0, delta=0.01)
+        self.assertAlmostEqual(vx, 0.0, delta=0.01)
+        self.assertAlmostEqual(vy, 0.1, delta=0.01)
+
+    def test_unconfirmed_offboard_retry_rechecks_entry_speed(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._measured_speed = 0.21
+        self.assertTrue(self._wait_for(
+            lambda: self._status == "PRESTREAM_WAIT_VEHICLE_STABLE",
+            timeout=2.0
+        ))
+        with self._lock:
+            self.assertEqual(self._fault, "")
+            first_request_count = self._requests.count("OFFBOARD")
+            self._measured_speed = 0.0
+        # Recovery must complete a fresh prestream interval; only then may a
+        # second OFFBOARD request be sent.
+        self.assertTrue(self._wait_for(
+            lambda: self._requests.count("OFFBOARD") > first_request_count,
+            timeout=3.0
+        ))
 
     def test_stale_position_target_is_rejected_before_offboard(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))

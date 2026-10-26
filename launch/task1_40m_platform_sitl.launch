@@ -4,6 +4,10 @@
   <arg name="gui" default="true"/>
   <arg name="rviz" default="true"/>
   <arg name="allow_auto_arm" default="true"/>
+  <arg name="vehicle_sdf"
+       default="$(find mine_uav_control)/models/iris_mid360_long_range/iris_mid360_long_range.sdf"/>
+  <arg name="world"
+       default="$(find mine_uav_control)/worlds/goaf_40x40x30_platform.world"/>
   <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
   <arg name="decider_vehicle_radius" default="0.8"/>
   <arg name="decider_preferred_vehicle_radius" default="1.1"/>
@@ -32,9 +36,9 @@
     <arg name="decider_vertical_vehicle_clearance_above"
          value="$(arg decider_vertical_vehicle_clearance_above)"/>
     <arg name="world"
-         value="$(find mine_uav_control)/worlds/goaf_40x40x30_platform.world"/>
+         value="$(arg world)"/>
     <arg name="vehicle_sdf"
-         value="$(find mine_uav_control)/models/iris_mid360_long_range/iris_mid360_long_range.sdf"/>
+         value="$(arg vehicle_sdf)"/>
     <arg name="spawn_x" value="-8.0"/>
     <arg name="spawn_y" value="0.0"/>
     <arg name="spawn_z" value="16.15"/>

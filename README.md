@@ -1,5 +1,10 @@
 # mine_uav_control 地面站
 
+> 2026-10-22 生产链更新：`task1_real.launch` 已切换为
+> `MID360 + Seeker四目 + IMU → Omni-LIVO → lio_px4_vision_bridge → MAVROS/PX4`。
+> 本文后续标为 Fast-LIO2 的 SITL、五米和历史复现实验仍保留，但不代表正式 Task-1
+> 启动链。新链路必须完成同步板、拆桨和分级真机验收后才能放飞。
+
 这是一个基于 ROS Noetic、MAVROS 和 PyQt5 的 PX4 NUC 轨迹发送器。它只负责生成并
 发送轨迹 setpoint；QGC 负责 PX4 的连接、模式、解锁、降落和安全监控。串口上运行
 的是 MAVLink，不是向 CH340 直接发送 ASCII 字符。
@@ -69,14 +74,14 @@ CH340/MAVROS链路的波特率。QGC、MAVROS或串口终端同一时间只能�
 
 ### 代码职责边界
 
-任务一现在将原始定位链路和任务规划感知链路分开。`task1_perception_gate` 只在任务一
-由CH7开启且视觉定位健康时，把 `/cloud_registered`、`/Odometry` 转发到
+任务一和任务四现在将原始定位链路与任务规划感知链路分开。`task1_perception_gate` 只在
+任务一由 CH9 或任务四由 CH7 开启且视觉定位健康时，把 `/cloud_registered`、`/Odometry` 转发到
 `/mine_uav/task1/cloud_registered`、`/mine_uav/task1/odometry`；原始 `/Odometry` 仍持续
 供 `fastlio_px4_vision_bridge` 和调度器使用。这样任务开始前的起飞平台/机体回波不会
 污染SUPER的ROG-Map，但不会中断PX4定位。
 
 SITL 的原先单体适配器已经拆为：`sitl_localization_adapter.py`（只做定位适配）、
-`sitl_task_operator.py`（只模拟飞手起飞/CH7）和 `gazebo_mid360_fastlio_adapter.py`
+`sitl_task_operator.py`（只模拟飞手起飞/所选任务开关）和 `gazebo_mid360_fastlio_adapter.py`
 （只做仿真雷达点云）。详细职责和数据流见
 [`docs/task1_architecture.md`](docs/task1_architecture.md)。
 
@@ -176,19 +181,30 @@ IMU 200 Hz、Odometry 10 Hz、发送给 PX4 的 vision pose 30 Hz。
 ```
 
 截至 2026-10-17，本机已停止并禁用 `mine-uav-five-meter.service`，正式
-`mine-uav-task1.service` 已注册并设为开机启用。服务当前没有被手工启动；下次 NUC
-开机后会运行同一个 `start_task1_real.sh`，等待 PX4 串口和雷达网口就绪。自启动只拉起
-ROS/记录链，不会解锁、起飞或自动开始任务，仍必须由飞手完成起飞稳定后拨动 CH7。
+`mine-uav-task1.service` 已注册并设为开机启用。下次 NUC 开机后会先运行
+`start_task1_with_telemetry.sh`，再由它运行 `start_task1_real.sh` 等待 PX4 串口和
+雷达网口就绪。自启动只拉起
+ROS/记录链，不会解锁、起飞或自动开始任务，仍必须由飞手完成起飞稳定后拨动任务一的 CH9。
 可用 `systemctl status mine-uav-task1.service` 核对实际状态。
 
+开机服务的实际入口是 `start_task1_with_telemetry.sh`：它会先启动唯一的
+`nuc_mavlink_sender` 和 ROS 主站，再进入 PX4、同步板、相机和雷达的等待。
+因此雷达网口尚未就绪时，已接入的唯一 CH340 仍会被自动打开并开始数传；
+CH340 断开后 sender 持续重试，热插恢复无需重启整套飞行栈。
+
 生产包装器会解析唯一的 PX4 `/dev/serial/by-id` 设备、检查日志磁盘并自动记录 ROS bag、
-PX4 ULog 和配置快照；它不会自动解锁或起飞。当前任务调度忽略 CH6；CH7/CH11 的首次
-稳定电平只建立基线。确认定位健康后，由飞手手动解锁、起飞并稳定悬停，再把 CH7 拨到
+PX4 ULog 和配置快照；它不会自动解锁或起飞。CH9/CH6/CH7/CH11 的首次
+稳定电平只建立基线。确认定位健康后，由飞手手动解锁、起飞并稳定悬停，再把 CH9 拨到
 另一稳定位置并保持约 0.5 秒，方向不限。调度器还会验证速度低于 `0.25 m/s` 且垂直速度低于
 `0.10 m/s` 连续 1 秒，然后打开规划门；SUPER 接受本任务首个目标后才开放自动权限并
-请求 OFFBOARD。**任务等待或运行期间再次改变 CH7 电平会取消任务并撤销自动权限。**人工接管仍
+请求 OFFBOARD。**任务等待或运行期间再次改变 CH9 电平会取消任务并撤销自动权限。**人工接管仍
 应使用已拆桨验证的 CH5 飞行模式切换；
 真实定位丢失时不能假设 `POSCTL` 一定能够悬停。
+
+`mission_scheduler` 和 `super_exploration_decider` 是真机启动图的关键进程；任一进程
+异常退出都会触发整个 `task1_real.launch` 有序关闭，包装器随后清理同步板和其余子进程，
+并以非零状态让 systemd 将服务标记为失败。服务保持 `Restart=no`，禁止飞行中自动重启，
+也禁止在缺少任务调度或探索决策的情况下保留半套真机飞行栈继续运行。
 
 任务一运行状态可在第二个终端查看：
 
@@ -201,46 +217,53 @@ rostopic echo /mine_uav/task1/command_status
 rostopic echo /goal
 ```
 
-首次带飞前仍应拆桨验证 CH7、定位中断保护和人工接管。当前任务一速度合同为 SUPER
-名义 `0.6 m/s`、预测闭环治理 `0.7 m/s`、规划与实测三维速度硬上限 `0.8 m/s`；
-PX4 本地高度硬上限为 `1.8 m`（不是相对任务 home）。
+首次带飞前仍应拆桨验证 CH9、定位中断保护和人工接管。当前工作树的任务一速度合同为
+SUPER 名义 `0.9 m/s`、预测闭环治理及规划、实测三维速度硬上限 `1.1 m/s`；
+规划坐标高度范围为 `-5--8 m`，并在应用每架次对齐平移前检查。
 任务层以水平 `0.8 m` 为硬净距、`1.1 m` 为优选净距；SUPER 继续对完整轨迹进行地图
 和安全走廊复查。独立的 OFFBOARD 退出硬几何为水平 `0.65 m`，软监测区到 `0.8 m`，
 均以飞机参考中心计向上、向下各 `0.5 m`（圆柱总高 `1.0 m`）。候选目标
 在同时观测到左右障碍时按两侧净距差优先选择通道中点，
-仅有单侧观测时不推测虚假中线。表面完整性使用点数和 `0.6 m` 水平跨度；其垂直检查
+仅有单侧观测时不推测虚假中线。表面完整性使用点数和 `0.5 m` 水平跨度；其垂直检查
 与上述相对机体安全圆柱一致，顶板和地面不能仅因绝对高度形成永久等待。
 
 当前扫描在 `0.8 m` 软监测区内发现突发障碍时，指令桥立即锁定同一实测位置悬停并继续
-更新点云；连续三个清空扫描后平滑恢复当前任务。若障碍连续存在满 `3.0 s`，位于
+更新点云；连续三个清空扫描后平滑恢复当前任务。若障碍连续存在满 `0.5 s`，位于
 `0.65--0.8 m` 的障碍或覆盖不足会使桥接层请求 frontier 废弃当前目标；旧轨迹不能解除
-悬停，只有新编号的 SUPER 轨迹才能在 `4.0 s` 脱离窗口内平滑接管。硬侵入持续三秒时，
+悬停，只有新编号且明确增加净距的 SUPER 轨迹才能在 `4.0 s` 脱离窗口内平滑接管。硬侵入
+持续 `0.5 s` 时，
 只要定位、速度、MAVROS 与点云仍健康，就保持 OFFBOARD 并请求验证返航；新轨迹还必须
 明确增大与最近障碍的水平净距。点云超时、定位失效、MAVROS 断联或持续失控超速仍执行
 原有退出保护，不能在失明或失控状态下盲返。
 
 真机默认配置的自动返航只由以下条件触发：显式 `/mine_uav/exploration/return_home=true`；
-电量百分比不高于 `20%` 持续 `3 s`；电压低于 `21.6 V`；地图闭合稳定确认；或者实际
-运动后连续 `10 s` 找不到任何可执行的硬安全探索路段。前方 SUPER 净距触发器仅在专用
+电压低于 `21.6 V`；地图闭合稳定确认；或者实际运动后连续 `7 s` 找不到任何可执行的
+硬安全探索路段。当前硬件的电量百分比估计没有电流/容量模型，已禁用百分比启动与返航授权。
+前方 SUPER 净距触发器仅在专用
 白象山 SITL 中配置为非零，真机默认关闭；三墙完成返航也默认关闭。单个目标
 超时、短时点云间断和软监测区障碍本身不直接返航，而是先取消/重规划；确认死胡同时最多
-反向一次并沿实时地图回到任务原点，再探索相反方向。
+沿验证过的实时地图/面包屑回到任务原点，不再把返航方向解释为新的探索方向。
 
-### 实验室临时测试启动逻辑（手动起飞后 CH7 启动）
+SUPER 移植适配边界、短段停顿的实飞因果链以及哪些安全层可以 A/B 调整，统一记录在
+[`docs/super_porting_adapter_audit_2026-10-26.md`](docs/super_porting_adapter_audit_2026-10-26.md)。
+本轮轨迹同步优化开始前的完整恢复边界、SUPER 精确补丁和验证结果见
+[`docs/pre_optimization_snapshot_2026-10-26.md`](docs/pre_optimization_snapshot_2026-10-26.md)。
+
+### 实验室临时测试启动逻辑（手动起飞后 CH9 启动任务一）
 
 `task1_real.launch` 已启用 `require_mission_enable_edge=true`，因此任务一不会因节点启动、
 旧的锁存消息或第一帧里程计而提前建立 home。现场按以下顺序操作：
 
-1. 确认 CH7、CH11 的 MAVROS 通道映射；启动时保持任一稳定位置，供调度器建立基线。
+1. 确认 CH9、CH6、CH7、CH11 的 MAVROS 通道映射；启动时保持任一稳定位置，供调度器建立基线。
 2. 启动任务一链路，确认 Fast-LIO2 点云/位姿、MAVROS 连接和 PX4 状态正常。
 3. 拆桨完成手动解锁、起飞并悬停，在 POSCTL/手动模式下稳定飞机。
-4. 将 CH7 拨到另一稳定位置，低到高或高到低均可。调度器对该变化去抖约 0.5 s，并确认稳定悬停；任务一收到
+4. 将 CH9 拨到另一稳定位置，低到高或高到低均可。调度器对该变化去抖约 0.5 s，并确认稳定悬停；任务一收到
    `goaf_enable: false -> true` 后，在下一帧同步的点云+位姿处捕获当前位姿为 home，
    然后才开始发布探索目标给 SUPER。
-5. CH7 的下一次稳定电平变化会取消等待中或活动中的任务一。任务完成、故障或飞手切出
-   OFFBOARD 后，先让当前电平重新稳定，再次向任意方向改变 CH7 才能启动下一轮。该逻辑不会自动起飞。
+5. CH9 的下一次稳定电平变化会取消等待中或活动中的任务一。任务完成、故障或飞手切出
+   OFFBOARD 后，先让当前电平重新稳定，再次向任意方向改变 CH9 才能启动下一轮。该逻辑不会自动起飞。
 
-当前任务调度以 CH7 任意方向的稳定电平变化请求任务一，活动期间的下一次变化用于取消；CH6 不参与任务选择。
+当前任务调度以 CH9 任意方向的稳定电平变化请求任务一、CH6 请求任务三、CH7 请求任务四；活动期间同一任务通道的下一次变化用于取消。
 必须避免在实验室同时运行两个
 调度器、两个 SUPER 或两个 PX4 setpoint 发布节点。SUPER 当前具备已知障碍膨胀、A*/安全
 走廊、轨迹碰撞复查和备份轨迹等避障环节；高层决策器还会把墙后及当前不可达自由空间之外
@@ -266,7 +289,7 @@ Fast-LIO2 跳变、超时或 MAVROS 断开都会停止外部视觉输出。
 悬停点，再自动请求 OFFBOARD；节点本身永不解锁 PX4。SUPER 短暂重规划时会发送
 当前位置悬停目标；任务切走、定位失效、通信断开、指令越界或任务完成时会退出受控
 OFFBOARD。真机默认退出到 `POSCTL`，必须保证遥控器和 PX4 失效保护配置可用。
-若飞手通过 CH5 或 PX4 失效保护让飞控从受控 OFFBOARD 切到其他模式，桥接器会锁住自动重新进入；调度器也会撤销任务。稳定电平重新建立基线后，必须再次产生新的 CH7 电平变化才可能重新授权。此项已有模拟 MAVROS 模式切换的 ROS 回归及 40 m 仿真闭环回归，但仍需拆桨实测遥控器 CH5 和真实 PX4 模式切换，不能把仿真当作人工接管实机验收。见 [`docs/task1_manual_override_guard.md`](docs/task1_manual_override_guard.md)。
+若飞手通过 CH5 或 PX4 失效保护让飞控从受控 OFFBOARD 切到其他模式，桥接器会锁住自动重新进入；调度器也会撤销任务。稳定电平重新建立基线后，必须再次产生新的任务通道变化（任务一 CH9、任务四 CH7）才可能重新授权。此项已有模拟 MAVROS 模式切换的 ROS 回归及 40 m 仿真闭环回归，但仍需拆桨实测遥控器 CH5 和真实 PX4 模式切换，不能把仿真当作人工接管实机验收。见 [`docs/task1_manual_override_guard.md`](docs/task1_manual_override_guard.md)。
 任务执行中的 Fast-LIO2→PX4 对齐突变也会锁存故障并退出受控 OFFBOARD；这只是桥接层保护，不代表 SUPER 内部的规划高度约束已经完成。
 
 统一启动文件（首次实机必须拆桨）：
@@ -292,7 +315,7 @@ rostopic echo /mine_uav/task1/command_status
 ```
 
 软件服务现在是可选的总抑制开关，默认允许；真正的自动任务授权来自独立遥控通道
-（默认物理 CH7）。需要在调试时重新打开软件门可使用：
+（任务一为物理 CH9，任务四为物理 CH7）。需要在调试时重新打开软件门可使用：
 
 ```bash
 rosservice call /super_px4_command_bridge/enable "data: true"
@@ -327,8 +350,10 @@ git apply --unidiff-zero /path/to/frontier-upload/patches/livox_ros_driver2_mid3
 git apply --unidiff-zero /path/to/frontier-upload/patches/fast_lio2_sensor_restart.patch
 ```
 
-当前SUPER工作区以港大官方提交 `2ad3419` 为核心基线，应用指令坐标帧适配和已回归验证的
-几何时间下界补丁：
+当前 SUPER 工作区以港大官方提交 `2ad3419` 为 Git 基线；目标生命周期、连续换目标、
+高度/净距合同、CIRI、Yaw 和 ROG-Map 等全部定制已冻结为本地提交 `49136f1`，并以
+`patches/super_pre_optimization_snapshot_20261026.patch` 保存到本仓库。下面两条命令只能建立
+早期最小基线，不能复现当前飞行版本：
 
 ```bash
 cd /path/to/SUPER
@@ -341,6 +366,8 @@ git apply /path/to/frontier-upload/patches/super_geometric_time_lower_bound.patc
 默认不得应用：`super_optimizer_diagnostics.patch`、`super_preserve_reachable_goal.patch`、
 `super_remove_duplicate_backup_optimize.patch`。其中诊断补丁还混有 `out_t → eval_t` 的算法变化，
 后续必须拆分后才能单变量验证。
+完整适配范围与补丁重叠风险见
+[`docs/super_porting_adapter_audit_2026-10-26.md`](docs/super_porting_adapter_audit_2026-10-26.md)。
 
 注意：在正式飞行前仍必须通过移动机体验证 PX4 确实融合外部视觉、标定
 雷达 IMU 坐标与飞行器 FRD 机体系安装关系，并确认 `EKF2_EV_CTRL` 的高度源选择。
@@ -357,11 +384,12 @@ git apply /path/to/frontier-upload/patches/super_geometric_time_lower_bound.patc
 程序不会自动解锁或自动起飞。首次接入真机应拆桨，并先验证 PX4 的姿态、位置、
 电池、遥控器和失联保护配置。
 
-## Fast-LIO2 → 自主探索决策器 → SUPER
+## Omni-LIVO → 自主探索决策器 → SUPER
 
-新增的 `super_exploration_decider` 位于 Fast-LIO2 和 SUPER 之间，职责是：
+`super_exploration_decider` 位于任务感知门和 SUPER 之间，职责是：
 
-- 订阅 Fast-LIO2 的 `/cloud_registered` 和 `/Odometry`；
+- 订阅调平、门控后的 `/mine_uav/task1/cloud_registered` 和
+  `/mine_uav/task1/odometry`；
 - 用点云射线建立轻量局部 free/occupied voxel map；
 - 从当前位置出发，在膨胀后的已知自由体素上做六连通洪泛搜索；
 - 只从该可达连通分量提取 frontier candidate，目标必须同时为
@@ -374,12 +402,12 @@ git apply /path/to/frontier-upload/patches/super_geometric_time_lower_bound.patc
 
 当前决策器已增加两阶段方向策略：
 
-1. `FORWARD_PRIORITY`：从当前 Fast-LIO2 位姿四元数计算机体 yaw，只在机头前方配置角度内的 frontier 中选点，并对机头方向增加评分权重。
+1. `FORWARD_PRIORITY`：从当前任务坐标位姿四元数计算机体 yaw，只在机头前方配置角度内的 frontier 中选点，并对机头方向增加评分权重。
 2. `FRONTIER_FALLBACK`：当前方障碍连续多帧确认，或连续多帧既没有左右墙体观测又没有前方可行 frontier 时启用；候选目标仍受任务轴横向硬走廊限制，不会因一侧点云缺失而无限向另一侧漂移。
 
 左右墙体和前方障碍使用当前 `/cloud_registered` 的点云证据，并通过连续帧确认抑制单帧误检。地面点会通过垂直方向过滤，避免把地面误判为前方墙体。相关参数在 `config/super_exploration_decider.yaml` 中，包括前方角度、墙体量程、障碍确认帧数和机头方向权重。
 
-该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Fast-LIO2 → PX4 的定位链路。高层可达性过滤防止把墙后或断开的自由区域选作frontier目标；SUPER继续使用ROG-Map膨胀障碍、A*、安全飞行走廊、在线碰撞复查和备份轨迹作为第二层保护。地图完成/返航判据仍是实验功能，尚未按未知尺寸采空区最终方案验收，不能仅凭当前状态量宣称实机建模完整。原三面墙覆盖率只作诊断。
+该状态机只决定发布给 SUPER 的观察目标，不直接发布 PX4 setpoint，也不改变 Omni-LIVO → PX4 的定位链路。高层可达性过滤防止把墙后或断开的自由区域选作frontier目标；SUPER继续使用ROG-Map膨胀障碍、A*、安全飞行走廊、在线碰撞复查和备份轨迹作为第二层保护。地图完成/返航判据仍是实验功能，尚未按未知尺寸采空区最终方案验收，不能仅凭当前状态量宣称实机建模完整。原三面墙覆盖率只作诊断。
 
 启动：
 
@@ -392,11 +420,11 @@ roslaunch mine_uav_control super_exploration_decider.launch
 
 注意：当前 SUPER 的 `FsmRos1::setGoalPosiAndYaw()` 会在 `fsm.click_height > -5` 时强制覆盖目标 z。要让观察点使用点云计算出的三维 z 高度，应在 SUPER 使用的 YAML 中设置 `fsm.click_height: -10.0`。
 
-当前真机链路统一使用 Fast-LIO2 的 `camera_init`：`/Odometry`、`/cloud_registered`、决策器 `/goal`、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。决策器不做 TF 变换，`strict_cloud_frame: true` 会拒绝其他坐标系的点云；SUPER 到 PX4 的转换由独立对齐桥完成，这不等于雷达安装外参已自动标定。
+当前真机规划链统一使用调平后的 `task1_planning`：门控后的点云、里程计、决策器目标、SUPER 的 ROG-Map 和 `/planning/pos_cmd` 都必须使用该坐标系。决策器不做运行时 TF 猜测，`strict_cloud_frame: true` 会拒绝其他坐标系的点云；SUPER 到 PX4 的转换由独立对齐桥完成，这不等于雷达/相机安装外参已自动标定。
 
-观察点高度通过 `min_observation_height_above_home` 和 `max_observation_height_above_home` 限制在任务起点之上。当前默认范围为 `0.5–2.5 m`，与本次 SUPER 局部地图的有效高度范围匹配；正式飞行前必须根据采空区净高、雷达安装高度和安全裕量重新标定。返航目标的水平位置使用原始 home，垂直位置由 `return_home_height_offset` 控制。真机默认偏移为 `0 m`；复杂场景PX4 SITL验证中覆盖为 `1.8 m`，返航阶段保持安全巡航高度，降落应由独立状态处理。
+任务一的观察目标继续由 `min_observation_height_above_home=-0.30 m` 和 `max_observation_height_above_home=+0.20 m` 约束在任务开始悬停高度附近。任务四不能使用固定 home 高度带：它在调平后的 `task1_planning` 坐标系内使用 `tunnel_min_planning_height=-5 m` 到 `tunnel_max_planning_height=8 m`，每个短目标优先保持当前高度，只能沿已观测、连通且满足净空的巷道逐段上升或下降。该范围与 SUPER 的 `flight_min_z/flight_max_z` 以及 PX4 指令桥的规划坐标高度围栏一致；桥在应用每次飞行的 `alignment_z` 之前检查高度，避免同一条 SUPER 轨迹因坐标原点差异被误拒绝。返航仍沿带实际高度的已验证面包屑/实时地图路线回到原始 home，降落由独立状态处理。
 
-`max_exploration_radius_from_home` 是相对任务起点的水平安全围栏，避免目标随着滚动点云不断向外漂移。真机默认值为 `35 m`，未知尺寸场景不能按预估洞长设置，而应根据续航、动态返航代价和安全制度给出允许上限。当前 `max_task_lateral_offset=4 m` 仍是早期狭长巷道限制，不适合直接验收未知宽度的大采空区，后续覆盖策略阶段必须将它与完成判据解耦。
+`max_exploration_radius_from_home` 仅保留为有界仿真场景的可选围栏，`0` 表示关闭。真机任务默认为 `0`，决策器与 PX4 指令桥都不再按距 home 的水平距离强制终止；探索持续到已确认尽头/无硬安全路线，或低电量触发经验证返航。`max_map_radius` 和 `frontier_search_radius` 仍是围绕当前飞机的滚动局部计算窗，不是从 home 起算的航程上限。当前 `max_task_lateral_offset=10 m` 仍是任务轴横向安全带，不等同于纵向航程上限。
 
 必须使用上面的统一环境脚本同时加载两个 Catkin 工作空间。直接依次 source 两个工作空间时，后一个会覆盖前一个的搜索路径，常见现象是 `rostopic` 无法加载 `livox_ros_driver2/CustomMsg`。统一脚本会同时保留 Fast-LIO2 与 SUPER 的 ROS 包、Python 消息和动态库路径。
 
@@ -408,8 +436,8 @@ rostopic echo /mine_uav/exploration/model_coverage
 rostopic echo /mine_uav/exploration/model_complete
 rostopic echo /mine_uav/exploration/finished
 rostopic echo /mine_uav/exploration/returning
-rostopic hz /cloud_registered
-rostopic hz /Odometry
+rostopic hz /mine_uav/task1/cloud_registered
+rostopic hz /mine_uav/task1/odometry
 ```
 
 手动触发返航：
@@ -418,18 +446,31 @@ rostopic hz /Odometry
 rostopic pub -1 /mine_uav/exploration/return_home std_msgs/Bool "data: true"
 ```
 
-重要限制：这是第一版 frontier/viewpoint 决策器，使用本节点的轻量 voxel map；SUPER 仍使用自己的 ROG-Map。两者共享同一份 Fast-LIO2 输入，但不是同一份内存地图。当前已确认的是“目标可达性过滤 + 下层避墙”，未知尺寸采空区的完整覆盖和最终返航判据尚未验收。此前累计地图终墙锁存实验出现过入口/顶板组合误判，相关实验补丁已从工作版本剥离。后续应将全局覆盖地图独立出来，再单独设计和回归最终完成条件。
+重要限制：frontier/viewpoint 决策器使用自己的轻量 voxel map；SUPER 仍使用独立 ROG-Map。两者共享同一份门控后的 Omni-LIVO 输入，但不是同一份内存地图。当前已确认的是“目标可达性过滤 + 下层避墙”，未知尺寸采空区的完整覆盖和最终返航判据尚未验收。此前累计地图终墙锁存实验出现过入口/顶板组合误判，相关实验补丁已从工作版本剥离。后续应将全局覆盖地图独立出来，再单独设计和回归最终完成条件。
 
-## Fast-LIO2 → 任务调度器 → 采空区/竖井任务
+## Fast-LIO2 → 任务调度器 → 任务一/二/三/四
 
-`mission_scheduler` 通过 MAVROS 的 `/mavros/rc/in` 读取 CH7 与 CH11，并发布唯一的任务选择结果：
+`mission_scheduler` 通过 MAVROS 的 `/mavros/rc/in` 读取任务通道，并发布唯一的任务选择结果：
 
 - 上电默认手动；首次稳定 RC 读数只建立基线，不启动任务；
-- CH7 任意方向稳定变化：空闲时请求任务一，满足稳定悬停门后启动 `goaf_exploration`；
-- CH7 再次稳定变化：取消等待中或活动中的任务一并撤销自动权限；
+- CH9 任意方向稳定变化：空闲时请求任务一，满足稳定悬停门后启动 `goaf_exploration`；
+- CH9 再次稳定变化：取消等待中或活动中的任务一并撤销自动权限；
+- CH7 任意方向稳定变化：空闲时请求任务四，经过相同安全门后启动 `tunnel_exploration`；
+- CH7 再次稳定变化：取消等待中或活动中的任务四并撤销自动权限；
 - CH11 稳定电平变化（两个方向均可）：在任务二可用时启动 `shaft_exploration`；
-- 任务一活动时仍处理 CH7 取消；CH11 等其他忙碌期边沿不会排队到任务结束后误启动；
-- 遥控器或 MAVROS 断链会撤销当前任务；任务一还要求 Fast-LIO2 位姿新鲜。任务二由自身的相对深度与测距逻辑检查传感器，生产开关仍为禁用。
+- 活动任务仍处理本任务通道的取消；其他忙碌期边沿不会排队到任务结束后误启动；
+- 遥控器或 MAVROS 断链会撤销当前任务；任务一还要求 Omni-LIVO 位姿新鲜。任务二要求来源声明为 `omnilivo_planning_odometry` 的入口相对深度、`stp23_down` 下视测距和水平点云，并由最大净空偏好加二维 CBF-QP 生成水平速度。生产任务允许约 5 m 的累计深度误差；原侧面光流深度不参与生产链。
+- 已预留任务三压力控制：`active_task=3`、`/mine_uav/mission/task3_enable` 和
+  `/mine_uav/task3/command_ready` 已接入调度器；物理通道现为 CH6，即
+  `task3_trigger_channel=5`。独立实现位于 `/home/nuc/task3_ws`，已加入基于
+  水平化 Omni-LIVO 点云的方向选择性限速/刹停及点云、位姿超时门。任务二、三
+  通过同一个 assisted router 预发送后请求 OFFBOARD；该路由器从不解锁，输入
+  失效时先发位置保持并持续请求退回 POSCTL。任务撤销时若已有 OFFBOARD 请求
+  在途，回退锁存会一直保留到 MAVROS 确认请求后的 POSCTL 已稳定，避免迟到的
+  OFFBOARD 在落地或解锁后重新成为用户意图。
+- 任务四是拆分前任务一的巷道档案：`active_task=4`，与任务一复用同一套
+  frontier、主航向、尽头判断、连续转弯、正常返航、SUPER 和指令桥，只额外启用
+  已试飞过的居中与窄化预判。生产配置使用物理 CH7，即数组下标 6。
 
 启动：
 
@@ -439,19 +480,22 @@ source /home/nuc/super_ws/devel/setup.bash
 roslaunch mine_uav_control mission_scheduler.launch
 ```
 
-默认 `goaf_trigger_channel: 6`、`shaft_trigger_channel: 10` 是 ROS 数组下标，对应物理 CH7、CH11；应通过 `/mavros/rc/in` 和 QGroundControl 核实通道顺序及开关电平。CH6 不参与任务调度。
+当前生产映射为：任务一 CH9（数组下标 8）、任务三 CH6（下标 5）、任务四 CH7（下标 6）、任务二 CH11（下标 10）。四个任务通道都是双向电平变化触发。任务二、三生产开关已打开，但传感器、PX4 估计器、解锁状态和 OFFBOARD 握手任一不满足时都不会发布 command-ready。
 
 主要输出：
 
 ```text
-/mine_uav/mission/active_task   std_msgs/UInt8   0=hold, 1=采空区, 2=竖井
+/mine_uav/mission/active_task   std_msgs/UInt8   0=hold, 1=采空区, 2=竖井, 3=压力控制, 4=巷道
 /mine_uav/mission/goaf_enable   std_msgs/Bool    任务一是否允许运行
 /mine_uav/mission/shaft_enable  std_msgs/Bool    任务二是否允许运行
+/mine_uav/mission/task3_enable  std_msgs/Bool    任务三是否允许运行
+/mine_uav/mission/tunnel_enable std_msgs/Bool    任务四是否允许运行
+/mine_uav/mission/exploration_enable std_msgs/Bool 任务一或任务四的共享探索链是否允许运行
 /mine_uav/mission/return_home   std_msgs/Bool    是否请求当前任务返航
 /mine_uav/mission/status        std_msgs/String  状态与健康信息
 ```
 
-该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。两个任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免两个任务同时控制飞行器。任务一的 `super_exploration_decider` 已订阅 `goaf_enable`；任务二的 `shaft_mission_node` 已订阅 `shaft_enable`，但仅有仿真专用 PX4 指令路由器，真机任务二仍被禁用。定位丢失时不会请求无法保证安全的自主返航。
+该节点只做任务调度和安全门控，不直接向 PX4 发布 setpoint。各任务都应遵守：只有收到对应 `*_enable=true` 时才发布自己的任务输出；最终由唯一的 PX4 command router 选择当前任务输出，避免多个任务同时控制飞行器。任务一和任务四通过 `exploration_enable` 复用同一条探索控制链，决策器再根据 `active_task` 选择 `goaf` 或 `tunnel` 档案；任务二的 `shaft_mission_node` 已订阅 `shaft_enable`，但仅有仿真专用 PX4 指令路由器，真机任务二仍被禁用。任务三目前只接到自己的隔离输出话题。定位丢失时不会请求无法保证安全的自主返航。
 
 ### SITL 联调
 
@@ -489,8 +533,8 @@ roslaunch mine_uav_control task1_px4_sitl.launch gui:=true rviz:=true
 ```
 
 无界面验收使用 `gui:=false rviz:=false`。仿真适配器只在 `/use_sim_time=true` 时允许
-自动解锁，并在日志中明确警告不可连接真机。它模拟 CH6 选择任务一、CH7 从低位切到
-自动允许。SITL 没有真实遥控输入，`POSCTL` 无法可靠接管，因此任务完成后专门退出到
+自动解锁，并在日志中明确警告不可连接真机。任务一启动文件模拟物理 CH9 的一次稳定
+边沿，白象山任务四启动文件模拟物理 CH7。SITL 没有真实遥控输入，`POSCTL` 无法可靠接管，因此任务完成后专门退出到
 `AUTO.LOITER`；真机启动文件仍保持 `POSCTL`。
 
 可观察的话题：
@@ -716,7 +760,7 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 
 2026-09-18 新里程碑：**隔离的严格净距配置**在三道隔墙迷宫和无隔墙 40 m 场景都完成自主探索与返航；迷宫六面竖直墙体的规划/实际机体外最小余量约 1.650/1.671 m，空旷场景也通过。该配置现为 `task1_maze_sitl.launch` 的默认参数，空旷场景可用 `task1_40m_strict_sitl.launch`；两者都是仿真入口，不是实机入口。详细数据、bag 保存位置与复算方法见[严格净距报告](docs/task1_strict_clearance_probe_2026-09-18.md)。真实雷达、定位源融合、坐标对齐、机体尺寸和人工接管尚未重验，严禁把该 SITL 结果当作有桨真机放飞许可。任务二在此仿真里程碑后开始。
 
-当前安全状态：SITL先建立1.5 m稳定悬停，再模拟CH7启动并在空中捕获home。run07～run10 已消除该场景先前入口返航高度越界，桥接器 1.8 m 围栏始终保留；但规划器内部虚拟高度上界与桥接围栏仍未完全统一，且 40 m 仿真使用理想化雷达和世界真值几何过滤，任务一不得直接用于有桨真机自主飞行。
+当前安全状态：SITL先建立1.5 m稳定悬停，再模拟任务一 CH9 启动并在空中捕获home。run07～run10 已消除该场景先前入口返航高度越界，桥接器 1.8 m 围栏始终保留；但规划器内部虚拟高度上界与桥接围栏仍未完全统一，且 40 m 仿真使用理想化雷达和世界真值几何过滤，任务一不得直接用于有桨真机自主飞行。
 
 任务原点在任务一第一次被允许时从当前 `/Odometry` 捕获，而不是无条件使用节点启动时的第一帧。因此实机可以先手动起飞并稳定悬停，再打开自动允许；返航高度是相对该任务原点的高度。任务一当前不做地形跟随：下方地面突然下降时不会自动跟着下降，地面突然升高则依靠点云障碍/规划保护，真正的地形跟随需要单独加入高度控制策略。
 
@@ -726,7 +770,7 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 
 任务二后续完成首个 **22 m PX4/Gazebo 接口闭环**：专用启动文件 `task2_shaft_22m_px4_sitl.launch` 仅在仿真中启用任务二，并用 Gazebo 世界真值模拟独立深度与下视测距；PX4 经 OFFBOARD 下探、井底触发、返航，完成后切 AUTO.LOITER。bag 显示离底最小机体外余量 1.373 m、XY 最大偏移 0.142 m。第一次完整闭环因理想测距基准错约 0.9 m 只剩 0.504 m 余量，失败与修正的 A/B 证据均在[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。**这不等于真实 400 m 竖井或无可靠 Z 定位已验证**；生产调度器仍禁用任务二，未接真实测距、独立深度源或人工接管验证。
 
-调度器现按 CH7/CH11 的稳定电平变化分别启动任务一/任务二；新版 ROS 边沿测试和两任务各自的 SITL 已通过。任务二专用 SITL 还可用 `range_drop_after_depth:=6.0` 在下探 6 m 后停止模拟测距，检查传感器超时、任务撤销和 PX4 模式交接。延长观测的故障试验中，从 FAULT 到 AUTO.LOITER 约 0.539 s，后续 24.667 s 内最大额外下沉约 0.152 m；这是标准 SITL 定位有效时的结果，不能外推到无可靠 Z 的实井。详见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
+调度器现按 CH9/CH11/CH7 的稳定电平变化分别启动任务一/任务二/任务四；新版 ROS 边沿测试和各任务 SITL 已通过。任务二专用 SITL 还可用 `range_drop_after_depth:=6.0` 在下探 6 m 后停止模拟测距，检查传感器超时、任务撤销和 PX4 模式交接。延长观测的故障试验中，从 FAULT 到 AUTO.LOITER 约 0.539 s，后续 24.667 s 内最大额外下沉约 0.152 m；这是标准 SITL 定位有效时的结果，不能外推到无可靠 Z 的实井。详见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)。
 
 雷达未装机期间，新增任务二“下探中从 OFFBOARD 外部切模”的可重复 SITL 测试：`task2_shaft_22m_px4_sitl.launch inject_takeover:=true` 在 6 m 深度请求 `AUTO.LOITER`，必须由 `/mavros/state` 确认（仅 `mode_sent=true` 不算成功）。实际确认后调度器约 0.078 s 退回 HOLD，36.137 s 内没有恢复 OFFBOARD 或继续发送 setpoint。`POSCTL` 模拟请求曾被 PX4 拒绝；真实遥控器 CH5 人工接管仍未验证。证据与复核命令见[任务二报告](docs/task2_shaft_logic_2026-09-18.md)，实机任务二仍禁用。
 
@@ -764,8 +808,13 @@ source /home/nuc/frontier_runtime_ws/devel/setup.bash --extend
 source /home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/setup_gazebo.bash \
   /home/nuc/PX4-Autopilot /home/nuc/PX4-Autopilot/build/px4_sitl_default
 export ROS_PACKAGE_PATH=/home/nuc/PX4-Autopilot:/home/nuc/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:$ROS_PACKAGE_PATH
-roslaunch mine_uav_control task1_baixiangshan_px4_sitl.launch gui:=false rviz:=false
+roslaunch mine_uav_control task4_baixiangshan_px4_sitl.launch gui:=false rviz:=false
 ```
 
 在有本地 TCP 权限与图形桌面的普通终端，可直接运行
-`bash /home/nuc/frontier-upload/scripts/start_baixiangshan_sitl.sh` 打开 Gazebo 和 RViz；脚本使用独立的 ROS/Gazebo 端口，仿真会自动解锁并起飞。
+旧命令 `task1_baixiangshan_px4_sitl.launch` 保留为兼容别名，但其调度状态现在同样是任务四。`bash /home/nuc/frontier-upload/scripts/start_baixiangshan_sitl.sh` 打开 Gazebo 和 RViz；脚本使用独立的 ROS/Gazebo 端口，仿真会自动解锁并起飞。
+
+任务一/任务四的拆分边界、冻结参数哈希、回归结果和 2026-10-21 任务四烟雾飞行记录见
+[任务一/任务四拆分验证](docs/task1_task4_split_verification_2026-10-21.md)。拆分没有重调
+原巷道参数；但原白象山长距离定位和真实速度问题仍未通过最终验收，不能把“代码等价”
+解释为无需任何低风险实机复核。

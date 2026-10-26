@@ -1,10 +1,14 @@
 <launch>
-  <!-- Load the Fast-LIO2 workspace first, then load the SUPER workspace while
-       preserving the first overlay before running this launch file. -->
+  <!-- Production Task-1/Task-4 graph. Source Seeker, Livox, Omni-LIVO, SUPER
+       and this package's overlays before running this launch file. -->
+  <arg name="start_seeker" default="true"/>
   <arg name="start_livox" default="true"/>
-  <arg name="start_fastlio" default="true"/>
+  <arg name="start_omnilivo" default="true"/>
   <arg name="start_mavros" default="true"/>
   <arg name="start_super" default="true"/>
+  <!-- Production systemd starts the sole CH340 sender before this hardware-
+       gated graph. Manual laboratory launches may opt in explicitly. -->
+  <arg name="start_telemetry_sender" default="false"/>
   <arg name="rviz" default="false"/>
   <!-- The production wrapper resolves an unambiguous /dev/serial/by-id path.
        Manual launches must provide it explicitly; never guess a tty. -->
@@ -13,14 +17,19 @@
   <arg name="flight_log_dir"
        default="/home/nuc/flight_logs/task1/manual"/>
   <arg name="download_px4_ulog" default="true"/>
+  <arg name="omnilivo_runtime_config"/>
+  <arg name="livox_config"
+       default="$(find mine_uav_control)/config/livox_mid360s_real.json"/>
 
   <group if="$(arg record_flight)">
-    <!-- Raw Livox packets and IMU are retained, so the two duplicate
-         Fast-LIO registered clouds can be reconstructed. Keep planner input,
+    <!-- Raw Livox packets, IMU and the Seeker's native four-camera MJPEG are
+         retained. Do not subscribe rosbag to decoded/rectified Image topics:
+         that both records the same imagery many times and activates invalid
+         compressedDepth transports for bgr8 frames. Keep planner input,
          odometry, commands, task state and all MAVROS topics. -->
     <node pkg="rosbag" type="record" name="task1_flight_recorder"
           output="screen" required="false"
-          args="--all --exclude=^/(cloud_registered|cloud_registered_body)$ --lz4 --split --duration=5m --repeat-latched --publish --buffsize=256 --min-space=100G --output-name=$(arg flight_log_dir)/ros_all"/>
+          args="--all --exclude=^/(visual_mapping/.*|omnilivo/(cloud_registered|assessment/cloud)|mine_uav/task1/cloud_registered|cloud_registered|cloud_registered_body|fisheye/(left|right|bright|bleft)/image_raw|(?:front|right|left|back)/(?:left|right)/image_raw(?:/.*)?|rgb_img(?:/.*)?|(?:front|right|left|back)/disparity(?:/.*)?|cloud_effected|cloud_visual_sub_map_before|dyn_obj(?:.*)?|Laser_map|voxels|fsm_node/rog_map/(?:inf_occ|inf_unk|occ|unk)|fsm_node/visualization/(?:ciri_debug_pc|replan_log_pc))$ --lz4 --split --duration=5m --repeat-latched --publish --buffsize=256 --min-space=80G --output-name=$(arg flight_log_dir)/ros_all"/>
     <node if="$(arg download_px4_ulog)"
           pkg="mine_uav_control" type="px4_ulog_downloader.py"
           name="task1_px4_ulog_downloader" output="screen" required="false">
@@ -37,15 +46,43 @@
   <node pkg="mine_uav_control" type="task1_real_time_guard.py"
         name="task1_real_time_guard" output="screen" required="true"/>
 
-  <group if="$(arg start_livox)">
-    <!-- Aircraft sensor model: Livox MID360S. Keep this installed driver's
-         MID360s-named launch artifact because it matches device type 35. -->
-    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360s.launch"/>
+  <group if="$(arg start_seeker)">
+    <!-- The production wrapper starts the external synchronization board;
+         Seeker must therefore not apply a second software time correction. -->
+    <include file="$(find seeker)/launch/nodelet/3undistort_nodelet.launch">
+      <arg name="time_sync" value="false"/>
+      <arg name="max_capture_clock_skew_s" value="5.0"/>
+      <!-- The four camera extrinsics are consumed from the calibrated camera
+           chain, not TF.  The upstream front stereo launch assigns both
+           rectified outputs the child frame depth0 under different parents;
+           broadcasting that graph creates a duplicate-parent TF conflict and
+           continuous TF_OLD_DATA warnings. -->
+      <arg name="publish_tf" value="false"/>
+    </include>
   </group>
 
-  <group if="$(arg start_fastlio)">
-    <include file="$(find fast_lio)/launch/mapping_mid360.launch">
-      <arg name="rviz" value="$(arg rviz)"/>
+  <group if="$(arg start_livox)">
+    <!-- Keep the aircraft network endpoints in this package instead of using
+         whichever sample JSON happens to accompany the installed driver. -->
+    <param name="xfer_format" value="1"/>
+    <param name="multi_topic" value="0"/>
+    <param name="data_src" value="0"/>
+    <param name="publish_freq" type="double" value="10.0"/>
+    <param name="output_data_type" value="0"/>
+    <param name="cmdline_str" type="string" value="100000000000000"/>
+    <param name="cmdline_file_path" type="string" value="livox_test.lvx"/>
+    <param name="user_config_path" type="string" value="$(arg livox_config)"/>
+    <param name="frame_id" type="string" value="livox_frame"/>
+    <param name="enable_lidar_bag" type="bool" value="true"/>
+    <param name="enable_imu_bag" type="bool" value="true"/>
+    <node name="livox_lidar_publisher2" pkg="livox_ros_driver2"
+          type="livox_ros_driver2_node" required="true"
+          output="screen" args="100000000000000"/>
+  </group>
+
+  <group if="$(arg start_omnilivo)">
+    <include file="/home/nuc/uav_modes/releases/async_low_latency_height_20261026_02/mapping.launch">
+      <arg name="runtime_config" value="$(arg omnilivo_runtime_config)"/>
     </include>
   </group>
 
@@ -55,19 +92,79 @@
     </include>
   </group>
 
-  <include file="$(find mine_uav_control)/launch/fastlio_px4_vision_bridge.launch"/>
+  <include file="/home/nuc/uav_modes/releases/height_correction_20261026_01/bridge.launch"/>
   <include file="$(find mine_uav_control)/launch/mission_scheduler.launch"/>
 
-  <!-- Raw Fast-LIO2 remains available to PX4 localization at all times. Only
+  <!-- The relay is the sole CH340 owner. It discovers the USB identity again
+       after reconnects and republishes RX bytes to the Task-3 decoder. -->
+  <group if="$(arg start_telemetry_sender)">
+    <include file="$(find nuc_mavlink_sender)/launch/nuc_mavlink_sender.launch">
+      <arg name="output_device" value="auto"/>
+      <arg name="auto_discover_output" value="true"/>
+      <arg name="prefer_odom" value="false"/>
+      <!-- A process crash must not permanently remove Task-3 pressure RX or
+           outbound mission telemetry. UART disconnects are already retried by
+           the process itself; respawn covers the independent process-failure case. -->
+      <arg name="respawn_sender" value="true"/>
+    </include>
+  </group>
+
+  <include file="$(find mine_uav_task3)/launch/task3_pressure_control.launch">
+    <arg name="command_output_topic" value="/mine_uav/task3/setpoint_cmd"/>
+  </include>
+
+  <node pkg="mine_uav_control" type="shaft_mission_node"
+        name="shaft_mission_node" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+  </node>
+  <node pkg="mine_uav_control" type="omnilivo_shaft_depth.py"
+        name="omnilivo_shaft_depth" output="screen" required="true">
+    <param name="max_sigma_m" value="5.0"/>
+  </node>
+  <node pkg="mine_uav_control" type="assisted_task_px4_router.py"
+        name="assisted_task_px4_router" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find mine_uav_control)/config/assisted_task_px4_router.yaml"/>
+  </node>
+
+  <!-- Raw Omni-LIVO remains available to PX4 localization at all times. Only
        task-gated samples enter the decision/planning map, so ground takeoff
        returns cannot contaminate a new exploration mission. -->
   <node pkg="mine_uav_control" type="task1_perception_gate"
-        name="task1_perception_gate" output="screen" required="true"/>
+        name="task1_perception_gate" output="screen" required="true">
+    <param name="input_cloud_topic" value="/omnilivo/cloud_registered"/>
+    <param name="input_odom_topic" value="/omnilivo/odometry"/>
+    <!-- Task 3 gets the IMU-propagated low-latency state through the same
+         fixed level/alignment transform. Task 1 keeps optimized odometry. -->
+    <param name="auxiliary_input_odom_topic"
+           value="/omnilivo/control_odometry"/>
+    <param name="auxiliary_output_odom_topic"
+           value="/mine_uav/task3/obstacle_odometry"/>
+    <param name="source_alignment_topic"
+           value="/mine_uav/task1/lio_to_px4_alignment"/>
+    <param name="sensor_rotation_topic"
+           value="/mine_uav/task1/lio_sensor_from_body_rotation"/>
+    <param name="vision_heading_alignment_topic"
+           value="/mine_uav/task1/vision_heading_from_planning"/>
+    <param name="require_vision_heading_alignment" value="true"/>
+    <param name="mission_enable_topic"
+           value="/mine_uav/mission/exploration_enable"/>
+    <!-- Task 3 reuses only the levelled cloud/odometry safety feed. It does
+         not open SUPER or obtain PX4 command ownership here. -->
+    <param name="additional_cloud_enable_topic"
+           value="/mine_uav/mission/task3_enable"/>
+    <param name="second_additional_cloud_enable_topic"
+           value="/mine_uav/mission/shaft_enable"/>
+  </node>
 
   <include file="$(find mine_uav_control)/launch/super_exploration_decider.launch">
-    <!-- Laboratory procedure: manual hover first, then a CH7 edge starts
+    <!-- Laboratory procedure: manual hover first, then the assigned task edge starts
          a fresh task and captures home from the synchronized pose. -->
     <arg name="require_mission_enable_edge" value="true"/>
+    <arg name="mission_enable_topic"
+         value="/mine_uav/mission/exploration_enable"/>
+    <arg name="follow_active_task_profile" value="true"/>
   </include>
 
   <group if="$(arg start_super)">
@@ -78,5 +175,8 @@
     </node>
   </group>
 
-  <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch"/>
+  <include file="$(find mine_uav_control)/launch/super_px4_command_bridge.launch">
+    <arg name="mission_enable_topic"
+         value="/mine_uav/mission/exploration_enable"/>
+  </include>
 </launch>

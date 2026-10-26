@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "mine_uav_control/fastlio_mount_alignment.hpp"
+#include "mine_uav_control/lio_mount_alignment.hpp"
 
 namespace mine_uav_control {
 

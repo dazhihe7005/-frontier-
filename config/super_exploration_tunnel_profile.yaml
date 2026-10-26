@@ -1,0 +1,23 @@
+# Task-4 reference profile. Production mirrors the route-policy values as
+# explicit super_exploration_decider.launch arguments; the scheduler selects
+# this profile dynamically, while the frozen common YAML keeps all Task-1
+# safety and return limits shared.
+mission_profile: "tunnel"
+
+# These preferences are ignored by the goaf profile even though their tuning
+# stays in the common configuration for now.
+corridor_centering_enabled: true
+corridor_preview_enabled: true
+corridor_preview_min_reliable_center_band_width: 0.75
+
+# Once SUPER accepts a substantial bend, use that local tunnel tangent as the
+# exploration axis. At the branch end, residual frontiers on the other side
+# of the junction cannot pull the aircraft back into meaningless exploration.
+tunnel_route_lock_min_turn_deg: 35.0
+# Current-route continuation is preferred inside 35 degrees. If it is absent,
+# a fully observed connected branch may turn as far as 120 degrees; routes
+# back toward the already surveyed junction remain ineligible.
+tunnel_straight_preference_angle_deg: 35.0
+tunnel_connected_turn_max_angle_deg: 120.0
+# Dense actual-flight trace for strict reverse replay through bends.
+tunnel_return_breadcrumb_spacing: 1.0
