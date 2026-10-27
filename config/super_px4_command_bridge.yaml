@@ -72,6 +72,16 @@ live_horizontal_clearance: 0.65
 # measured-pose hold immediately. It is not a hard-fault radius: a transient
 # leaf/rock may clear and the current task then resumes smoothly.
 obstacle_monitor_horizontal_clearance: 0.8
+# Start a near-wall stop early enough for the stop trajectory the bridge will
+# actually publish. At the 1.1 m/s contract, 0.25 s sensing/control reaction,
+# a 1.75 m/s^2 emergency deceleration and 0.10 m reserve require about 1.55 m.
+# The 1.7 m search cap leaves bounded estimator/packet headroom.
+obstacle_dynamic_monitor_max_clearance: 1.7
+obstacle_reaction_time: 0.25
+obstacle_emergency_deceleration: 1.75
+obstacle_emergency_min_duration: 0.25
+obstacle_emergency_max_jerk: 30.0
+obstacle_dynamic_clearance_buffer: 0.10
 # Persistence in the 0.65--0.8 m monitored caution zone requests a fresh
 # frontier/SUPER route instead of waiting forever; it does not exit OFFBOARD.
 # The fixed hold is released only by a newly numbered trajectory. A persistent
@@ -122,8 +132,15 @@ coverage_min_vertical_span: 0.0
 coverage_narrow_vertical_min_points: 120
 coverage_narrow_vertical_min_horizontal_span: 0.2
 coverage_narrow_vertical_min_vertical_span: 0.8
+# Acquiring the door-jamb/post classification remains strict above. Once that
+# geometry has been confirmed, retain it through the 49--101 point packets
+# observed tonight. This does not bypass the dynamic 0.8--1.7 m live stop or
+# the independent 0.65 m hard cylinder.
+coverage_narrow_vertical_retain_min_points: 45
+coverage_narrow_vertical_retain_min_horizontal_span: 0.1
+coverage_narrow_vertical_retain_min_vertical_span: 0.7
 coverage_confirm_frames: 3
-coverage_reject_frames: 2
+coverage_reject_frames: 5
 max_obstacle_points: 100000
 
 # Continuity guard: reject discontinuous planner output before it can reach PX4.

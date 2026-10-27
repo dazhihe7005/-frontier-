@@ -183,6 +183,18 @@ class SuperPx4CommandBridge {
                       live_horizontal_clearance_, 0.65);
     private_nh_.param("obstacle_monitor_horizontal_clearance",
                       obstacle_monitor_horizontal_clearance_, 0.8);
+    private_nh_.param("obstacle_dynamic_monitor_max_clearance",
+                      obstacle_dynamic_monitor_max_clearance_, 1.7);
+    private_nh_.param("obstacle_reaction_time",
+                      obstacle_reaction_time_, 0.25);
+    private_nh_.param("obstacle_emergency_deceleration",
+                      obstacle_emergency_deceleration_, 1.75);
+    private_nh_.param("obstacle_emergency_min_duration",
+                      obstacle_emergency_min_duration_, 0.25);
+    private_nh_.param("obstacle_emergency_max_jerk",
+                      obstacle_emergency_max_jerk_, 30.0);
+    private_nh_.param("obstacle_dynamic_clearance_buffer",
+                      obstacle_dynamic_clearance_buffer_, 0.10);
     private_nh_.param("obstacle_persistence_duration",
                       obstacle_persistence_duration_, 3.0);
     private_nh_.param("obstacle_replan_topic", obstacle_replan_topic_,
@@ -217,6 +229,14 @@ class SuperPx4CommandBridge {
                       coverage_narrow_vertical_min_horizontal_span_, 0.2);
     private_nh_.param("coverage_narrow_vertical_min_vertical_span",
                       coverage_narrow_vertical_min_vertical_span_, 0.8);
+    private_nh_.param("coverage_narrow_vertical_retain_min_points",
+                      coverage_narrow_vertical_retain_min_points_, 45);
+    private_nh_.param(
+        "coverage_narrow_vertical_retain_min_horizontal_span",
+        coverage_narrow_vertical_retain_min_horizontal_span_, 0.1);
+    private_nh_.param(
+        "coverage_narrow_vertical_retain_min_vertical_span",
+        coverage_narrow_vertical_retain_min_vertical_span_, 0.7);
     private_nh_.param("coverage_confirm_frames",
                       coverage_confirm_frames_, 3);
     private_nh_.param("coverage_reject_frames",
@@ -291,6 +311,25 @@ class SuperPx4CommandBridge {
     live_horizontal_clearance_ = std::max(0.1, live_horizontal_clearance_);
     obstacle_monitor_horizontal_clearance_ = std::max(
         live_horizontal_clearance_, obstacle_monitor_horizontal_clearance_);
+    obstacle_reaction_time_ = std::max(0.0, obstacle_reaction_time_);
+    obstacle_emergency_deceleration_ = std::max(
+        0.1, obstacle_emergency_deceleration_);
+    obstacle_emergency_min_duration_ = std::max(
+        0.05, obstacle_emergency_min_duration_);
+    obstacle_emergency_max_jerk_ = std::max(
+        max_acceleration_slew_, obstacle_emergency_max_jerk_);
+    obstacle_dynamic_clearance_buffer_ = std::max(
+        0.0, obstacle_dynamic_clearance_buffer_);
+    const double maximum_dynamic_clearance =
+        mine_uav_control::requiredDynamicObstacleClearance(
+            live_horizontal_clearance_,
+            obstacle_monitor_horizontal_clearance_, max_speed_, max_speed_,
+            obstacle_reaction_time_, obstacle_emergency_deceleration_,
+            obstacle_dynamic_clearance_buffer_,
+            obstacle_emergency_min_duration_);
+    obstacle_dynamic_monitor_max_clearance_ = std::max(
+        maximum_dynamic_clearance,
+        obstacle_dynamic_monitor_max_clearance_);
     obstacle_persistence_duration_ = std::max(
         0.1, obstacle_persistence_duration_);
     obstacle_replan_escape_duration_ = std::max(
@@ -318,6 +357,16 @@ class SuperPx4CommandBridge {
                       coverage_narrow_vertical_min_horizontal_span_));
     coverage_narrow_vertical_min_vertical_span_ = std::max(
         0.1, coverage_narrow_vertical_min_vertical_span_);
+    coverage_narrow_vertical_retain_min_points_ = std::max(
+        coverage_min_points_,
+        std::min(coverage_narrow_vertical_min_points_,
+                 coverage_narrow_vertical_retain_min_points_));
+    coverage_narrow_vertical_retain_min_horizontal_span_ = std::max(
+        0.05, std::min(coverage_narrow_vertical_min_horizontal_span_,
+                       coverage_narrow_vertical_retain_min_horizontal_span_));
+    coverage_narrow_vertical_retain_min_vertical_span_ = std::max(
+        0.1, std::min(coverage_narrow_vertical_min_vertical_span_,
+                      coverage_narrow_vertical_retain_min_vertical_span_));
     coverage_confirm_frames_ = std::max(1, coverage_confirm_frames_);
     coverage_reject_frames_ = std::max(1, coverage_reject_frames_);
     max_obstacle_points_ = std::max(100, max_obstacle_points_);
@@ -713,10 +762,39 @@ class SuperPx4CommandBridge {
     const auto& p = odometry->pose.pose.position;
     if (!finite(p.x) || !finite(p.y) || !finite(p.z)) {
       have_task_odometry_ = false;
+      have_task_velocity_ = false;
       return;
     }
+    const ros::Time now = ros::Time::now();
+    if (have_task_odometry_ && !last_task_odometry_time_.isZero()) {
+      const double dt = (now - last_task_odometry_time_).toSec();
+      if (dt >= 0.02 && dt <= obstacle_cloud_timeout_) {
+        double velocity_x = (p.x - latest_task_position_.x) / dt;
+        double velocity_y = (p.y - latest_task_position_.y) / dt;
+        double velocity_z = (p.z - latest_task_position_.z) / dt;
+        const double speed = vectorNorm(velocity_x, velocity_y, velocity_z);
+        const double maximum_estimated_speed =
+            1.5 * std::max(max_speed_, max_measured_speed_);
+        if (std::isfinite(speed)) {
+          if (speed > maximum_estimated_speed) {
+            const double scale = maximum_estimated_speed / speed;
+            velocity_x *= scale;
+            velocity_y *= scale;
+            velocity_z *= scale;
+          }
+          latest_task_velocity_x_ = velocity_x;
+          latest_task_velocity_y_ = velocity_y;
+          latest_task_velocity_z_ = velocity_z;
+          have_task_velocity_ = true;
+        } else {
+          have_task_velocity_ = false;
+        }
+      } else {
+        have_task_velocity_ = false;
+      }
+    }
     latest_task_position_ = {p.x, p.y, p.z};
-    last_task_odometry_time_ = ros::Time::now();
+    last_task_odometry_time_ = now;
     have_task_odometry_ = true;
   }
 
@@ -768,14 +846,18 @@ class SuperPx4CommandBridge {
     obstacle_replan_escape_started_ = ros::Time();
     obstacle_hold_source_trajectory_id_ = 0;
     obstacle_replan_requires_away_motion_ = false;
+    obstacle_emergency_stop_required_ = false;
   }
 
   void beginTransientObstacleHold(const std::string& reason,
                                   bool hard_clearance_intrusion,
+                                  bool emergency_stop_required,
                                   const ros::Time& now) {
     const bool was_active = obstacle_monitor_.active();
     const auto action = obstacle_monitor_.update(true, now.toSec());
     obstacle_monitor_reason_ = reason;
+    obstacle_emergency_stop_required_ =
+        obstacle_emergency_stop_required_ || emergency_stop_required;
     obstacle_safety_ready_ = false;
     if (!was_active) {
       // Capture one measured-pose hold. Recomputing the target on every timer
@@ -802,8 +884,12 @@ class SuperPx4CommandBridge {
                "%.1f s of continuous observation (%s)",
                obstacle_persistence_duration_, reason.c_str());
     }
-    if (mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
-            action, hard_clearance_intrusion)) {
+    // A hard-radius intrusion has no persistence budget: tonight's third
+    // flight crossed from 0.75 m to 0.53 m during the former 0.5 s wait.
+    // Brake immediately and request a clearance-increasing route on the first
+    // hard observation. Persistence remains useful only for soft-zone noise.
+    if (mine_uav_control::hardIntrusionRequiresImmediateVerifiedReturn(
+            hard_clearance_intrusion)) {
       if (!autonomousReturnHealthReady(now)) {
         ROS_ERROR("Persistent hard obstacle cannot be escaped autonomously "
                   "because localization or perception is unhealthy");
@@ -816,9 +902,10 @@ class SuperPx4CommandBridge {
         obstacle_replan_requested_ = true;
         obstacle_replan_publisher_.publish(std_msgs::Empty());
         publishReturnRequest(true);
-        ROS_ERROR("Obstacle remained inside the %.3f m hard radius for %.3f "
-                  "s; retaining OFFBOARD and requesting a verified "
-                  "clearance-increasing return trajectory",
+        ROS_ERROR("Obstacle entered the %.3f m hard radius; retaining "
+                  "OFFBOARD, emergency braking, and immediately requesting "
+                  "a verified clearance-increasing return trajectory "
+                  "(monitor active %.3f s)",
                   live_horizontal_clearance_,
                   obstacle_monitor_.elapsed(now.toSec()));
       }
@@ -908,26 +995,44 @@ class SuperPx4CommandBridge {
     // The monitor intentionally evaluates the current scan rather than the
     // permanent map. A leaf, loose rock, or lidar speckle must stop motion
     // immediately, but it must also be allowed to clear and resume the task.
-    const auto clearance = mine_uav_control::liveHorizontalCylinderClearance(
-        points, latest_task_position_, obstacle_monitor_horizontal_clearance_,
-        live_vertical_clearance_below_, live_vertical_clearance_above_,
-        obstacle_min_z_);
+    const auto clearance =
+        mine_uav_control::liveDynamicHorizontalCylinderClearance(
+            points, latest_task_position_,
+            have_previous_target_ ? latest_planning_velocity_x_ : 0.0,
+            have_previous_target_ ? latest_planning_velocity_y_ : 0.0,
+            have_previous_target_ ? latest_planning_velocity_z_ : 0.0,
+            latest_task_velocity_x_, latest_task_velocity_y_,
+            latest_task_velocity_z_, have_task_velocity_,
+            live_horizontal_clearance_,
+            obstacle_monitor_horizontal_clearance_,
+            obstacle_dynamic_monitor_max_clearance_,
+            obstacle_reaction_time_, obstacle_emergency_deceleration_,
+            obstacle_dynamic_clearance_buffer_,
+            obstacle_emergency_min_duration_,
+            live_vertical_clearance_below_, live_vertical_clearance_above_,
+            obstacle_min_z_);
     bool obstacle_requires_monitoring = clearance.violated;
     std::string monitor_reason =
-        clearance.horizontal_distance < live_horizontal_clearance_
+        clearance.hard_clearance_violated
             ? "HARD_CLEARANCE_INTRUSION"
-            : "OBSTACLE_IN_AVOIDANCE_ZONE";
+            : (clearance.horizontal_distance <
+                       obstacle_monitor_horizontal_clearance_
+                   ? "OBSTACLE_IN_AVOIDANCE_ZONE"
+                   : "DYNAMIC_STOPPING_DISTANCE");
     if (clearance.violated) {
       ROS_WARN_THROTTLE(
           0.5,
           "OBSTACLE_MONITOR: vehicle task xyz=(%.3f, %.3f, %.3f), "
           "obstacle=(%.3f, %.3f, %.3f), horizontal=%.3f m, "
-          "hard/monitor radii=%.3f/%.3f m, vertical=%.3f m",
+          "hard/fixed/dynamic radii=%.3f/%.3f/%.3f m, closing=%.3f "
+          "m/s, vertical=%.3f m",
           latest_task_position_.x, latest_task_position_.y,
           latest_task_position_.z, clearance.obstacle.x,
           clearance.obstacle.y, clearance.obstacle.z,
           clearance.horizontal_distance, live_horizontal_clearance_,
           obstacle_monitor_horizontal_clearance_,
+          clearance.required_horizontal_clearance,
+          clearance.closing_speed,
           clearance.vertical_distance);
     }
 
@@ -953,7 +1058,11 @@ class SuperPx4CommandBridge {
         obstacle_min_z_,
         static_cast<std::size_t>(coverage_narrow_vertical_min_points_),
         coverage_narrow_vertical_min_horizontal_span_,
-        coverage_narrow_vertical_min_vertical_span_);
+        coverage_narrow_vertical_min_vertical_span_,
+        static_cast<std::size_t>(
+            coverage_narrow_vertical_retain_min_points_),
+        coverage_narrow_vertical_retain_min_horizontal_span_,
+        coverage_narrow_vertical_retain_min_vertical_span_);
     if (coverage.narrow_vertical_surface_complete &&
         !coverage.broad_surface_complete) {
       ROS_INFO_THROTTLE(
@@ -966,8 +1075,21 @@ class SuperPx4CommandBridge {
           live_horizontal_clearance_,
           obstacle_monitor_horizontal_clearance_);
     }
+    const bool retained_narrow_surface =
+        obstacle_surface_coverage_ready_ &&
+        coverage.narrow_vertical_surface_retainable;
+    if (retained_narrow_surface && !coverage.complete) {
+      ROS_INFO_THROTTLE(
+          1.0,
+          "Retaining previously confirmed narrow vertical surface through "
+          "point-density fluctuation: points=%zu horizontal_span=%.3f m "
+          "vertical_span=%.3f m",
+          coverage.point_count, coverage.horizontal_span,
+          coverage.vertical_span);
+    }
     bool surface_ready = mine_uav_control::updateSurfaceCoverageReadiness(
-        coverage.obstacle_nearby, coverage.complete,
+        coverage.obstacle_nearby,
+        coverage.complete || retained_narrow_surface,
         coverage_confirm_frames_, coverage_reject_frames_,
         &obstacle_coverage_complete_streak_,
         &obstacle_coverage_incomplete_streak_,
@@ -1001,8 +1123,7 @@ class SuperPx4CommandBridge {
     }
 
     const bool hard_clearance_intrusion =
-        clearance.violated &&
-        clearance.horizontal_distance < live_horizontal_clearance_ - 1e-9;
+        clearance.hard_clearance_violated;
     if (clearance.violated) {
       latest_monitor_obstacle_ = clearance.obstacle;
       have_latest_monitor_obstacle_ = true;
@@ -1015,7 +1136,8 @@ class SuperPx4CommandBridge {
             returning_home_, valid_command_, clearance.violated,
             hard_clearance_intrusion, latest_task_position_,
             clearance.obstacle, planned_target,
-            latest_planning_velocity_x_, latest_planning_velocity_y_)) {
+            latest_planning_velocity_x_, latest_planning_velocity_y_,
+            clearance.closing_speed)) {
       // The current SUPER return is already taking the vehicle away from the
       // nearest wall. Freezing it at the 0.8 m planning boundary would discard
       // the only clearance-increasing motion and create a hold/replan loop.
@@ -1036,7 +1158,8 @@ class SuperPx4CommandBridge {
       const mine_uav_control::ObstaclePoint planned_target{
           latest_planning_position_x_, latest_planning_position_y_,
           latest_task_position_.z};
-      const bool moving_away = have_latest_monitor_obstacle_ &&
+      const bool moving_away = clearance.closing_speed <= 0.02 &&
+          have_latest_monitor_obstacle_ &&
           mine_uav_control::plannedMotionIncreasesHorizontalClearance(
               latest_task_position_, latest_monitor_obstacle_, planned_target,
               latest_planning_velocity_x_, latest_planning_velocity_y_);
@@ -1062,7 +1185,8 @@ class SuperPx4CommandBridge {
 
     if (obstacle_requires_monitoring) {
       beginTransientObstacleHold(monitor_reason,
-                                 hard_clearance_intrusion, now);
+                                 hard_clearance_intrusion,
+                                 clearance.violated, now);
       return;
     }
     if (!clearTransientObstacleHold(now)) {
@@ -1289,13 +1413,23 @@ class SuperPx4CommandBridge {
     last_speed_governor_update_time_ = ros::Time();
   }
 
-  void startEmergencyBrake() {
-    if (brake_active_ || !have_published_target_) return;
+  void startBrake(bool obstacle_emergency) {
+    if (!have_published_target_) return;
+    if (brake_active_) {
+      if (!obstacle_emergency || obstacle_emergency_brake_active_) return;
+      // Escalate a far-field surface/command hold to the dedicated near-wall
+      // stop from the setpoint most recently sent to PX4.
+      brake_active_ = false;
+    }
     brake_start_target_ = published_target_;
     brake_start_time_ = published_target_time_;
     const auto& v = brake_start_target_.velocity;
     const double speed = vectorNorm(v.x, v.y, v.z);
-    brake_duration_ = std::max(1.5, 2.0 * speed / max_velocity_slew_);
+    brake_duration_ = obstacle_emergency
+        ? mine_uav_control::obstacleEmergencyBrakeDuration(
+              speed, obstacle_emergency_deceleration_,
+              obstacle_emergency_min_duration_)
+        : std::max(1.5, 2.0 * speed / max_velocity_slew_);
     const double p[3] = {brake_start_target_.position.x,
                          brake_start_target_.position.y,
                          brake_start_target_.position.z};
@@ -1314,10 +1448,21 @@ class SuperPx4CommandBridge {
         brake_start_target_.yaw - brake_stop_yaw_,
         brake_start_target_.yaw_rate, 0.0, brake_duration_);
     brake_active_ = true;
+    obstacle_emergency_brake_active_ = obstacle_emergency;
     hold_target_latched_ = false;
-    ROS_WARN("SUPER command interrupted during motion; braking continuously over %.2f s",
-             brake_duration_);
+    if (obstacle_emergency) {
+      ROS_ERROR("Near-wall emergency brake: stopping the current %.3f m/s "
+                "command over %.2f s (predicted travel %.3f m)",
+                speed, brake_duration_, 0.5 * speed * brake_duration_);
+    } else {
+      ROS_WARN("SUPER command interrupted during motion; braking smoothly "
+               "over %.2f s", brake_duration_);
+    }
   }
+
+  void startEmergencyBrake() { startBrake(false); }
+
+  void startObstacleEmergencyBrake() { startBrake(true); }
 
   mavros_msgs::PositionTarget emergencyBrakeTarget(const ros::Time& now) const {
     auto target = brake_start_target_;
@@ -1585,6 +1730,7 @@ class SuperPx4CommandBridge {
     }
     latest_planning_velocity_x_ = command->velocity.x;
     latest_planning_velocity_y_ = command->velocity.y;
+    latest_planning_velocity_z_ = command->velocity.z;
     latest_planning_position_x_ = command->position.x;
     latest_planning_position_y_ = command->position.y;
     if (obstacle_monitor_.active()) {
@@ -1698,8 +1844,10 @@ class SuperPx4CommandBridge {
     updateStatus();
   }
 
-  bool publishCheckedTarget(mavros_msgs::PositionTarget target, const ros::Time& now,
-                            bool feedforward_governed = false) {
+  bool publishCheckedTarget(mavros_msgs::PositionTarget target,
+                            const ros::Time& now,
+                            bool feedforward_governed = false,
+                            bool safety_emergency = false) {
     if (have_published_target_ && px4_mode_ == offboard_mode_) {
       const double dt = (now - published_target_time_).toSec();
       if (dt <= 0.0) return false;
@@ -1712,7 +1860,15 @@ class SuperPx4CommandBridge {
       };
       const char* reason=mine_uav_control::motionTransitionFailure(
           sample(published_target_),sample(target),dt,max_position_rate_,
-          max_velocity_slew_,max_acceleration_slew_,max_yaw_rate_,
+          safety_emergency
+              ? std::max(max_velocity_slew_,
+                         obstacle_emergency_deceleration_)
+              : max_velocity_slew_,
+          safety_emergency
+              ? std::max(max_acceleration_slew_,
+                         obstacle_emergency_max_jerk_)
+              : max_acceleration_slew_,
+          max_yaw_rate_,
           !feedforward_governed && !published_target_feedforward_governed_);
       if(reason) {
         const double dp = vectorNorm(
@@ -2014,9 +2170,12 @@ class SuperPx4CommandBridge {
       if (brake_active_ ||
           (have_published_target_ && !outputNearRest(published_target_))) {
         startEmergencyBrake();
-        if (!publishCheckedTarget(emergencyBrakeTarget(now), now)) return;
+        if (!publishCheckedTarget(
+                emergencyBrakeTarget(now), now, false,
+                obstacle_emergency_brake_active_)) return;
         if ((now - brake_start_time_).toSec() >= brake_duration_) {
           brake_active_ = false;
+          obstacle_emergency_brake_active_ = false;
           hold_target_latched_ = false;
         }
         publishReady(false);
@@ -2039,16 +2198,23 @@ class SuperPx4CommandBridge {
     }
     if (obstacle_monitor_.active() && px4_mode_ == offboard_mode_ &&
         !fault_latched_) {
-      // Retain OFFBOARD for the bounded observation window, but never replace
-      // a moving command with measured pose/yaw in one sample. Brake from the
-      // last state actually sent to PX4, then pin that exact endpoint. This
-      // keeps position, velocity and yaw continuous while the planner replans.
+      // A far-field incomplete-surface hold may use the ordinary smooth stop.
+      // Any live-cylinder/dynamic-stopping-distance intrusion uses the
+      // dedicated short near-wall brake instead; the former 1.5 s minimum
+      // carried tonight's last two flights into the wall after detection.
       if (brake_active_ ||
           (have_published_target_ && !outputNearRest(published_target_))) {
-        startEmergencyBrake();
-        if (!publishCheckedTarget(emergencyBrakeTarget(now), now)) return;
+        if (obstacle_emergency_stop_required_) {
+          startObstacleEmergencyBrake();
+        } else {
+          startEmergencyBrake();
+        }
+        if (!publishCheckedTarget(
+                emergencyBrakeTarget(now), now, false,
+                obstacle_emergency_brake_active_)) return;
         if ((now - brake_start_time_).toSec() >= brake_duration_) {
           brake_active_ = false;
+          obstacle_emergency_brake_active_ = false;
           hold_target_latched_ = false;
         }
         publishReady(false);
@@ -2216,6 +2382,7 @@ class SuperPx4CommandBridge {
       hold_target_latched_ = false;
       if (brake_active_) {
         brake_active_ = false;
+        obstacle_emergency_brake_active_ = false;
         source_stream_active_ = false;
       }
       if (!source_stream_active_) {
@@ -2279,9 +2446,13 @@ class SuperPx4CommandBridge {
       if (brake_active_ || (have_published_target_ &&
                             !outputNearRest(published_target_))) {
         startEmergencyBrake();
-        if (!publishCheckedTarget(emergencyBrakeTarget(now), now)) return;
-        if ((now - brake_start_time_).toSec() >= brake_duration_)
+        if (!publishCheckedTarget(
+                emergencyBrakeTarget(now), now, false,
+                obstacle_emergency_brake_active_)) return;
+        if ((now - brake_start_time_).toSec() >= brake_duration_) {
           brake_active_ = false;
+          obstacle_emergency_brake_active_ = false;
+        }
         publishReady(false);
         publishStatus("BRAKING_COMMAND_TIMEOUT");
         return;
@@ -2372,9 +2543,13 @@ class SuperPx4CommandBridge {
     if (brake_active_ || (have_published_target_ &&
                           !outputNearRest(published_target_))) {
       startEmergencyBrake();
-      if (publishCheckedTarget(emergencyBrakeTarget(now), now)) {
-        if ((now - brake_start_time_).toSec() >= brake_duration_)
+      if (publishCheckedTarget(
+              emergencyBrakeTarget(now), now, false,
+              obstacle_emergency_brake_active_)) {
+        if ((now - brake_start_time_).toSec() >= brake_duration_) {
           brake_active_ = false;
+          obstacle_emergency_brake_active_ = false;
+        }
         publishStatus("BRAKING_BEFORE_OFFBOARD_EXIT");
       }
       return;
@@ -2658,6 +2833,12 @@ class SuperPx4CommandBridge {
   double obstacle_cloud_fault_timeout_{2.0};
   double live_horizontal_clearance_{0.65};
   double obstacle_monitor_horizontal_clearance_{0.8};
+  double obstacle_dynamic_monitor_max_clearance_{1.7};
+  double obstacle_reaction_time_{0.25};
+  double obstacle_emergency_deceleration_{1.75};
+  double obstacle_emergency_min_duration_{0.25};
+  double obstacle_emergency_max_jerk_{30.0};
+  double obstacle_dynamic_clearance_buffer_{0.10};
   double obstacle_persistence_duration_{3.0};
   double obstacle_replan_escape_duration_{4.0};
   double live_vertical_clearance_below_{0.5};
@@ -2670,14 +2851,21 @@ class SuperPx4CommandBridge {
   double coverage_min_vertical_span_{0.0};
   double coverage_narrow_vertical_min_horizontal_span_{0.2};
   double coverage_narrow_vertical_min_vertical_span_{0.8};
+  double coverage_narrow_vertical_retain_min_horizontal_span_{0.1};
+  double coverage_narrow_vertical_retain_min_vertical_span_{0.7};
   double latest_planning_velocity_x_{1.0};
   double latest_planning_velocity_y_{0.0};
+  double latest_planning_velocity_z_{0.0};
   double latest_planning_position_x_{0.0};
   double latest_planning_position_y_{0.0};
   double last_planning_forward_x_{1.0};
   double last_planning_forward_y_{0.0};
+  double latest_task_velocity_x_{0.0};
+  double latest_task_velocity_y_{0.0};
+  double latest_task_velocity_z_{0.0};
   int coverage_min_points_{30};
   int coverage_narrow_vertical_min_points_{120};
+  int coverage_narrow_vertical_retain_min_points_{45};
   int coverage_confirm_frames_{3};
   int coverage_reject_frames_{2};
   int max_obstacle_points_{20000};
@@ -2706,6 +2894,7 @@ class SuperPx4CommandBridge {
   bool have_local_pose_{false};
   bool have_local_velocity_{false};
   bool have_task_odometry_{false};
+  bool have_task_velocity_{false};
   bool have_obstacle_cloud_{false};
   bool obstacle_safety_enabled_{false};
   bool obstacle_safety_ready_{true};
@@ -2714,6 +2903,7 @@ class SuperPx4CommandBridge {
   bool obstacle_replan_requested_{false};
   bool obstacle_replan_escape_active_{false};
   bool obstacle_replan_requires_away_motion_{false};
+  bool obstacle_emergency_stop_required_{false};
   mine_uav_control::ObstaclePoint latest_monitor_obstacle_;
   bool have_latest_monitor_obstacle_{false};
   uint32_t obstacle_hold_source_trajectory_id_{0};
@@ -2731,6 +2921,7 @@ class SuperPx4CommandBridge {
   bool reacquire_active_{false};
   bool managed_hold_reacquire_pending_{false};
   bool source_stream_active_{false};
+  bool obstacle_emergency_brake_active_{false};
   double active_reacquire_duration_{3.5};
   bool ready_published_{false};
   bool last_ready_{false};

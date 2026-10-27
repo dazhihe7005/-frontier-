@@ -259,3 +259,34 @@ TEST(MotionContinuity, TimeoutBrakeKeepsTheSetpointStreamContinuous) {
   EXPECT_NEAR(before.v[0], 0.0, 1e-10);
   EXPECT_NEAR(before.a[0], 0.0, 1e-10);
 }
+
+TEST(MotionContinuity, NearWallBrakeIsShorterThanOrdinarySmoothStop) {
+  const double speed = 0.64;
+  const double deceleration = 1.75;
+  const double duration = 1.5 * speed / deceleration;
+  const double stop_position = 0.5 * speed * duration;
+  EXPECT_LT(duration, 0.56);
+  EXPECT_LT(stop_position, 0.18);
+  EXPECT_LT(stop_position, 0.5 * speed * 1.5);
+
+  const auto x = QuinticOffset1D::make(
+      -stop_position, speed, 0.0, duration);
+  MotionSample before;
+  before.v[0] = speed;
+  double peak_deceleration = 0.0;
+  for (int i = 1; i <= 100; ++i) {
+    const auto state = x.eval(duration * i / 100.0);
+    peak_deceleration = std::max(peak_deceleration, -state.a);
+    MotionSample after;
+    after.p[0] = stop_position + state.p;
+    after.v[0] = state.v;
+    after.a[0] = state.a;
+    const double dt = duration / 100.0;
+    EXPECT_EQ(nullptr, motionTransitionFailure(
+        before, after, dt, 1.1, deceleration, 30.0, 0.75));
+    before = after;
+  }
+  EXPECT_NEAR(peak_deceleration, deceleration, 1e-6);
+  EXPECT_NEAR(before.p[0], stop_position, 1e-10);
+  EXPECT_NEAR(before.v[0], 0.0, 1e-10);
+}

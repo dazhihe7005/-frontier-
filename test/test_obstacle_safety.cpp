@@ -24,6 +24,92 @@ TEST(ObstacleSafety, LiveCylinderDoesNotTradeHeightForHorizontalDistance) {
       {{0.1, 0.0, -0.501}}, {0.0, 0.0, 0.0}, 0.8, 0.5, 0.5).violated);
 }
 
+TEST(ObstacleSafety, DynamicClearanceMatchesPublishedEmergencyBrake) {
+  EXPECT_NEAR(mine_uav_control::obstacleEmergencyBrakeDuration(
+                  0.64, 1.75, 0.25),
+              1.5 * 0.64 / 1.75, 1e-12);
+  EXPECT_NEAR(mine_uav_control::obstacleEmergencyStoppingDistance(
+                  0.64, 1.75, 0.25),
+              0.5 * 0.64 * (1.5 * 0.64 / 1.75), 1e-12);
+  EXPECT_NEAR(mine_uav_control::requiredDynamicObstacleClearance(
+                  0.65, 0.8, 0.64, 0.64, 0.25, 1.75, 0.10, 0.25),
+              0.65 + 0.10 + 0.64 * 0.25 +
+                  0.75 * 0.64 * 0.64 / 1.75,
+              1e-12);
+}
+
+TEST(ObstacleSafety, TonightSecondFlightWouldBrakeBeforeOldPointEightMetres) {
+  const ObstaclePoint vehicle{0.0, 0.0, 0.5};
+  const auto result =
+      mine_uav_control::liveDynamicHorizontalCylinderClearance(
+          {{1.08, 0.0, 0.5}}, vehicle,
+          0.64, 0.0, 0.0, 0.72, 0.0, 0.0, true,
+          0.65, 0.8, 1.7, 0.25, 1.75, 0.10, 0.25,
+          0.5, 0.5, 0.0);
+  EXPECT_TRUE(result.violated);
+  EXPECT_GT(result.required_horizontal_clearance, 1.08);
+  EXPECT_NEAR(result.closing_speed, 0.72, 1e-12);
+  EXPECT_FALSE(mine_uav_control::liveHorizontalCylinderClearance(
+      {{1.08, 0.0, 0.5}}, vehicle, 0.8, 0.5, 0.5, 0.0).violated);
+}
+
+TEST(ObstacleSafety, DynamicMonitorIgnoresExtraDistanceWhileMovingAway) {
+  const ObstaclePoint vehicle{0.0, 0.0, 0.5};
+  const auto result =
+      mine_uav_control::liveDynamicHorizontalCylinderClearance(
+          {{1.0, 0.0, 0.5}}, vehicle,
+          -1.0, 0.0, 0.0, -0.8, 0.0, 0.0, true,
+          0.65, 0.8, 1.7, 0.25, 1.75, 0.10, 0.25,
+          0.5, 0.5, 0.0);
+  EXPECT_FALSE(result.violated);
+  EXPECT_NEAR(result.required_horizontal_clearance, 0.8, 1e-12);
+  EXPECT_NEAR(result.closing_speed, 0.0, 1e-12);
+}
+
+TEST(ObstacleSafety, TangentialSpeedLengthensClosingStopBeforeWall) {
+  const ObstaclePoint vehicle{0.0, 0.0, 0.5};
+  const auto result =
+      mine_uav_control::liveDynamicHorizontalCylinderClearance(
+          {{0.85, 0.0, 0.5}}, vehicle,
+          0.2, 1.0, 0.0, 0.2, 1.0, 0.0, true,
+          0.65, 0.8, 1.7, 0.25, 1.75, 0.10, 0.25,
+          0.5, 0.5, 0.0);
+  ASSERT_TRUE(result.violated);
+  EXPECT_NEAR(result.closing_speed, 0.2, 1e-12);
+  EXPECT_GT(result.required_horizontal_clearance, 0.85);
+  // A model that incorrectly used only the 0.2 m/s closing component for
+  // brake duration would remain below this wall distance.
+  EXPECT_LT(mine_uav_control::requiredDynamicObstacleClearance(
+                0.65, 0.8, 0.2, 0.2, 0.25, 1.75, 0.10, 0.25),
+            0.85);
+}
+
+TEST(ObstacleSafety, DynamicMonitorPrioritizesFartherWallInFlightDirection) {
+  const ObstaclePoint vehicle{0.0, 0.0, 0.5};
+  const auto result =
+      mine_uav_control::liveDynamicHorizontalCylinderClearance(
+          {{-0.7, 0.0, 0.5}, {1.2, 0.0, 0.5}}, vehicle,
+          1.0, 0.0, 0.0, 1.0, 0.0, 0.0, true,
+          0.65, 0.8, 1.7, 0.25, 1.75, 0.10, 0.25,
+          0.5, 0.5, 0.0);
+  ASSERT_TRUE(result.violated);
+  EXPECT_NEAR(result.obstacle.x, 1.2, 1e-12);
+  EXPECT_GT(result.risk_margin, 0.2);
+}
+
+TEST(ObstacleSafety, HardIntrusionAlwaysOverridesFartherDynamicThreat) {
+  const ObstaclePoint vehicle{0.0, 0.0, 0.5};
+  const auto result =
+      mine_uav_control::liveDynamicHorizontalCylinderClearance(
+          {{-0.50, 0.0, 0.5}, {1.1, 0.0, 0.5}}, vehicle,
+          1.0, 0.0, 0.0, 1.0, 0.0, 0.0, true,
+          0.65, 0.8, 1.7, 0.25, 1.75, 0.10, 0.25,
+          0.5, 0.5, 0.0);
+  ASSERT_TRUE(result.violated);
+  EXPECT_TRUE(result.hard_clearance_violated);
+  EXPECT_NEAR(result.obstacle.x, -0.50, 1e-12);
+}
+
 TEST(ObstacleSafety, GroundPlaneIsExcludedButObstacleTopStillStopsVehicle) {
   const ObstaclePoint vehicle{0.0, 0.0, 0.5};
   EXPECT_FALSE(mine_uav_control::liveHorizontalCylinderClearance(
@@ -127,6 +213,23 @@ TEST(ObstacleSafety, DenseNarrowVerticalStructureQualifiesCoverage) {
   EXPECT_TRUE(result.complete);
 }
 
+TEST(ObstacleSafety, ConfirmedNarrowSurfaceCanSurviveTonightPointDropout) {
+  std::vector<ObstaclePoint> points;
+  for (int x = 0; x <= 2; ++x) {
+    for (int z = -8; z <= 8; ++z) {
+      points.push_back({1.5 + 0.1 * x, 0.0, 0.05 * z});
+    }
+  }
+  ASSERT_EQ(points.size(), 51u);
+  const auto result = mine_uav_control::evaluateForwardObstacleCoverage(
+      points, {0.0, 0.0, 0.0}, 1.0, 0.0, 2.5, 1.0, 0.7, 0.7,
+      30, 0.5, 0.0, -10.0, 120, 0.2, 0.8,
+      45, 0.1, 0.7);
+  EXPECT_FALSE(result.narrow_vertical_surface_complete);
+  EXPECT_TRUE(result.narrow_vertical_surface_retainable);
+  EXPECT_FALSE(result.complete);
+}
+
 TEST(ObstacleSafety, SparseNarrowVerticalStructureRemainsIncomplete) {
   std::vector<ObstaclePoint> points;
   for (int z = -20; z <= 20; ++z) {
@@ -216,17 +319,12 @@ TEST(ObstacleSafety, ContinuousObstacleBecomesPersistentAtThreeSeconds) {
 
 TEST(ObstacleSafety, PersistentPlanningZoneObstacleDoesNotExitOffboard) {
   EXPECT_FALSE(
-      mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
-          mine_uav_control::ObstacleMonitorAction::kPersistent, false));
-  EXPECT_FALSE(
-      mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
-          mine_uav_control::ObstacleMonitorAction::kHold, true));
+      mine_uav_control::hardIntrusionRequiresImmediateVerifiedReturn(false));
 }
 
-TEST(ObstacleSafety, PersistentHardIntrusionRequestsVerifiedReturn) {
+TEST(ObstacleSafety, FirstHardIntrusionRequestsVerifiedReturn) {
   EXPECT_TRUE(
-      mine_uav_control::persistentHardIntrusionRequiresVerifiedReturn(
-          mine_uav_control::ObstacleMonitorAction::kPersistent, true));
+      mine_uav_control::hardIntrusionRequiresImmediateVerifiedReturn(true));
 }
 
 TEST(ObstacleSafety, EveryPersistentReplanMustMoveAwayFromObstacle) {
@@ -265,6 +363,9 @@ TEST(ObstacleSafety, VerifiedReturnMayLeaveSoftZoneOnlyWhileMovingAway) {
   EXPECT_FALSE(verifiedReturnSoftZoneEscapeAllowed(
       true, true, true, false, vehicle, wall,
       {0.0, -0.2, 1.0}, 0.0, -0.1));
+  EXPECT_FALSE(verifiedReturnSoftZoneEscapeAllowed(
+      true, true, true, false, vehicle, wall,
+      away_target, -0.1, 0.1, 0.15));
 }
 
 TEST(ObstacleSafety, SurfaceCoverageReadinessHasBidirectionalHysteresis) {

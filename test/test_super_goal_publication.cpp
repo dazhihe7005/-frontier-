@@ -2246,6 +2246,46 @@ class SuperExplorationDeciderTestPeer {
     return yaw < -1.5 && yaw > -1.7;
   }
 
+  static bool connectedTurnRejectsTonightSubFloorStartClearance(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.mission_heading_yaw_ = 0.0;
+    decider.have_last_exploration_route_heading_ = true;
+    decider.last_exploration_route_heading_yaw_ = 0.0;
+    decider.voxel_resolution_ = 0.25;
+    decider.vehicle_radius_ = 0.8;
+    decider.preferred_vehicle_radius_ = 1.1;
+    decider.return_super_radius_ = 0.8;
+    decider.return_clearance_margin_ = 0.0;
+    decider.min_goal_distance_ = 1.0;
+    decider.max_frontier_goal_distance_ = 4.0;
+    decider.max_frontier_goal_vertical_step_ = 0.5;
+    decider.max_task_lateral_offset_ = 12.0;
+    decider.max_exploration_radius_from_home_ = 30.0;
+    decider.exploration_goal_queue_horizon_ = 10.0;
+    decider.connected_turn_max_angle_deg_ = 80.0;
+    decider.current_pose_.pose.position = decider.keyToPoint({0, 0, 0});
+
+    SuperExplorationDecider::VoxelSet reachable;
+    // The nearest graph cell is safely beyond the wall point, but the real
+    // aircraft starts only 0.70 m from it. Tonight's old route selection
+    // ignored that current-to-graph entrance clearance and advertised the
+    // resulting route as verified.
+    for (int x = 2; x <= 20; ++x) {
+      const VoxelKey key{x, 0, 0};
+      reachable.insert(key);
+      decider.voxels_[key] = SuperExplorationDecider::FREE;
+    }
+    const auto current = decider.current_pose_.pose.position;
+    decider.super_occupied_points_->push_back(pcl::PointXYZ(
+        static_cast<float>(current.x),
+        static_cast<float>(current.y + 0.70),
+        static_cast<float>(current.z)));
+    decider.super_occupied_tree_.setInputCloud(decider.super_occupied_points_);
+    return !decider.publishConnectedTurnContinuation(reachable);
+  }
+
   static bool tunnelHeadingCommitsOnlyAfterSuperAcceptance(
       SuperExplorationDecider& decider) {
     decider.mission_profile_ = ExplorationMissionProfile::kTunnel;
@@ -3567,6 +3607,13 @@ TEST(SuperGoalPublication, ConnectedTurnFollowsKnownFreeBendWithoutFrontier) {
   SuperExplorationDecider decider(nh, pnh);
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   connectedTurnFollowsKnownFreeBendWithoutFrontier(decider));
+}
+
+TEST(SuperGoalPublication, ConnectedTurnRejectsSubFloorStartClearance) {
+  ros::NodeHandle nh, pnh("~connected_turn_start_clearance");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  connectedTurnRejectsTonightSubFloorStartClearance(decider));
 }
 
 TEST(SuperGoalPublication, TunnelHeadingCommitsOnlyAfterSuperAcceptance) {

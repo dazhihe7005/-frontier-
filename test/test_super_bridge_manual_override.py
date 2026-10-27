@@ -522,6 +522,95 @@ class ManualOverrideTest(unittest.TestCase):
             self.assertNotIn("POSCTL", self._requests)
             self.assertEqual(self._fault, "")
 
+    def test_dynamic_near_wall_brake_stops_without_old_one_point_five_second_coast(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            self._command_speed = 0.3
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self._setpoint_velocities.clear()
+            self._obstacle_distance = 0.85
+        started = time.monotonic()
+        self.assertTrue(self._wait_for(
+            lambda: self._status.startswith("OBSTACLE_MONITORING_BRAKE:"),
+            timeout=2.0
+        ))
+        self.assertTrue(self._wait_for(
+            lambda: bool(self._setpoint_velocities) and
+            abs(self._setpoint_velocities[-1][0]) < 0.02,
+            timeout=1.0
+        ))
+        elapsed = time.monotonic() - started
+        with self._lock:
+            samples = list(self._setpoint_velocities)
+            self._obstacle_distance = None
+        xs = [sample[3] for sample in samples]
+        self.assertLess(elapsed, 0.8)
+        self.assertLess(max(xs) - min(xs), 0.10, samples)
+        self.assertNotIn("POSCTL", self._requests)
+
+    def test_first_hard_intrusion_immediately_requests_verified_return(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self._return_requests.clear()
+            self._obstacle_distance = 0.5
+        started = time.monotonic()
+        self.assertTrue(self._wait_for(
+            lambda: True in self._return_requests, timeout=1.0
+        ))
+        self.assertLess(time.monotonic() - started, 0.5)
+        with self._lock:
+            self._obstacle_distance = None
+            self.assertNotIn("POSCTL", self._requests)
+
+    def test_task_teardown_during_near_wall_brake_keeps_emergency_continuity(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            self._command_speed = 0.3
+        time.sleep(0.5)
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self._statuses.clear()
+            self._obstacle_distance = 0.85
+        self.assertTrue(self._wait_for(
+            lambda: self._status.startswith("OBSTACLE_MONITORING_BRAKE:"),
+            timeout=2.0
+        ))
+
+        # Cancelling the task during the short wall brake must not switch the
+        # output checker back to ordinary-stop limits before the aircraft is
+        # stationary.  That previously rejected the remaining brake frames.
+        with self._lock:
+            self._mission = False
+            self._auto = False
+        self.assertTrue(self._wait_for(lambda: "POSCTL" in self._requests,
+                                       timeout=3.0))
+        time.sleep(0.2)
+        with self._lock:
+            statuses = list(self._statuses)
+            fault = self._fault
+            self._obstacle_distance = None
+        self.assertNotIn("OUTPUT_DISCONTINUITY_REJECTED", statuses)
+        self.assertEqual(fault, "")
+
     def test_entry_speed_is_not_rechecked_while_mode_confirmation_is_pending(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
         time.sleep(0.5)

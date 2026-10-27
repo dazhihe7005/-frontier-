@@ -119,8 +119,18 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertAlmostEqual(
             bridge["obstacle_monitor_horizontal_clearance"],
             PLANNING_CLEARANCE)
+        self.assertGreaterEqual(
+            bridge["obstacle_dynamic_monitor_max_clearance"], 1.5)
+        self.assertAlmostEqual(bridge["obstacle_reaction_time"], 0.25)
+        self.assertAlmostEqual(
+            bridge["obstacle_emergency_deceleration"], 1.75)
+        self.assertLessEqual(
+            bridge["obstacle_emergency_min_duration"], 0.25)
+        self.assertGreaterEqual(bridge["obstacle_emergency_max_jerk"], 20.0)
+        self.assertGreaterEqual(
+            bridge["obstacle_dynamic_clearance_buffer"], 0.10)
         self.assertAlmostEqual(bridge["coverage_lateral_half_width"], 1.0)
-        self.assertEqual(bridge["coverage_reject_frames"], 2)
+        self.assertEqual(bridge["coverage_reject_frames"], 5)
         self.assertAlmostEqual(bridge["obstacle_persistence_duration"], 0.5)
         self.assertAlmostEqual(bridge["obstacle_replan_escape_duration"], 4.0)
         self.assertAlmostEqual(bridge["coverage_min_horizontal_span"], 0.5)
@@ -129,6 +139,14 @@ class Task1SafetyConfigTest(unittest.TestCase):
             bridge["coverage_narrow_vertical_min_horizontal_span"], 0.2)
         self.assertAlmostEqual(
             bridge["coverage_narrow_vertical_min_vertical_span"], 0.8)
+        self.assertEqual(
+            bridge["coverage_narrow_vertical_retain_min_points"], 45)
+        self.assertAlmostEqual(
+            bridge["coverage_narrow_vertical_retain_min_horizontal_span"],
+            0.1)
+        self.assertAlmostEqual(
+            bridge["coverage_narrow_vertical_retain_min_vertical_span"],
+            0.7)
         self.assertGreater(
             bridge["obstacle_cloud_fault_timeout"],
             bridge["obstacle_cloud_timeout"])

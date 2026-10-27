@@ -4181,6 +4181,19 @@ bool SuperExplorationDecider::publishConnectedTurnContinuation(
                 keyToPoint(candidate.route[index - 1]),
                 keyToPoint(candidate.route[index])));
       }
+      const double connected_route_hard_floor =
+          std::max(vehicle_radius_, return_super_radius_) +
+          return_clearance_margin_;
+      if (std::isfinite(candidate.minimum_clearance) &&
+          candidate.minimum_clearance + 1e-9 <
+              connected_route_hard_floor) {
+        ROS_WARN_THROTTLE(
+            1.0,
+            "Rejecting connected turn with %.3f m live-map clearance below "
+            "the %.3f m hard planning floor",
+            candidate.minimum_clearance, connected_route_hard_floor);
+        continue;
+      }
       if (std::isfinite(candidate.minimum_clearance) &&
           candidate.minimum_clearance + 1e-9 < preferred_vehicle_radius_) {
         candidate.preferred_clearance = false;
