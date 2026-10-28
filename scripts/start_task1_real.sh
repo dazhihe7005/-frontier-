@@ -17,6 +17,7 @@ readonly SYNC_USB_PRODUCT=8888
 readonly TASK3_USB_VENDOR=1a86
 readonly TASK3_USB_PRODUCTS="7523 7522 5523 e523"
 readonly MIN_FREE_KIB=$((80 * 1024 * 1024))
+readonly MIN_DIAGNOSTIC_FREE_KIB=$((10 * 1024 * 1024))
 readonly OMNI_WORKSPACE=/home/nuc/omni_livo_fisheye_ws
 readonly OMNI_CALIBRATION=${OMNI_WORKSPACE}/installation_calibration.yaml
 readonly OMNI_CONFIG_GENERATOR=${OMNI_WORKSPACE}/tools/make_raw_config.py
@@ -223,11 +224,18 @@ done
 
 mkdir -p "${LOG_ROOT}"
 RECORD_FLIGHT=true
+RECORD_DIAGNOSTIC=false
 available_kib=$(df -Pk "${LOG_ROOT}" | awk 'NR == 2 {print $4}')
 if [[ ! "${available_kib}" =~ ^[0-9]+$ ]] ||
    (( available_kib < MIN_FREE_KIB )); then
-  echo 'less than 80 GiB available: keep localization online without flight recording' >&2
   RECORD_FLIGHT=false
+  if [[ "${available_kib}" =~ ^[0-9]+$ ]] &&
+     (( available_kib >= MIN_DIAGNOSTIC_FREE_KIB )); then
+    RECORD_DIAGNOSTIC=true
+    echo 'less than 80 GiB available: recording only essential flight diagnostics' >&2
+  else
+    echo 'less than 10 GiB available: flight recording disabled' >&2
+  fi
 fi
 
 run_stamp=$(date +%Y%m%d_%H%M%S)
@@ -299,6 +307,7 @@ roslaunch "${PROJECT_DIR}/launch/task1_real.launch" \
   rviz:=false \
   start_seeker:=false \
   record_flight:="${RECORD_FLIGHT}" \
+  record_diagnostic:="${RECORD_DIAGNOSTIC}" \
   px4_device:="${PX4_SERIAL}" \
   flight_log_dir:="${run_dir}" \
   omnilivo_runtime_config:="${OMNI_RUNTIME_CONFIG}" &

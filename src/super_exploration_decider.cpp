@@ -3300,8 +3300,21 @@ bool SuperExplorationDecider::selectForwardLookaheadGoal(
                                 const LocalRouteCandidate& route) {
         return !preferred_available || route.preferred_clearance;
       };
-      auto tie_better = [](const LocalRouteCandidate& lhs,
-                           const LocalRouteCandidate& rhs) {
+      // The first leg may have to use a side lane when no 1.5 m route exists.
+      // Every later candidate includes the same current pose, so its minimum
+      // clearance often ties at that pose. Breaking that tie by distance to
+      // the original mission axis abruptly steered the 17:37 flight from one
+      // side of the passage toward the other. Keep the lane already reached;
+      // the clearance comparison above still permits a materially safer one.
+      const auto tie_better = [current_lateral](
+          const LocalRouteCandidate& lhs,
+          const LocalRouteCandidate& rhs) {
+        const double lhs_shift =
+            std::abs(lhs.mission_lateral - current_lateral);
+        const double rhs_shift =
+            std::abs(rhs.mission_lateral - current_lateral);
+        if (lhs_shift < rhs_shift - 1e-9) return true;
+        if (rhs_shift < lhs_shift - 1e-9) return false;
         return std::abs(lhs.mission_lateral) <
                std::abs(rhs.mission_lateral) - 1e-9;
       };
@@ -3319,33 +3332,42 @@ bool SuperExplorationDecider::selectForwardLookaheadGoal(
         }
       }
 
-      // Side holding is a clearance hysteresis, not a permanent preference:
-      // retain the previous side only while its worst point is within the
-      // configured margin of the globally clearest eligible path.
-      const LocalRouteCandidate* held = nullptr;
-      if (held_route_side_ != 0) {
+      // Clearance changes smaller than the configured hysteresis are not a
+      // reason to cross the passage. Among those nearly equally safe routes,
+      // keep the reached lateral lane and its already chosen side. A larger
+      // clearance advantage still wins without relaxing the hard floor.
+      const auto close_enough = [this, clearest](
+          const LocalRouteCandidate& route) {
+        return (!std::isfinite(clearest->minimum_clearance) &&
+                !std::isfinite(route.minimum_clearance)) ||
+               (std::isfinite(clearest->minimum_clearance) &&
+                route.minimum_clearance +
+                    lateral_route_switch_clearance_advantage_ >=
+                    clearest->minimum_clearance);
+      };
+      const bool retain_side = held_route_side_ != 0 &&
+          current_lateral * held_route_side_ >= -0.5 * voxel_resolution_;
+      const auto closest_lane = [&](bool require_held_side) {
+        const LocalRouteCandidate* best = nullptr;
         for (const auto& route : feasible) {
-          if (!eligible(route) ||
-              side_of(route.mission_lateral) != held_route_side_) continue;
-          const bool close_enough =
-              (!std::isfinite(clearest->minimum_clearance) &&
-               !std::isfinite(route.minimum_clearance)) ||
-              (std::isfinite(clearest->minimum_clearance) &&
-               route.minimum_clearance +
-                       lateral_route_switch_clearance_advantage_ >=
-                   clearest->minimum_clearance);
-          if (!close_enough) continue;
-          if (held == nullptr ||
-              clearance_better(route.minimum_clearance,
-                               held->minimum_clearance) ||
-              (!clearance_better(held->minimum_clearance,
-                                 route.minimum_clearance) &&
-               tie_better(route, *held))) {
-            held = &route;
+          if (!eligible(route) || !close_enough(route) ||
+              (require_held_side &&
+               side_of(route.mission_lateral) != held_route_side_)) {
+            continue;
+          }
+          if (best == nullptr || tie_better(route, *best) ||
+              (!tie_better(*best, route) &&
+               clearance_better(route.minimum_clearance,
+                                best->minimum_clearance))) {
+            best = &route;
           }
         }
-      }
-      *selected = held != nullptr ? *held : *clearest;
+        return best;
+      };
+      const LocalRouteCandidate* continuous =
+          retain_side ? closest_lane(true) : nullptr;
+      if (continuous == nullptr) continuous = closest_lane(false);
+      *selected = continuous != nullptr ? *continuous : *clearest;
       if (preferred_available) return true;
       if (!have_hard_fallback) {
         hard_fallback = *selected;
@@ -4708,7 +4730,14 @@ bool SuperExplorationDecider::publishFreshReturnGoal(
   };
   geometry_msgs::Point selected;
   bool found = false;
+  // Task 4 must replay its surveyed tunnel branch. Task 1 uses the trace as
+  // its first choice, but a newly occupied straight chord must not disable
+  // the live-map graph search for a known-free route home.
   const bool strict_outbound_trace =
+      mission_profile_ == ExplorationMissionProfile::kTunnel &&
+      prefer_outbound_breadcrumbs_ && outbound_breadcrumbs_.size() >= 2;
+  const bool goaf_trace_guided_search =
+      mission_profile_ == ExplorationMissionProfile::kGoaf &&
       prefer_outbound_breadcrumbs_ && outbound_breadcrumbs_.size() >= 2;
   if (prefer_outbound_breadcrumbs_ && outbound_breadcrumbs_.size() >= 2) {
     // Reverse the observed outbound centreline first. Every proposed shortcut
@@ -4886,6 +4915,14 @@ bool SuperExplorationDecider::publishFreshReturnGoal(
             const VoxelKey next{node.key.x + dx, node.key.y + dy,
                                 node.key.z + dz};
             const auto next_point = return_point(next);
+            // Goaf may detour around a newly blocked breadcrumb chord, but
+            // the recovery search stays beside the surveyed outbound trace.
+            // A remote known-free side branch is not an authorized return.
+            const double trace_separation = outboundSeparation(next_point);
+            if (goaf_trace_guided_search &&
+                trace_separation > std::max(1.5, vehicle_radius_ + 0.5)) {
+              continue;
+            }
             if (std::sqrt(squaredDistance(start, next_point)) > search_radius ||
                 std::abs(next_point.z - start.z) > 0.75 ||
                 (next_point.z > maximumReturnHeight() + 1e-6 &&
@@ -4917,8 +4954,7 @@ bool SuperExplorationDecider::publishFreshReturnGoal(
             ++safe_edges;
             const double step = return_resolution *
                 std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz));
-            const double separation = std::min(2.0,
-                outboundSeparation(next_point));
+            const double separation = std::min(2.0, trace_separation);
             const double candidate = node.cost +
                 step * (1.0 + 0.6 * separation);
             const auto old = costs.find(next);

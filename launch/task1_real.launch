@@ -14,6 +14,7 @@
        Manual launches must provide it explicitly; never guess a tty. -->
   <arg name="px4_device"/>
   <arg name="record_flight" default="false"/>
+  <arg name="record_diagnostic" default="false"/>
   <arg name="flight_log_dir"
        default="/home/nuc/flight_logs/task1/manual"/>
   <arg name="download_px4_ulog" default="true"/>
@@ -30,16 +31,27 @@
     <node pkg="rosbag" type="record" name="task1_flight_recorder"
           output="screen" required="false"
           args="--all --exclude=^/(visual_mapping/.*|omnilivo/(cloud_registered|assessment/cloud)|mine_uav/task1/cloud_registered|cloud_registered|cloud_registered_body|fisheye/(left|right|bright|bleft)/image_raw|(?:front|right|left|back)/(?:left|right)/image_raw(?:/.*)?|rgb_img(?:/.*)?|(?:front|right|left|back)/disparity(?:/.*)?|cloud_effected|cloud_visual_sub_map_before|dyn_obj(?:.*)?|Laser_map|voxels|fsm_node/rog_map/(?:inf_occ|inf_unk|occ|unk)|fsm_node/visualization/(?:ciri_debug_pc|replan_log_pc))$ --lz4 --split --duration=5m --repeat-latched --publish --buffsize=256 --min-space=80G --output-name=$(arg flight_log_dir)/ros_all"/>
-    <node if="$(arg download_px4_ulog)"
-          pkg="mine_uav_control" type="px4_ulog_downloader.py"
-          name="task1_px4_ulog_downloader" output="screen" required="false">
-      <param name="output_directory" value="$(arg flight_log_dir)"/>
-      <param name="post_disarm_delay_s" value="5.0"/>
-      <param name="request_block_bytes" value="46080"/>
-      <param name="request_timeout_s" value="4.0"/>
-      <param name="max_retries" value="8"/>
-    </node>
   </group>
+
+  <!-- Low-space mode keeps the planner, controller, map and mode transition
+       evidence needed to diagnose a flight without recording raw sensors. -->
+  <group if="$(arg record_diagnostic)">
+    <node pkg="rosbag" type="record" name="task1_diagnostic_recorder"
+          output="screen" required="false"
+          args="--lz4 --split --duration=5m --repeat-latched --buffsize=64 --min-space=10G --output-name=$(arg flight_log_dir)/ros_diagnostic /rosout /mine_uav/mission/status /mine_uav/exploration/status /mine_uav/exploration/returning /mine_uav/super/goal_command /mine_uav/super/accepted_goal_id /mine_uav/super/rejected_goal_id /mine_uav/task1/command_status /mine_uav/task1/command_fault /mine_uav/task1/odometry /mine_uav/task1/perception_gate_status /fsm_node/rog_map/occ /planning/pos_cmd /mavros/state /mavros/local_position/pose /mavros/setpoint_raw/target_local"/>
+  </group>
+
+  <!-- PX4's short onboard ULog is still recoverable when full ROS recording
+       is disabled by the disk-space guard. -->
+  <node if="$(arg download_px4_ulog)"
+        pkg="mine_uav_control" type="px4_ulog_downloader.py"
+        name="task1_px4_ulog_downloader" output="screen" required="false">
+    <param name="output_directory" value="$(arg flight_log_dir)"/>
+    <param name="post_disarm_delay_s" value="5.0"/>
+    <param name="request_block_bytes" value="46080"/>
+    <param name="request_timeout_s" value="4.0"/>
+    <param name="max_retries" value="8"/>
+  </node>
 
   <!-- A stale SITL /use_sim_time without /clock freezes freshness timers.
        Exit the complete real-aircraft launch instead of silently proceeding. -->

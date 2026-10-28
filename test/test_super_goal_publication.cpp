@@ -2089,6 +2089,90 @@ class SuperExplorationDeciderTestPeer {
     return std::abs(yaw - expected) < 1e-9;
   }
 
+  static bool forwardRouteKeepsReachedLaneWhenClearanceTiesAtStart(
+      SuperExplorationDecider& decider) {
+    decider.have_home_ = true;
+    decider.mission_profile_ = ExplorationMissionProfile::kGoaf;
+    decider.mission_heading_yaw_ = 0.0;
+    decider.super_occupied_stamp_ = ros::Time::now();
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 0.1;
+    decider.preferred_vehicle_radius_ = 1.5;
+    decider.return_super_radius_ = 0.1;
+    decider.return_clearance_margin_ = 0.0;
+    decider.forward_lookahead_distance_ = 2.0;
+    decider.forward_lookahead_step_ = 0.5;
+    decider.min_goal_distance_ = 2.0;
+    decider.forward_goal_lateral_search_width_ = 4.0;
+    decider.home_pose_.pose.position = decider.keyToPoint({0, 0, 0});
+    decider.current_pose_.pose.position = decider.keyToPoint({0, 8, 0});
+    decider.held_route_side_ = 1;
+    SuperExplorationDecider::VoxelSet reachable;
+    for (int x = 0; x <= 5; ++x) {
+      for (int y = -8; y <= 10; ++y) {
+        const VoxelKey key{x, y, 0};
+        decider.voxels_[key] = SuperExplorationDecider::FREE;
+        reachable.insert(key);
+      }
+    }
+    // All safe paths share the same 1.1 m minimum at the current position.
+    // The previous axis-centering tie break picked y=0 and crossed the lane.
+    decider.super_occupied_points_->push_back(
+        pcl::PointXYZ(0.25f, 5.35f, 0.25f));
+    decider.super_occupied_tree_.setInputCloud(
+        decider.super_occupied_points_);
+    SuperExplorationDecider::LocalRouteCandidate selected;
+    return decider.selectForwardLookaheadGoal(reachable, false, &selected) &&
+           std::abs(selected.mission_lateral - 4.0) <= 0.5 + 1e-9 &&
+           selected.minimum_clearance >= 1.0;
+  }
+
+  static bool goafReturnSearchesLiveMapWhenTraceChordIsBlocked(
+      SuperExplorationDecider& decider) {
+    const ros::Time now = ros::Time::now();
+    decider.have_data_ = true;
+    decider.have_home_ = true;
+    decider.returning_home_ = true;
+    decider.prefer_outbound_breadcrumbs_ = true;
+    decider.mission_profile_ = ExplorationMissionProfile::kGoaf;
+    decider.last_sync_time_ = now;
+    decider.super_occupied_stamp_ = now;
+    decider.data_timeout_ = 100.0;
+    decider.return_map_timeout_ = 100.0;
+    decider.return_segment_length_ = 3.0;
+    decider.voxel_resolution_ = 0.5;
+    decider.vehicle_radius_ = 1.0;
+    decider.return_super_radius_ = 1.0;
+    decider.return_clearance_margin_ = 0.0;
+    decider.home_pose_.pose.position = decider.keyToPoint({0, 0, 0});
+    decider.current_pose_.pose.position = decider.keyToPoint({8, 8, 0});
+    for (int x = 0; x <= 10; ++x) {
+      for (int y = 0; y <= 10; ++y) {
+        decider.voxels_[{x, y, 0}] = SuperExplorationDecider::FREE;
+      }
+    }
+    geometry_msgs::PoseStamped crumb = decider.home_pose_;
+    decider.outbound_breadcrumbs_.push_back(crumb);
+    crumb.pose.position = decider.keyToPoint({8, 0, 0});
+    decider.outbound_breadcrumbs_.push_back(crumb);
+    crumb.pose.position = decider.current_pose_.pose.position;
+    decider.outbound_breadcrumbs_.push_back(crumb);
+    decider.super_occupied_points_->push_back(
+        pcl::PointXYZ(4.25f, 2.75f, 0.25f));
+    decider.super_occupied_tree_.setInputCloud(
+        decider.super_occupied_points_);
+    const bool published = decider.publishFreshReturnGoal("goaf_map_detour");
+    const auto& goal = decider.current_goal_.pose.position;
+    return published && decider.have_active_goal_ &&
+           goal.x < decider.current_pose_.pose.position.x - 0.5 &&
+           std::hypot(goal.x - decider.home_pose_.pose.position.x,
+                      goal.y - decider.home_pose_.pose.position.y) <
+               std::hypot(decider.current_pose_.pose.position.x -
+                              decider.home_pose_.pose.position.x,
+                          decider.current_pose_.pose.position.y -
+                              decider.home_pose_.pose.position.y);
+  }
+
   static bool lateralDetourYawFollowsLocalTangent(
       SuperExplorationDecider& decider) {
     decider.have_home_ = true;
@@ -3596,6 +3680,14 @@ TEST(SuperGoalPublication, ForwardRouteUsesClearanceAndSideHysteresis) {
                       decider));
 }
 
+TEST(SuperGoalPublication, ForwardRouteKeepsReachedLaneOnClearanceTie) {
+  ros::NodeHandle nh, pnh("~reached_lane_clearance_tie");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  forwardRouteKeepsReachedLaneWhenClearanceTiesAtStart(
+                      decider));
+}
+
 TEST(SuperGoalPublication, LateralDetourYawFollowsLocalTangent) {
   ros::NodeHandle nh, pnh("~lateral_tangent_yaw");
   SuperExplorationDecider decider(nh, pnh);
@@ -3725,6 +3817,13 @@ TEST(SuperGoalPublication, StrictTunnelReturnNeverTakesSideBranch) {
       nh, ros::NodeHandle("~strict_tunnel_return_trace"));
   EXPECT_TRUE(SuperExplorationDeciderTestPeer::
                   strictTunnelReturnWaitsInsteadOfTakingSideBranch(decider));
+}
+
+TEST(SuperGoalPublication, GoafReturnSearchesLiveMapAfterBlockedTrace) {
+  ros::NodeHandle nh, pnh("~goaf_blocked_trace_detour");
+  SuperExplorationDecider decider(nh, pnh);
+  EXPECT_TRUE(SuperExplorationDeciderTestPeer::
+                  goafReturnSearchesLiveMapWhenTraceChordIsBlocked(decider));
 }
 
 TEST(SuperGoalPublication, LockedTunnelBranchReturnsAfterRouteTimeout) {
