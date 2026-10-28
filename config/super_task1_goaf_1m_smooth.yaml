@@ -1,0 +1,208 @@
+# Goaf SITL profile: 1 m/s speed limit and gentle acceleration for broad turns near the irregular
+# end wall. The general task-one and real-flight profile remains separate.
+fsm:
+  frame_id: "task1_planning"
+  click_goal_en: false
+  click_goal_topic: "/goal"
+  goal_command_en: true
+  goal_command_topic: "/mine_uav/super/goal_command"
+  click_height: -10.0
+  goal_snap_max_distance: 0.35
+  click_yaw_en: true
+  replan_rate: 6.0
+  cmd_topic: "/planning/pos_cmd"
+  mpc_cmd_topic: "/planning_cmd/poly_traj"
+  timer_en: true
+
+super_planner:
+  backup_traj_en: true
+  detailed_log_en: false
+  visualization_en: true
+  use_fov_cut: false
+  print_log: false
+  visual_process: false
+  frontend_in_known_free: false
+  goal_yaw_en: true
+  goal_vel_en: false
+  corridor_bound_dis: 2.0
+  corridor_line_max_length: 1.2
+  safe_corridor_line_max_length: 5.0
+  iris_iter_num: 2
+  obs_skip_num: 2
+  # A* can use 0.8 s and corridor optimization needs additional time. At
+  # 0.1 s valid return replans were discarded after searching.
+  replan_forward_dt: 2.0
+  planning_horizon: 7.0
+  sensing_horizon: -1
+  receding_dis: 4.0
+  # Match Task 1: 1.0 m is the hard planning floor. The 1.5 m radius is
+  # the primary soft guide only when two-wall medial-axis centering is absent.
+  robot_r: 0.3
+  horizontal_clearance_extra: 0.7
+  horizontal_planning_clearance: 1.0
+  horizontal_preferred_clearance: 1.5
+  preferred_clearance_penalty: 0.25
+  clearance_vertical_band: 0.3
+  horizontal_hard_clearance: 1.0
+  horizontal_hard_vertical_below: 0.5
+  horizontal_hard_vertical_above: 0.5
+  horizontal_hard_min_obstacle_z: 0.0
+  prevent_premature_center_return: true
+  centerline_obstacle_half_width: 1.2
+  # Give the finer inflated grid a bounded search window in the return lane.
+  astar_search_timeout: 0.8
+  # Broad planner bounds shared by level and inclined simulated mines. Each
+  # launch keeps its own tighter PX4 bridge fence; real flights still require
+  # bounds converted from the measured PX4 alignment.
+  flight_min_z: -5.0
+  flight_max_z: 8.0
+  yaw_dot_max: 0.6
+  # This is the tangent-knot spacing inside the planner, not the command
+  # publication period.  Keep it fine enough for narrow bends; commands are
+  # still interpolated continuously at the planner/bridge timer rates.
+  yaw_tracking_sample_period: 0.2
+  # A fresh rest-to-rest trajectory (notably the first return leg) must turn
+  # toward its initial path tangent before any translational motion begins.
+  yaw_prealign_from_rest: true
+  yaw_prealign_threshold: 0.35
+  yaw_prealign_min_duration: 0.5
+  yaw_mode: 1
+  mpc_horizon: 15
+
+traj_opt:
+  switch:
+    save_log_en: false
+    print_optimizer_log: false
+  boundary:
+    # Formal Task-1 speed contract shared with the real-aircraft profile.
+    max_vel: 0.9
+    max_acc: 0.8
+    max_jerk: 2.5
+    max_omg: 2.5
+    max_acc_thr: 20.0
+    min_acc_thr: 6.0
+    penna_margin: 0.15
+  exp_traj:
+    pos_constraint_type: 1
+    energy_cost_type: 4
+    block_energy_cost: false
+    opt_accuracy: 5.0e-6
+    scale_factor: 1.0
+    integral_reso: 15
+    smooth_eps: 0.01
+    penna_t: 12000.0
+    penna_pos: 5.0e+6
+    penna_vel: 5.0e+5
+    penna_acc: 5.0e+5
+    penna_jerk: 5.0e+5
+    penna_attract: 1.0e+3
+    attractor_dead_distance_ratio: 0.35
+    penna_omg: 5.0e+5
+    penna_thr: 1.0e+5
+  backup_traj:
+    uniform_time_en: true
+    pos_constraint_type: 1
+    piece_num: 2
+    energy_cost_type: 4
+    block_energy_cost: true
+    opt_accuracy: 1.0e-6
+    scale_factor: 1.0
+    integral_reso: 12
+    smooth_eps: 0.01
+    penna_t: 1200.0
+    penna_ts: 1.0e+5
+    penna_pos: 1.0e+6
+    penna_vel: 1.0e+5
+    penna_acc: 1.0e+5
+    penna_jerk: 1.0e+5
+    penna_omg: 1.0e+5
+    penna_thr: 1.0e+5
+  flatness:
+    # STEP-derived custom airframe total mass, including both batteries and
+    # MID360S.  Keep the planner dynamics consistent with PX4/Gazebo.
+    mass: 6.0
+    dh: 0.35
+    dv: 0.35
+    cp: 0.001
+    v_eps: 0.0001
+    grav: 9.81
+
+astar:
+  map_voxel_num: [500, 500, 100]
+  visual_process: false
+  allow_diag: true
+  heu_type: 2
+  debug_visualization_en: false
+  lateral_bypass_first: true
+  lateral_bypass_vertical_band: 0.15
+  lateral_bypass_min_horizontal_span: 1.0
+  vertical_bypass_up_only: true
+  downward_bypass_last: true
+  vertical_motion_cost: 2.0
+rog_map:
+  resolution: 0.1
+  inflation_resolution: 0.1
+  # The primary A* search reads the inflated map directly. Its neighbour
+  # radius is used only by a fallback search, so zero inflation admitted
+  # Match production: the 0.1 m grid exactly realizes the 1.0 m hard A* floor;
+  # continuous validation uses the same threshold. The preferred layer is
+  # 1.5 m and the independent live hard radius is 1.0 m.
+  # The former 0.2 m grid snapped some return targets more than 1 m away.
+  inflation_step: 10
+  inflation_vertical_below_step: 5
+  inflation_vertical_above_step: 5
+  unk_inflation_en: false
+  unk_inflation_step: 1
+  map_size: [50, 50, 6]
+  fix_map_origin: [0, 0, 0]
+  frontier_extraction_en: false
+  # These are broad, level task-frame limits, not the per-scenario PX4 fence.
+  # The perception gate removes the fixed radar mounting tilt before planning.
+  virtual_ceil_height: 9.0
+  virtual_ground_height: -5.0
+  load_pcd_en: false
+  map_sliding:
+    enable: true
+    threshold: 0.3
+  esdf:
+    enable: false
+    resolution: 0.1
+    local_update_box: [5, 5, 3]
+  robot_center_free_radius: 0.30
+  ros_callback:
+    enable: true
+    # Only task-gated perception enters ROG-Map. Raw Fast-LIO2 remains
+    # continuously available to PX4 localization and the scheduler.
+    cloud_topic: "/mine_uav/task1/cloud_registered"
+    odom_topic: "/mine_uav/task1/odometry"
+    odom_timeout: 2.0
+  visualization:
+    enable: true
+    # ROG consumes task-gated odometry and clouds after they have been levelled.
+    # Publish occupancy and markers in that same task frame.
+    frame_id: "task1_planning"
+    use_dynamic_reconfigure: false
+    time_rate: 2
+    frame_rate: 0
+    range: [15, 15, 4]
+    frame_id: "task1_planning"
+    pub_unknown_map_en: false
+  intensity_thresh: -10
+  point_filt_num: 1
+  raycasting:
+    # Return scans must be able to remove old occupied voxels after Fast-LIO
+    # aligns a repeated tunnel section differently. Hit-only fusion kept both
+    # copies forever and manufactured a sub-2 m throat near the launch pad.
+    enable: true
+    batch_update_size: 1
+    local_update_box: [100, 100, 5]
+    ray_range: [0.5, 100]
+    p_min: 0.12
+    # A repeatedly traversed empty cell clears within a few scans, while a
+    # cell hit in the same scan remains occupied in ROG's update cache.
+    p_miss: 0.35
+    p_free: 0.45
+    p_occ: 0.85
+    p_hit: 0.9
+    p_max: 0.98
+    unk_thresh: 1.0

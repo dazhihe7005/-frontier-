@@ -29,6 +29,15 @@ def ring(radius, count=64, centre_x=0.0, centre_y=0.0):
 
 
 class ClearanceAssistCoreTest(unittest.TestCase):
+    def test_task2_hard_clearance_is_locked_to_one_metre(self):
+        config_path = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "config" / "assisted_task_px4_router.yaml"
+        )
+        config = yaml.safe_load(config_path.read_text())
+        self.assertEqual(config["hard_distance"], 1.0)
+        self.assertEqual(MODULE.ClearanceAssistCore().hard_distance, 1.0)
+
     def test_idle_router_does_not_decode_registered_cloud(self):
         router = MODULE.AssistedTaskPx4Router.__new__(
             MODULE.AssistedTaskPx4Router

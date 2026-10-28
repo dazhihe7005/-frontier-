@@ -168,9 +168,12 @@
   </include>
 
   <group if="$(arg start_super)">
-    <node pkg="super_planner" type="fsm_node" name="fsm_node"
+    <node pkg="mine_uav_control" type="task_profiled_super_launcher.py"
+          name="task_profiled_super_launcher"
           output="screen" required="true">
-      <param name="config_path"
+      <param name="goaf_config_path"
+             value="$(find mine_uav_control)/config/super_task1_goaf_1m.yaml"/>
+      <param name="tunnel_config_path"
              value="$(find mine_uav_control)/config/super_task1.yaml"/>
     </node>
   </group>

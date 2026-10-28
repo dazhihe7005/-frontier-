@@ -16,7 +16,7 @@ from nav_msgs.msg import Odometry
 from quadrotor_msgs.msg import PositionCommand
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import Bool, Header, String
+from std_msgs.msg import Bool, Header, String, UInt8
 
 
 class ManualOverrideTest(unittest.TestCase):
@@ -25,6 +25,9 @@ class ManualOverrideTest(unittest.TestCase):
         self._mode = "POSCTL"
         self._auto = False
         self._mission = True
+        # Keep the legacy Task-4 radius for existing bridge lifecycle cases;
+        # the dedicated Task-1 test below switches this to 1 explicitly.
+        self._active_task = 4
         self._alignment_z = 0.0
         self._alignment_yaw = 0.0
         self._pose_x = 0.0
@@ -76,6 +79,9 @@ class ManualOverrideTest(unittest.TestCase):
         )
         self._mission_pub = rospy.Publisher(
             "/mine_uav/mission/goaf_enable", Bool, queue_size=1, latch=True
+        )
+        self._active_task_pub = rospy.Publisher(
+            "/mine_uav/mission/active_task", UInt8, queue_size=1, latch=True
         )
         self._auto_pub = rospy.Publisher(
             "/mine_uav/mission/auto_enable", Bool, queue_size=1, latch=True
@@ -162,6 +168,7 @@ class ManualOverrideTest(unittest.TestCase):
                 mode = self._mode
                 auto = self._auto
                 mission = self._mission
+                active_task = self._active_task
                 alignment_z = self._alignment_z
                 alignment_yaw = self._alignment_yaw
                 pose_x = self._pose_x
@@ -239,6 +246,7 @@ class ManualOverrideTest(unittest.TestCase):
             sensor_position.vector.x = 0.1
             self._sensor_position_pub.publish(sensor_position)
             self._mission_pub.publish(Bool(data=mission))
+            self._active_task_pub.publish(UInt8(data=active_task))
             self._auto_pub.publish(Bool(data=auto))
             self._vision_pub.publish(Bool(data=vision_healthy))
             self._exploration_pub.publish(String(data=exploration_status))
@@ -575,6 +583,33 @@ class ManualOverrideTest(unittest.TestCase):
         with self._lock:
             self._obstacle_distance = None
             self.assertNotIn("POSCTL", self._requests)
+
+    def test_task1_uses_one_metre_hard_radius_without_changing_task4(self):
+        self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))
+        with self._lock:
+            self._auto = True
+        self.assertTrue(self._wait_for(lambda: "OFFBOARD" in self._requests))
+        with self._lock:
+            self._mode = "OFFBOARD"
+        self.assertTrue(self._wait_for(lambda: self._status == "STREAMING"))
+        with self._lock:
+            self._return_requests.clear()
+            # This is outside Task 4's retained 0.65 m hard radius but inside
+            # Task 1's new non-negotiable 1.0 m radius.
+            self._obstacle_distance = 0.9
+        time.sleep(0.3)
+        with self._lock:
+            self.assertNotIn(True, self._return_requests)
+            self._active_task = 1
+        started = time.monotonic()
+        self.assertTrue(self._wait_for(
+            lambda: True in self._return_requests, timeout=1.0
+        ))
+        self.assertLess(time.monotonic() - started, 0.5)
+        with self._lock:
+            self._obstacle_distance = None
+            self.assertNotIn("POSCTL", self._requests)
+            self._obstacle_distance = None
 
     def test_task_teardown_during_near_wall_brake_keeps_emergency_continuity(self):
         self.assertTrue(self._wait_for(lambda: self._status == "WAIT_AUTO_ENABLE"))

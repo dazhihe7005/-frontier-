@@ -137,6 +137,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_assisted_task_px4_router.py)
   catkin_add_nosetests(test/test_px4_ulog_downloader.py)
   catkin_add_nosetests(test/test_task1_safety_config.py)
+  catkin_add_nosetests(test/test_task_profiled_super_launcher.py)
   catkin_add_nosetests(test/test_omnilivo_production_migration.py)
   catkin_add_nosetests(test/test_gazebo_geometry_filter.py)
   add_rostest_gtest(test_super_goal_publication
@@ -230,6 +231,7 @@ catkin_install_python(PROGRAMS
   scripts/task1_sitl_downward_range_filter.py
   scripts/omnilivo_shaft_depth.py
   scripts/assisted_task_px4_router.py
+  scripts/task_profiled_super_launcher.py
   scripts/task1_real_time_guard.py
   scripts/px4_ulog_downloader.py
   scripts/analyze_task1_height_contract.py

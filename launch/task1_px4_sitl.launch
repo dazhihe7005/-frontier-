@@ -18,7 +18,7 @@
   <arg name="takeoff_hover_yaw_tolerance_deg" default="10.0"/>
   <arg name="vision_stable_duration" default="3.0"/>
   <arg name="world" default="$(find mine_uav_control)/worlds/goaf_mine.world"/>
-  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_goaf_smooth.yaml"/>
+  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_goaf_1m_smooth.yaml"/>
   <arg name="omnilivo_config"
        default="$(find mine_uav_control)/config/omnilivo_gazebo_mid360.yaml"/>
   <arg name="sitl_vision_odometry_topic" default="/omnilivo/odometry"/>
@@ -380,10 +380,12 @@
     <param name="follow_active_task_profile" value="true"/>
   </node>
 
-  <node pkg="super_planner" type="fsm_node" name="fsm_node"
+  <node pkg="mine_uav_control" type="task_profiled_super_launcher.py"
+        name="task_profiled_super_launcher"
         output="screen" required="true">
-    <param name="config_path"
-           value="$(arg super_config_path)"/>
+    <param name="goaf_config_path" value="$(arg super_config_path)"/>
+    <param name="tunnel_config_path"
+           value="$(find mine_uav_control)/config/super_task1_goaf_smooth.yaml"/>
   </node>
 
   <!-- The 1018 SITL airframe has no live RC/manual input, so PX4 rejects

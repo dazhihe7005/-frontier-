@@ -32,12 +32,14 @@ max_map_radius: 40.0
 raycast_max_range: 30.0
 raycast_enable: true
 max_points_per_cloud: 5000
-# Task-one reachability keeps the 0.8 m planning floor so a narrow passage
-# is still usable. Goal selection exhausts 1.1 m-clear candidates and
-# segments before falling back to the 0.8--1.1 m band, matching SUPER.
-# The command bridge independently enforces the smaller 0.65 m hard cylinder.
+# Task 4 retains its validated 0.8 m planning radius. Task 1 uses a separate
+# non-negotiable 1.0 m radius, so outbound, connected-turn and return routes
+# cannot deliberately enter the old 0.8--1.0 m band. Task 1 prefers 1.5 m
+# whenever the observed connected space allows it; Task 4 keeps 1.1 m.
 vehicle_radius: 0.8
+goaf_vehicle_radius: 1.0
 preferred_vehicle_radius: 1.1
+goaf_preferred_vehicle_radius: 1.5
 vertical_vehicle_clearance_below: 0.5
 vertical_vehicle_clearance_above: 0.5
 # Simulation-only recovery for accumulated-map pose/voxel jitter. A
@@ -113,8 +115,9 @@ corridor_centering_filter_gain: 0.25
 corridor_centering_max_center_jump: 0.75
 # Move a short goal toward the measured medial axis by at most 0.5 m per
 # handover. With stable two-wall evidence this medial axis outranks comfort
-# clearance for goal/path selection. If centering is unavailable, exhaust the
-# 1.1 m comfort envelope before falling back to the 0.8 m planning floor.
+# clearance for goal/path selection. If centering is unavailable, Task 1 first
+# exhausts 1.5 m-clear routes and may fall back only to its 1.0 m hard floor;
+# Task 4 retains the earlier 1.1/0.8 m preference/floor pair.
 corridor_centering_max_goal_shift: 0.5
 # Build a distance-indexed free-space profile instead of collapsing all wall
 # returns into one median. A connected narrowing up to 8 m ahead can bias the
@@ -129,7 +132,7 @@ corridor_preview_max_lateral_slope: 1.0
 corridor_preview_min_slices: 6
 # Preview steering needs at least three adjacent 0.25 m centre cells. A
 # one-cell tail is commonly an unobserved bend edge, not a 0.25 m corridor.
-# The normal route planner still evaluates it with the unchanged 0.8 m hard
+# The normal route planner still evaluates it with the active profile's hard
 # vehicle clearance; this threshold only suppresses speculative early turns.
 corridor_preview_min_reliable_center_band_width: 0.75
 corridor_preview_min_center_shift: 0.25
@@ -211,7 +214,7 @@ exploration_goal_queue_spacing: 3.5
 # Do not pre-commit the queue all the way to the current observed boundary.
 exploration_goal_queue_end_reserve: 1.0
 # If the straight entry-axis look-ahead ends at a bend, search the same
-# observed, 0.8 m-clear connected component along the most recent route
+# observed, profile-clear connected component along the most recent route
 # tangent. This lets a verified route turn into a narrowing corridor even
 # when no usable frontier exists at the far wall. The selected connected path
 # also feeds the normal two-to-three-point rolling queue.
@@ -230,8 +233,9 @@ return_goal_handover_distance: 2.0
 # Return goals stay below the observation ceiling by default. A scenario can
 # set a smaller cap to leave room below its bridge flight-volume limit.
 return_map_timeout: 2.0
-# Return-path proximity screening uses the 0.8 m planning floor. The live
-# command bridge remains the final 0.65 m cylindrical hard-clearance authority.
+# Return-path screening uses the active profile radius: Task 1 is 1.0 m and
+# Task 4 remains 0.8 m. The live bridge independently enforces the matching
+# profile-specific hard cylinder.
 return_clearance_margin: 0.0
 return_super_radius: 0.8
 # Only points near the vehicle height count as wall-direction evidence. This

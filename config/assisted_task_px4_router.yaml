@@ -21,7 +21,8 @@ vertical_below: 0.50
 vertical_above: 0.50
 max_points: 100000
 
-# Max-clearance preference and CBF-style safety envelope.
+# Task-2 shaft hard wall distance is already 1.00 m. Keep it independent of
+# the Task-1/Task-4 SUPER bridge profiles; release and braking start farther out.
 hard_distance: 1.00
 release_distance: 1.20
 brake_distance: 1.80

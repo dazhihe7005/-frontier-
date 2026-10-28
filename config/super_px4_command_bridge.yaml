@@ -57,8 +57,8 @@ height_clamp_tolerance: 0.25
 # Independent live obstacle guard. The cloud and task odometry share the
 # gravity-aligned planning frame. Horizontal clearance and vertical relevance
 # are evaluated separately. An intrusion immediately freezes a measured-pose
-# hold. Only a persistent intrusion inside the independent 0.65 m hard radius
-# may be promoted to an OFFBOARD exit.
+# hold. A hard-radius intrusion immediately requests a verified
+# clearance-increasing route; sensor loss still exits managed OFFBOARD.
 obstacle_safety_enabled: true
 obstacle_cloud_topic: /mine_uav/task1/cloud_registered
 task_odometry_topic: /mine_uav/task1/odometry
@@ -67,26 +67,32 @@ obstacle_cloud_timeout: 0.35
 # and fixed OFFBOARD hold. Only a sustained loss exits to POSCTL. This exceeds
 # Omni-LIVO's 0.5 s state-stale diagnostic threshold while remaining bounded.
 obstacle_cloud_fault_timeout: 2.0
+active_task_topic: /mine_uav/mission/active_task
+# Task 4 retains the previously validated 0.65 m hard cylinder. Task 1 uses a
+# separate 1.0 m non-negotiable hard radius; task 2/3 never receive commands
+# from this SUPER bridge. Before the active-task latch arrives, fail closed to
+# the larger Task-1 radius.
 live_horizontal_clearance: 0.65
-# Planning-floor monitoring radius. Any current return inside 0.8 m freezes one
-# measured-pose hold immediately. It is not a hard-fault radius: a transient
-# leaf/rock may clear and the current task then resumes smoothly.
+goaf_live_horizontal_clearance: 1.0
+# The fixed soft floor remains 0.8 m for Task 4. For Task 1 the bridge raises
+# it to at least the active 1.0 m hard radius automatically.
 obstacle_monitor_horizontal_clearance: 0.8
 # Start a near-wall stop early enough for the stop trajectory the bridge will
 # actually publish. At the 1.1 m/s contract, 0.25 s sensing/control reaction,
-# a 1.75 m/s^2 emergency deceleration and 0.10 m reserve require about 1.55 m.
-# The 1.7 m search cap leaves bounded estimator/packet headroom.
-obstacle_dynamic_monitor_max_clearance: 1.7
+# a 1.75 m/s^2 emergency deceleration and 0.10 m reserve require about 1.90 m
+# with Task 1's new 1.0 m hard radius. The 2.0 m scan cap leaves headroom.
+obstacle_dynamic_monitor_max_clearance: 2.0
 obstacle_reaction_time: 0.25
 obstacle_emergency_deceleration: 1.75
 obstacle_emergency_min_duration: 0.25
 obstacle_emergency_max_jerk: 30.0
 obstacle_dynamic_clearance_buffer: 0.10
-# Persistence in the 0.65--0.8 m monitored caution zone requests a fresh
+# Persistence outside the active hard radius requests a fresh
 # frontier/SUPER route instead of waiting forever; it does not exit OFFBOARD.
 # The fixed hold is released only by a newly numbered trajectory. A persistent
-# obstacle inside 0.65 m requests verified return while localization and the
-# cloud remain healthy; that new trajectory must increase obstacle clearance.
+# obstacle inside the active hard radius requests verified return while
+# localization and the cloud remain healthy; that new trajectory must increase
+# obstacle clearance.
 # A cloud timeout remains an immediate exit because monitoring is unavailable.
 # Five continuous 10 Hz observations are enough to start a verified replan.
 # Replanning now overlaps the 1.5 s braking ramp instead of adding a three
@@ -94,7 +100,7 @@ obstacle_dynamic_clearance_buffer: 0.10
 obstacle_persistence_duration: 0.5
 obstacle_replan_topic: /mine_uav/exploration/obstacle_replan
 # Bounded time for the newly verified trajectory to leave the old soft zone.
-# Hard 0.65 m collision protection remains active throughout this window.
+# The active task's hard collision protection remains active throughout.
 obstacle_replan_escape_duration: 4.0
 obstacle_clear_confirm_frames: 3
 # Vertical cylinder measured from the aircraft centre: obstacle returns up to
@@ -128,14 +134,14 @@ coverage_min_vertical_span: 0.0
 # Door jambs and posts in the 2026-10-27 flights produced 246--613 stable
 # points and 1.2--1.39 m vertical span, but only 0.258--0.388 m horizontal
 # span. Accept that distinct shape as complete evidence without changing the
-# independent 0.65/0.8 m hard/planning clearance cylinders.
+# independent active hard/planning clearance cylinders.
 coverage_narrow_vertical_min_points: 120
 coverage_narrow_vertical_min_horizontal_span: 0.2
 coverage_narrow_vertical_min_vertical_span: 0.8
 # Acquiring the door-jamb/post classification remains strict above. Once that
 # geometry has been confirmed, retain it through the 49--101 point packets
-# observed tonight. This does not bypass the dynamic 0.8--1.7 m live stop or
-# the independent 0.65 m hard cylinder.
+# observed tonight. This does not bypass the dynamic live stop or the active
+# task's independent hard cylinder.
 coverage_narrow_vertical_retain_min_points: 45
 coverage_narrow_vertical_retain_min_horizontal_span: 0.1
 coverage_narrow_vertical_retain_min_vertical_span: 0.7

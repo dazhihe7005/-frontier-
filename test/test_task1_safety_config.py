@@ -15,6 +15,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 HARD_CLEARANCE = 0.65
 PLANNING_CLEARANCE = 0.8
 PREFERRED_CLEARANCE = 1.1
+TASK1_HARD_CLEARANCE = 1.0
+TASK1_PREFERRED_CLEARANCE = 1.5
 VERTICAL_CLEARANCE = 0.5
 NOMINAL_SPEED = 0.9
 SPEED_LIMIT = 1.1
@@ -22,6 +24,21 @@ MEASURED_SPEED_TARGET = 1.0
 
 
 class Task1SafetyConfigTest(unittest.TestCase):
+    def test_super_process_uses_separate_task_profiles(self):
+        real = ET.parse(ROOT / "launch" / "task1_real.launch").getroot()
+        sitl = ET.parse(ROOT / "launch" / "task1_px4_sitl.launch").getroot()
+        expected = (
+            (real, "super_task1_goaf_1m.yaml", "super_task1.yaml"),
+            (sitl, "super_config_path", "super_task1_goaf_smooth.yaml"),
+        )
+        for root, goaf_name, tunnel_name in expected:
+            nodes = root.findall(".//node[@type='task_profiled_super_launcher.py']")
+            self.assertEqual(len(nodes), 1)
+            params = {item.attrib["name"]: item.attrib["value"]
+                      for item in nodes[0].findall("param")}
+            self.assertIn(goaf_name, params["goaf_config_path"])
+            self.assertIn(tunnel_name, params["tunnel_config_path"])
+
     def test_bridge_launch_cannot_override_production_speed_limits(self):
         launch_root = ET.parse(
             ROOT / "launch" / "super_px4_command_bridge.launch").getroot()
@@ -111,8 +128,29 @@ class Task1SafetyConfigTest(unittest.TestCase):
                 self.assertLess(VERTICAL_CLEARANCE - grid_vertical,
                                 resolution)
 
+        for filename in ("super_task1_goaf_1m.yaml",
+                         "super_task1_goaf_1m_smooth.yaml"):
+            planner = yaml.safe_load((ROOT / "config" / filename).read_text())
+            config = planner["super_planner"]
+            self.assertAlmostEqual(
+                config["robot_r"] + config["horizontal_clearance_extra"],
+                TASK1_HARD_CLEARANCE, msg=filename)
+            self.assertAlmostEqual(config["horizontal_planning_clearance"],
+                                   TASK1_HARD_CLEARANCE, msg=filename)
+            self.assertAlmostEqual(config["horizontal_preferred_clearance"],
+                                   TASK1_PREFERRED_CLEARANCE, msg=filename)
+            self.assertAlmostEqual(config["horizontal_hard_clearance"],
+                                   TASK1_HARD_CLEARANCE, msg=filename)
+            self.assertAlmostEqual(
+                planner["rog_map"]["inflation_step"] *
+                planner["rog_map"]["resolution"], TASK1_HARD_CLEARANCE,
+                msg=filename)
+
         self.assertAlmostEqual(
             bridge["live_horizontal_clearance"], HARD_CLEARANCE)
+        self.assertAlmostEqual(
+            bridge["goaf_live_horizontal_clearance"],
+            TASK1_HARD_CLEARANCE)
         self.assertEqual(
             bridge["max_horizontal_radius"], 0.0,
             "production bridge must not impose a home-distance limit")
@@ -120,7 +158,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
             bridge["obstacle_monitor_horizontal_clearance"],
             PLANNING_CLEARANCE)
         self.assertGreaterEqual(
-            bridge["obstacle_dynamic_monitor_max_clearance"], 1.5)
+            bridge["obstacle_dynamic_monitor_max_clearance"], 2.0)
         self.assertAlmostEqual(bridge["obstacle_reaction_time"], 0.25)
         self.assertAlmostEqual(
             bridge["obstacle_emergency_deceleration"], 1.75)
@@ -264,7 +302,12 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertAlmostEqual(
             decider["vehicle_radius"], PLANNING_CLEARANCE)
         self.assertAlmostEqual(
+            decider["goaf_vehicle_radius"], TASK1_HARD_CLEARANCE)
+        self.assertAlmostEqual(
             decider["preferred_vehicle_radius"], PREFERRED_CLEARANCE)
+        self.assertAlmostEqual(
+            decider["goaf_preferred_vehicle_radius"],
+            TASK1_PREFERRED_CLEARANCE)
         self.assertEqual(decider["mission_profile"], "goaf")
         self.assertEqual(
             decider["max_exploration_radius_from_home"], 0.0,
@@ -285,7 +328,8 @@ class Task1SafetyConfigTest(unittest.TestCase):
             decider["corridor_centering_max_goal_shift"], 0.5)
         self.assertAlmostEqual(
             decider["vehicle_radius"],
-            production["horizontal_planning_clearance"])
+            production["horizontal_planning_clearance"],
+            msg="Task 4 retains the shared SUPER planning floor")
         self.assertAlmostEqual(
             decider["preferred_vehicle_radius"],
             production["horizontal_preferred_clearance"])
@@ -294,7 +338,17 @@ class Task1SafetyConfigTest(unittest.TestCase):
             production["horizontal_planning_clearance"])
         self.assertAlmostEqual(
             bridge["live_horizontal_clearance"],
-            production["horizontal_hard_clearance"])
+            production["horizontal_hard_clearance"],
+            msg="Task 4 retains the shared SUPER hard radius")
+        goaf = yaml.safe_load(
+            (ROOT / "config" / "super_task1_goaf_1m.yaml").read_text())[
+                "super_planner"]
+        self.assertAlmostEqual(bridge["goaf_live_horizontal_clearance"],
+                               goaf["horizontal_hard_clearance"])
+        self.assertAlmostEqual(decider["goaf_vehicle_radius"],
+                               goaf["horizontal_planning_clearance"])
+        self.assertAlmostEqual(decider["goaf_preferred_vehicle_radius"],
+                               goaf["horizontal_preferred_clearance"])
         self.assertAlmostEqual(
             decider["vertical_vehicle_clearance_below"], VERTICAL_CLEARANCE)
         self.assertAlmostEqual(
@@ -479,9 +533,11 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(decider["forward_height_penalty"], 3.0)
         self.assertEqual(decider["max_frontier_goal_vertical_step"], 0.35)
         self.assertEqual(decider.pop("mission_profile"), "goaf")
-        # These two parameters are goaf-only and ignored when the active
+        # These parameters are goaf-only and ignored when the active
         # scheduler profile is Task 4/tunnel, so they are not part of the
         # frozen tunnel compatibility model below.
+        self.assertEqual(decider.pop("goaf_vehicle_radius"), 1.0)
+        self.assertEqual(decider.pop("goaf_preferred_vehicle_radius"), 1.5)
         self.assertEqual(decider.pop("goaf_forward_lookahead_distance"), 6.0)
         self.assertEqual(
             decider.pop("goaf_exploration_goal_queue_horizon"), 15.0)

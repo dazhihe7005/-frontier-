@@ -139,6 +139,7 @@ class SuperExplorationDecider {
   void missionEnableCallback(const std_msgs::Bool::ConstPtr& message);
   void activeTaskCallback(const std_msgs::UInt8::ConstPtr& message);
   void updateScheduledMissionSelection();
+  void applyMissionProfileVehicleRadius();
   void setMissionEnabled(bool enabled, const std::string& source);
   void returnRequestCallback(const std_msgs::Bool::ConstPtr& msg);
   void obstacleReplanCallback(const std_msgs::Empty::ConstPtr& msg);
@@ -506,7 +507,11 @@ class SuperExplorationDecider {
   double min_data_duration_{5.0};
   double candidate_spacing_{3.0};
   double vehicle_radius_{0.4};
+  double tunnel_vehicle_radius_{0.4};
+  double goaf_vehicle_radius_{0.4};
   double preferred_vehicle_radius_{0.4};
+  double tunnel_preferred_vehicle_radius_{0.4};
+  double goaf_preferred_vehicle_radius_{0.4};
   double vertical_vehicle_radius_{-1.0};
   // Keep the compiled fallback identical to the real-flight contract.  Unit
   // tests and diagnostic tools sometimes construct the decider without first

@@ -272,7 +272,9 @@ cp -a "${PROJECT_DIR}/config/omnilivo_px4_vision_bridge.yaml" \
       "${PROJECT_DIR}/config/assisted_task_px4_router.yaml" \
       "${PROJECT_DIR}/config/super_exploration_decider.yaml" \
       "${PROJECT_DIR}/config/super_task1.yaml" \
+      "${PROJECT_DIR}/config/super_task1_goaf_1m.yaml" \
       "${PROJECT_DIR}/config/super_px4_command_bridge.yaml" \
+      "${PROJECT_DIR}/scripts/task_profiled_super_launcher.py" \
       "${PROJECT_DIR}/launch/task1_real.launch" \
       "${run_dir}/config/"
 cp -a "${OMNI_CALIBRATION}" "${run_dir}/config/"

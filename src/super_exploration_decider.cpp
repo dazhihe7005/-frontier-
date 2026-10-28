@@ -236,8 +236,18 @@ bool SuperExplorationDecider::loadParameters() {
   private_nh_.param("min_data_duration", min_data_duration_, min_data_duration_);
   private_nh_.param("candidate_spacing", candidate_spacing_, candidate_spacing_);
   private_nh_.param("vehicle_radius", vehicle_radius_, vehicle_radius_);
+  tunnel_vehicle_radius_ = vehicle_radius_;
+  goaf_vehicle_radius_ = tunnel_vehicle_radius_;
+  private_nh_.param("goaf_vehicle_radius", goaf_vehicle_radius_,
+                    goaf_vehicle_radius_);
   private_nh_.param("preferred_vehicle_radius", preferred_vehicle_radius_,
                     vehicle_radius_);
+  tunnel_preferred_vehicle_radius_ = preferred_vehicle_radius_;
+  goaf_preferred_vehicle_radius_ = tunnel_preferred_vehicle_radius_;
+  private_nh_.param("goaf_preferred_vehicle_radius",
+                    goaf_preferred_vehicle_radius_,
+                    goaf_preferred_vehicle_radius_);
+  applyMissionProfileVehicleRadius();
   private_nh_.param("max_outbound_backtrack", max_outbound_backtrack_,
                     max_outbound_backtrack_);
   private_nh_.param("vertical_vehicle_radius", vertical_vehicle_radius_,
@@ -613,8 +623,14 @@ bool SuperExplorationDecider::loadParameters() {
   }
   if (!std::isfinite(voxel_resolution_) || voxel_resolution_ <= 0.0 ||
       !std::isfinite(vehicle_radius_) || vehicle_radius_ <= 0.0 ||
+      !std::isfinite(tunnel_vehicle_radius_) ||
+      tunnel_vehicle_radius_ <= 0.0 ||
+      !std::isfinite(goaf_vehicle_radius_) || goaf_vehicle_radius_ <= 0.0 ||
       !std::isfinite(preferred_vehicle_radius_) ||
-      preferred_vehicle_radius_ < vehicle_radius_ ||
+      !std::isfinite(tunnel_preferred_vehicle_radius_) ||
+      tunnel_preferred_vehicle_radius_ < tunnel_vehicle_radius_ ||
+      !std::isfinite(goaf_preferred_vehicle_radius_) ||
+      goaf_preferred_vehicle_radius_ < goaf_vehicle_radius_ ||
       !std::isfinite(mission_heading_offset_) ||
       !std::isfinite(max_outbound_backtrack_) || max_outbound_backtrack_ < 0.0 ||
       !std::isfinite(vertical_vehicle_radius_) ||
@@ -5938,6 +5954,16 @@ void SuperExplorationDecider::activeTaskCallback(
   }
 }
 
+void SuperExplorationDecider::applyMissionProfileVehicleRadius() {
+  if (mission_profile_ == ExplorationMissionProfile::kGoaf) {
+    vehicle_radius_ = goaf_vehicle_radius_;
+    preferred_vehicle_radius_ = goaf_preferred_vehicle_radius_;
+  } else {
+    vehicle_radius_ = tunnel_vehicle_radius_;
+    preferred_vehicle_radius_ = tunnel_preferred_vehicle_radius_;
+  }
+}
+
 void SuperExplorationDecider::updateScheduledMissionSelection() {
   const bool valid_exploration_task =
       scheduler_active_task_ == 1 || scheduler_active_task_ == 4;
@@ -5954,9 +5980,12 @@ void SuperExplorationDecider::updateScheduledMissionSelection() {
       }
       mission_profile_ = selected_profile;
       mission_profile_name_ = explorationMissionProfileName(mission_profile_);
-      ROS_INFO("Exploration profile selected from active task %u: %s",
+      applyMissionProfileVehicleRadius();
+      ROS_INFO("Exploration profile selected from active task %u: %s "
+               "(hard/preferred planning radius %.2f/%.2f m)",
                static_cast<unsigned int>(scheduler_active_task_),
-               mission_profile_name_.c_str());
+               mission_profile_name_.c_str(), vehicle_radius_,
+               preferred_vehicle_radius_);
     }
   }
   setMissionEnabled(should_enable, "mission scheduler");

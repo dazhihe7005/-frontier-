@@ -17,6 +17,10 @@ class SuperExplorationDeciderTestPeer {
       SuperExplorationDecider& decider) {
     decider.follow_active_task_profile_ = true;
     decider.enabled_ = false;
+    decider.tunnel_vehicle_radius_ = 0.8;
+    decider.goaf_vehicle_radius_ = 1.0;
+    decider.tunnel_preferred_vehicle_radius_ = 1.1;
+    decider.goaf_preferred_vehicle_radius_ = 1.5;
 
     auto enabled = boost::make_shared<std_msgs::Bool>();
     enabled->data = true;
@@ -28,7 +32,9 @@ class SuperExplorationDeciderTestPeer {
     decider.activeTaskCallback(task);
     if (!decider.enabled_ ||
         decider.mission_profile_ != ExplorationMissionProfile::kTunnel ||
-        !decider.corridorGuidanceEnabled()) {
+        !decider.corridorGuidanceEnabled() ||
+        std::abs(decider.vehicle_radius_ - 0.8) > 1e-9 ||
+        std::abs(decider.preferred_vehicle_radius_ - 1.1) > 1e-9) {
       return false;
     }
 
@@ -44,6 +50,8 @@ class SuperExplorationDeciderTestPeer {
     decider.missionEnableCallback(enabled);
     return decider.enabled_ &&
         decider.mission_profile_ == ExplorationMissionProfile::kGoaf &&
+        std::abs(decider.vehicle_radius_ - 1.0) <= 1e-9 &&
+        std::abs(decider.preferred_vehicle_radius_ - 1.5) <= 1e-9 &&
         !decider.corridorGuidanceEnabled();
   }
 

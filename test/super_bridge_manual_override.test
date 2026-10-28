@@ -18,6 +18,7 @@
     <param name="obstacle_persistence_duration" value="5.0"/>
     <param name="obstacle_clear_confirm_frames" value="2"/>
     <param name="live_horizontal_clearance" value="0.65"/>
+    <param name="goaf_live_horizontal_clearance" value="1.0"/>
     <param name="obstacle_monitor_horizontal_clearance" value="0.8"/>
     <param name="coverage_min_points" value="3"/>
     <param name="coverage_confirm_frames" value="1"/>
@@ -29,5 +30,5 @@
     <param name="max_height" value="1.8"/>
   </node>
   <test test-name="super_bridge_manual_override" pkg="mine_uav_control"
-        type="test_super_bridge_manual_override.py" time-limit="130"/>
+        type="test_super_bridge_manual_override.py" time-limit="140"/>
 </launch>

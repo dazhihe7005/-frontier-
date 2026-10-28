@@ -8,7 +8,7 @@
        default="$(find mine_uav_control)/models/iris_mid360_long_range/iris_mid360_long_range.sdf"/>
   <arg name="world"
        default="$(find mine_uav_control)/worlds/goaf_40x40x30_platform.world"/>
-  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1.yaml"/>
+  <arg name="super_config_path" default="$(find mine_uav_control)/config/super_task1_goaf_1m.yaml"/>
   <arg name="decider_vehicle_radius" default="0.8"/>
   <arg name="decider_preferred_vehicle_radius" default="1.1"/>
   <arg name="decider_vertical_vehicle_radius" default="1.0"/>

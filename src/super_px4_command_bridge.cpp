@@ -25,6 +25,7 @@
 #include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/String.h>
+#include <std_msgs/UInt8.h>
 #include <std_srvs/SetBool.h>
 #include <vector>
 
@@ -149,6 +150,8 @@ class SuperPx4CommandBridge {
                       std::string("/mine_uav/mission/auto_enable"));
     private_nh_.param("mission_enable_topic", mission_enable_topic_,
                       std::string("/mine_uav/mission/goaf_enable"));
+    private_nh_.param("active_task_topic", active_task_topic_,
+                      std::string("/mine_uav/mission/active_task"));
     private_nh_.param("exploration_status_topic", exploration_status_topic_,
                       std::string("/mine_uav/exploration/status"));
     private_nh_.param("execution_authorization_topic",
@@ -181,6 +184,10 @@ class SuperPx4CommandBridge {
                       obstacle_cloud_fault_timeout_, 2.0);
     private_nh_.param("live_horizontal_clearance",
                       live_horizontal_clearance_, 0.65);
+    goaf_live_horizontal_clearance_ = live_horizontal_clearance_;
+    private_nh_.param("goaf_live_horizontal_clearance",
+                      goaf_live_horizontal_clearance_,
+                      goaf_live_horizontal_clearance_);
     private_nh_.param("obstacle_monitor_horizontal_clearance",
                       obstacle_monitor_horizontal_clearance_, 0.8);
     private_nh_.param("obstacle_dynamic_monitor_max_clearance",
@@ -309,6 +316,8 @@ class SuperPx4CommandBridge {
     obstacle_cloud_fault_timeout_ = std::max(
         obstacle_cloud_timeout_ + 0.1, obstacle_cloud_fault_timeout_);
     live_horizontal_clearance_ = std::max(0.1, live_horizontal_clearance_);
+    goaf_live_horizontal_clearance_ = std::max(
+        live_horizontal_clearance_, goaf_live_horizontal_clearance_);
     obstacle_monitor_horizontal_clearance_ = std::max(
         live_horizontal_clearance_, obstacle_monitor_horizontal_clearance_);
     obstacle_reaction_time_ = std::max(0.0, obstacle_reaction_time_);
@@ -322,8 +331,10 @@ class SuperPx4CommandBridge {
         0.0, obstacle_dynamic_clearance_buffer_);
     const double maximum_dynamic_clearance =
         mine_uav_control::requiredDynamicObstacleClearance(
-            live_horizontal_clearance_,
-            obstacle_monitor_horizontal_clearance_, max_speed_, max_speed_,
+            goaf_live_horizontal_clearance_,
+            std::max(obstacle_monitor_horizontal_clearance_,
+                     goaf_live_horizontal_clearance_),
+            max_speed_, max_speed_,
             obstacle_reaction_time_, obstacle_emergency_deceleration_,
             obstacle_dynamic_clearance_buffer_,
             obstacle_emergency_min_duration_);
@@ -340,10 +351,10 @@ class SuperPx4CommandBridge {
         std::max(0.1, live_vertical_clearance_below_);
     live_vertical_clearance_above_ =
         std::max(0.1, live_vertical_clearance_above_);
-    coverage_guard_distance_ = std::max(live_horizontal_clearance_,
+    coverage_guard_distance_ = std::max(goaf_live_horizontal_clearance_,
                                         coverage_guard_distance_);
     coverage_lateral_half_width_ = std::max(
-        live_horizontal_clearance_, coverage_lateral_half_width_);
+        goaf_live_horizontal_clearance_, coverage_lateral_half_width_);
     coverage_vertical_uncertainty_margin_ = std::max(
         0.0, std::min(0.5, coverage_vertical_uncertainty_margin_));
     coverage_min_points_ = std::max(1, coverage_min_points_);
@@ -387,6 +398,9 @@ class SuperPx4CommandBridge {
     mission_subscriber_ = nh_.subscribe(
         mission_enable_topic_, 1,
         &SuperPx4CommandBridge::missionCallback, this);
+    active_task_subscriber_ = nh_.subscribe(
+        active_task_topic_, 1,
+        &SuperPx4CommandBridge::activeTaskCallback, this);
     auto_enable_subscriber_ = nh_.subscribe(
         auto_enable_topic_, 1,
         &SuperPx4CommandBridge::autoEnableCallback, this);
@@ -449,6 +463,22 @@ class SuperPx4CommandBridge {
   }
 
  private:
+  bool taskOneClearanceActive() const { return active_task_ != 4; }
+
+  double activeLiveHorizontalClearance() const {
+    return taskOneClearanceActive()
+        ? goaf_live_horizontal_clearance_ : live_horizontal_clearance_;
+  }
+
+  double activeMonitorHorizontalClearance() const {
+    return std::max(obstacle_monitor_horizontal_clearance_,
+                    activeLiveHorizontalClearance());
+  }
+
+  void activeTaskCallback(const std_msgs::UInt8::ConstPtr& task) {
+    active_task_ = task->data;
+  }
+
   void sensorPositionCallback(
       const geometry_msgs::Vector3Stamped::ConstPtr& position) {
     const auto& p = position->vector;
@@ -906,7 +936,7 @@ class SuperPx4CommandBridge {
                   "OFFBOARD, emergency braking, and immediately requesting "
                   "a verified clearance-increasing return trajectory "
                   "(monitor active %.3f s)",
-                  live_horizontal_clearance_,
+                  activeLiveHorizontalClearance(),
                   obstacle_monitor_.elapsed(now.toSec()));
       }
     } else if (action ==
@@ -928,7 +958,8 @@ class SuperPx4CommandBridge {
           1.0,
           "Obstacle persisted for %.3f s in the planning zone but remains "
           "outside the %.3f m hard radius; holding while map/planner update",
-          obstacle_monitor_.elapsed(now.toSec()), live_horizontal_clearance_);
+          obstacle_monitor_.elapsed(now.toSec()),
+          activeLiveHorizontalClearance());
     }
   }
 
@@ -995,6 +1026,8 @@ class SuperPx4CommandBridge {
     // The monitor intentionally evaluates the current scan rather than the
     // permanent map. A leaf, loose rock, or lidar speckle must stop motion
     // immediately, but it must also be allowed to clear and resume the task.
+    const double hard_clearance = activeLiveHorizontalClearance();
+    const double monitor_clearance = activeMonitorHorizontalClearance();
     const auto clearance =
         mine_uav_control::liveDynamicHorizontalCylinderClearance(
             points, latest_task_position_,
@@ -1003,8 +1036,7 @@ class SuperPx4CommandBridge {
             have_previous_target_ ? latest_planning_velocity_z_ : 0.0,
             latest_task_velocity_x_, latest_task_velocity_y_,
             latest_task_velocity_z_, have_task_velocity_,
-            live_horizontal_clearance_,
-            obstacle_monitor_horizontal_clearance_,
+            hard_clearance, monitor_clearance,
             obstacle_dynamic_monitor_max_clearance_,
             obstacle_reaction_time_, obstacle_emergency_deceleration_,
             obstacle_dynamic_clearance_buffer_,
@@ -1015,8 +1047,7 @@ class SuperPx4CommandBridge {
     std::string monitor_reason =
         clearance.hard_clearance_violated
             ? "HARD_CLEARANCE_INTRUSION"
-            : (clearance.horizontal_distance <
-                       obstacle_monitor_horizontal_clearance_
+            : (clearance.horizontal_distance < monitor_clearance
                    ? "OBSTACLE_IN_AVOIDANCE_ZONE"
                    : "DYNAMIC_STOPPING_DISTANCE");
     if (clearance.violated) {
@@ -1029,8 +1060,8 @@ class SuperPx4CommandBridge {
           latest_task_position_.x, latest_task_position_.y,
           latest_task_position_.z, clearance.obstacle.x,
           clearance.obstacle.y, clearance.obstacle.z,
-          clearance.horizontal_distance, live_horizontal_clearance_,
-          obstacle_monitor_horizontal_clearance_,
+          clearance.horizontal_distance, hard_clearance,
+          monitor_clearance,
           clearance.required_horizontal_clearance,
           clearance.closing_speed,
           clearance.vertical_distance);
@@ -1072,8 +1103,7 @@ class SuperPx4CommandBridge {
           "hard/planning clearance remains %.3f/%.3f m",
           coverage.point_count, coverage.horizontal_span,
           coverage.vertical_span, coverage.nearest_horizontal,
-          live_horizontal_clearance_,
-          obstacle_monitor_horizontal_clearance_);
+          hard_clearance, monitor_clearance);
     }
     const bool retained_narrow_surface =
         obstacle_surface_coverage_ready_ &&
@@ -2699,6 +2729,7 @@ class SuperPx4CommandBridge {
   ros::Subscriber alignment_subscriber_;
   ros::Subscriber sensor_position_subscriber_;
   ros::Subscriber mission_subscriber_;
+  ros::Subscriber active_task_subscriber_;
   ros::Subscriber auto_enable_subscriber_;
   ros::Subscriber vision_subscriber_;
   ros::Subscriber finished_subscriber_;
@@ -2744,6 +2775,7 @@ class SuperPx4CommandBridge {
   std::string expected_frame_;
   std::string auto_enable_topic_;
   std::string mission_enable_topic_;
+  std::string active_task_topic_;
   std::string exploration_status_topic_;
   std::string obstacle_cloud_topic_;
   std::string task_odometry_topic_;
@@ -2832,6 +2864,7 @@ class SuperPx4CommandBridge {
   double obstacle_cloud_timeout_{0.35};
   double obstacle_cloud_fault_timeout_{2.0};
   double live_horizontal_clearance_{0.65};
+  double goaf_live_horizontal_clearance_{0.65};
   double obstacle_monitor_horizontal_clearance_{0.8};
   double obstacle_dynamic_monitor_max_clearance_{1.7};
   double obstacle_reaction_time_{0.25};
@@ -2876,6 +2909,7 @@ class SuperPx4CommandBridge {
   bool alignment_ready_{false};
   bool have_sensor_position_{false};
   bool mission_enabled_{false};
+  uint8_t active_task_{0};
   bool auto_enabled_{false};
   bool vision_healthy_{false};
   bool mission_complete_{false};
