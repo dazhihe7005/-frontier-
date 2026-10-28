@@ -87,10 +87,6 @@ super_planner:
   # Track each local tangent with continuous bounded yaw rate instead of
   # shrinking the entire yaw profile after one sharp-turn rate spike.
   yaw_rate_limited_tangent_tracking: true
-  # Reject a normal exploration path if it still needs substantial sideways
-  # translation. At low speed heading is undefined; rest turns use prealign.
-  yaw_velocity_alignment_max: 0.52
-  yaw_velocity_alignment_min_speed: 0.4
   # A rest-to-rest plan with a large heading change starts with a constant-
   # position yaw segment. The first return leg is deliberately made a rest
   # plan, so translation cannot resume until the nose faces the certified

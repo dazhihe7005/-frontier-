@@ -62,8 +62,6 @@ super_planner:
   # still interpolated continuously at the planner/bridge timer rates.
   yaw_tracking_sample_period: 0.2
   yaw_rate_limited_tangent_tracking: true
-  yaw_velocity_alignment_max: 0.52
-  yaw_velocity_alignment_min_speed: 0.4
   # A fresh rest-to-rest trajectory (notably the first return leg) must turn
   # toward its initial path tangent before any translational motion begins.
   yaw_prealign_from_rest: true
