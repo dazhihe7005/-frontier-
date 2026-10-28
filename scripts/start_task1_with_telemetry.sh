@@ -48,6 +48,9 @@ export ROS_HOSTNAME=127.0.0.1
 roslaunch --wait nuc_mavlink_sender nuc_mavlink_sender.launch \
   output_device:=auto \
   auto_discover_output:=true \
+  distance_sensor_frame_id:=sddm_down \
+  distance_range_topic:=/mine_uav/task3/downward_range \
+  distance_sensor_max_age:=1.2 \
   prefer_odom:=false \
   respawn_sender:=true &
 TELEMETRY_LAUNCH_PID=$!
