@@ -22,7 +22,7 @@ super_planner:
   print_log: false
   visual_process: false
   frontend_in_known_free: false
-  goal_yaw_en: true
+  goal_yaw_en: false
   goal_vel_en: false
   corridor_bound_dis: 2.0
   corridor_line_max_length: 1.2
@@ -61,6 +61,9 @@ super_planner:
   # publication period.  Keep it fine enough for narrow bends; commands are
   # still interpolated continuously at the planner/bridge timer rates.
   yaw_tracking_sample_period: 0.2
+  yaw_rate_limited_tangent_tracking: true
+  yaw_velocity_alignment_max: 0.52
+  yaw_velocity_alignment_min_speed: 0.4
   # A fresh rest-to-rest trajectory (notably the first return leg) must turn
   # toward its initial path tangent before any translational motion begins.
   yaw_prealign_from_rest: true

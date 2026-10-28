@@ -1,0 +1,335 @@
+diff --git a/super_planner/include/super_core/config.hpp b/super_planner/include/super_core/config.hpp
+index 5c4129b..c08fd06 100755
+--- a/super_planner/include/super_core/config.hpp
++++ b/super_planner/include/super_core/config.hpp
+@@ -87,6 +87,9 @@ namespace super_planner {
+ 
+         double yaw_dot_max;
+         double yaw_tracking_sample_period{1.0};
++        bool yaw_rate_limited_tangent_tracking{false};
++        double yaw_velocity_alignment_max{0.0};
++        double yaw_velocity_alignment_min_speed{0.4};
+         bool yaw_prealign_from_rest{true};
+         double yaw_prealign_threshold{0.35};
+         double yaw_prealign_min_duration{0.5};
+@@ -198,6 +201,12 @@ namespace super_planner {
+             loader.LoadParam("super_planner/yaw_dot_max", yaw_dot_max, 3.14);
+             loader.LoadParam("super_planner/yaw_tracking_sample_period",
+                              yaw_tracking_sample_period, 1.0);
++            loader.LoadParam("super_planner/yaw_rate_limited_tangent_tracking",
++                             yaw_rate_limited_tangent_tracking, false);
++            loader.LoadParam("super_planner/yaw_velocity_alignment_max",
++                             yaw_velocity_alignment_max, 0.0);
++            loader.LoadParam("super_planner/yaw_velocity_alignment_min_speed",
++                             yaw_velocity_alignment_min_speed, 0.4);
+             loader.LoadParam("super_planner/yaw_prealign_from_rest",
+                              yaw_prealign_from_rest, true);
+             loader.LoadParam("super_planner/yaw_prealign_threshold",
+@@ -206,9 +215,14 @@ namespace super_planner {
+                              yaw_prealign_min_duration, 0.5);
+             if (!std::isfinite(yaw_tracking_sample_period) ||
+                 yaw_tracking_sample_period < 0.1 ||
+-                yaw_tracking_sample_period > 2.0) {
++                yaw_tracking_sample_period > 2.0 ||
++                !std::isfinite(yaw_velocity_alignment_max) ||
++                yaw_velocity_alignment_max < 0.0 ||
++                yaw_velocity_alignment_max > M_PI ||
++                !std::isfinite(yaw_velocity_alignment_min_speed) ||
++                yaw_velocity_alignment_min_speed < 0.0) {
+                 throw std::invalid_argument(
+-                    "yaw tracking sample period must be in [0.1, 2.0] s");
++                    "invalid yaw tracking or alignment limits");
+             }
+             if (!std::isfinite(yaw_prealign_threshold) ||
+                 yaw_prealign_threshold < 0.0 ||
+diff --git a/super_planner/include/super_core/yaw_velocity_alignment_guard.h b/super_planner/include/super_core/yaw_velocity_alignment_guard.h
+new file mode 100644
+index 0000000..edf3860
+--- /dev/null
++++ b/super_planner/include/super_core/yaw_velocity_alignment_guard.h
+@@ -0,0 +1,59 @@
++#ifndef SUPER_PLANNER_YAW_VELOCITY_ALIGNMENT_GUARD_H
++#define SUPER_PLANNER_YAW_VELOCITY_ALIGNMENT_GUARD_H
++
++#include <algorithm>
++#include <cmath>
++
++#include <data_structure/base/trajectory.h>
++
++namespace super_planner {
++
++struct YawVelocityAlignment {
++    double max_error{0.0};
++    double time{0.0};
++    double speed{0.0};
++};
++
++// Inspect the *new moving part* of an exploration trajectory before commit.
++// An emergency backup may intentionally translate laterally and is not gated.
++inline YawVelocityAlignment measureYawVelocityAlignment(
++    const geometry_utils::Trajectory& position,
++    const geometry_utils::Trajectory& yaw,
++    double min_horizontal_speed, double sample_period = 0.1) {
++    YawVelocityAlignment result;
++    if (position.empty() || yaw.empty() || sample_period <= 0.0) {
++        result.max_error = INFINITY;
++        return result;
++    }
++    const double duration = position.getTotalDuration();
++    if (!std::isfinite(duration) ||
++        std::abs(duration - yaw.getTotalDuration()) > 1e-3) {
++        result.max_error = INFINITY;
++        return result;
++    }
++    const int samples = std::max(1, static_cast<int>(std::ceil(duration /
++                                                             sample_period)));
++    for (int i = 0; i <= samples; ++i) {
++        const double time = duration * static_cast<double>(i) / samples;
++        const auto velocity = position.getVel(time);
++        const double speed = std::hypot(velocity.x(), velocity.y());
++        if (speed < min_horizontal_speed) continue;
++        const double heading = std::atan2(velocity.y(), velocity.x());
++        const double yaw_command = yaw.getPos(time).x();
++        const double error = std::abs(std::atan2(
++            std::sin(heading - yaw_command),
++            std::cos(heading - yaw_command)));
++        if (!std::isfinite(error)) {
++            result.max_error = INFINITY;
++            return result;
++        }
++        if (error > result.max_error) {
++            result = {error, time, speed};
++        }
++    }
++    return result;
++}
++
++}  // namespace super_planner
++
++#endif  // SUPER_PLANNER_YAW_VELOCITY_ALIGNMENT_GUARD_H
+diff --git a/super_planner/include/traj_opt/yaw_traj_opt.h b/super_planner/include/traj_opt/yaw_traj_opt.h
+index face3b1..920603d 100755
+--- a/super_planner/include/traj_opt/yaw_traj_opt.h
++++ b/super_planner/include/traj_opt/yaw_traj_opt.h
+@@ -46,11 +46,13 @@ namespace traj_opt {
+         bool free_goal_{false};
+         double yaw_dot_max_{10};
+         double tracking_sample_period_{1.0};
++        bool rate_limited_tangent_tracking_{false};
+ 
+     public:
+ 
+         explicit YawTrajOpt(const double &_yaw_dot_max,
+-                            const double &_tracking_sample_period = 1.0);
++                            const double &_tracking_sample_period = 1.0,
++                            bool rate_limited_tangent_tracking = false);
+ 
+         typedef std::shared_ptr<YawTrajOpt> Ptr;
+ 
+diff --git a/super_planner/src/super_core/super_planner.cpp b/super_planner/src/super_core/super_planner.cpp
+index 13fef17..b267946 100755
+--- a/super_planner/src/super_core/super_planner.cpp
++++ b/super_planner/src/super_core/super_planner.cpp
+@@ -24,6 +24,7 @@
+ #include <super_core/super_planner.h>
+ #include <super_core/flight_z_contract.h>
+ #include <super_core/yaw_prealignment_guard.h>
++#include <super_core/yaw_velocity_alignment_guard.h>
+ #include <memory>
+ #include <pcl/kdtree/kdtree_flann.h>
+ #include <pcl/point_types.h>
+@@ -45,7 +46,8 @@ namespace super_planner {
+         exp_traj_opt_ = std::make_shared<traj_opt::ExpTrajOpt>(cfg_.exp_traj_cfg, ros_ptr_);
+         back_traj_opt_ = std::make_shared<traj_opt::BackupTrajOpt>(cfg_.back_traj_cfg, ros_ptr_);
+         yaw_traj_opt_ = std::make_shared<traj_opt::YawTrajOpt>(
+-            cfg_.yaw_dot_max, cfg_.yaw_tracking_sample_period);
++            cfg_.yaw_dot_max, cfg_.yaw_tracking_sample_period,
++            cfg_.yaw_rate_limited_tangent_tracking);
+         const auto &rog_map_cfg = map_ptr_->getMapConfig();
+         astar_ptr_ = std::make_shared<path_search::Astar>(cfg_path, ros_ptr_, map_ptr_);
+         cg_ptr_ = std::make_shared<CorridorGenerator>(ros_ptr_, map_ptr_, cfg_.corridor_bound_dis,
+@@ -1415,6 +1417,18 @@ namespace super_planner {
+             ros_ptr_->error(" -- [SUPER] in [generateExpTraj]: YawTrajOpt failed, force return");
+             return FAILED;
+         }
++        if (cfg_.yaw_velocity_alignment_max > 0.0) {
++            const auto alignment = measureYawVelocityAlignment(
++                yaw_position_traj, new_traj,
++                cfg_.yaw_velocity_alignment_min_speed);
++            if (alignment.max_error > cfg_.yaw_velocity_alignment_max) {
++                ros_ptr_->warn(
++                    " -- [SUPER] Reject exploration trajectory: yaw/velocity error {:.1f} deg at {:.2f} s, speed {:.2f} m/s",
++                    alignment.max_error * 57.295779513,
++                    alignment.time, alignment.speed);
++                return FAILED;
++            }
++        }
+         if (yaw_prealignment_active) {
+             new_traj = yaw_alignment_traj + new_traj;
+         }
+diff --git a/super_planner/src/traj_opt/yaw_traj_opt.cpp b/super_planner/src/traj_opt/yaw_traj_opt.cpp
+index a30bed7..899ac58 100755
+--- a/super_planner/src/traj_opt/yaw_traj_opt.cpp
++++ b/super_planner/src/traj_opt/yaw_traj_opt.cpp
+@@ -95,12 +95,14 @@ namespace traj_opt {
+     }
+ 
+     YawTrajOpt::YawTrajOpt(const double &_yaw_dot_max,
+-                           const double &_tracking_sample_period)
++                           const double &_tracking_sample_period,
++                           bool rate_limited_tangent_tracking)
+         : yaw_dot_max_(_yaw_dot_max),
+           tracking_sample_period_(
+               std::isfinite(_tracking_sample_period)
+                   ? std::max(0.1, _tracking_sample_period)
+-                  : 1.0) {
++                  : 1.0),
++          rate_limited_tangent_tracking_(rate_limited_tangent_tracking) {
+     }
+ 
+     bool YawTrajOpt::optimize(const Vec4f &istate_in,
+@@ -144,6 +146,51 @@ namespace traj_opt {
+         getYawTimeAllocation(pos_traj_dur, times);
+         VecDf way_pts;
+         getYawWaypointAllocation(init_state, goal_state, way_pts, times, pos_traj);
++        if (rate_limited_tangent_tracking_ && order == 3 && !free_start) {
++            // A global minimum-acceleration solve can contain one coefficient
++            // spike at a sharp turn. Scaling every waypoint to meet the rate
++            // limit then makes the nose nearly stationary for the whole leg.
++            // Follow the local tangent with bounded yaw rate and acceleration
++            // instead. Each piece starts at the preceding piece's yaw/rate.
++            Trajectory local_yaw;
++            double yaw = init_state(0);
++            double rate = init_state(1);
++            if (!std::isfinite(yaw) || !std::isfinite(rate) ||
++                std::abs(rate) > yaw_dot_max_ + 1e-3) {
++                return false;
++            }
++            constexpr double kYawAccelerationLimit = 1.0; // rad/s^2
++            constexpr double kHeadingResponseTime = 0.4; // s
++            for (long int i = 0; i < times.size(); ++i) {
++                const double duration = times(i);
++                const double requested =
++                    i < way_pts.size() ? way_pts(i) : goal_state(0);
++                double target = requested;
++                normalizeNextYaw(yaw, target);
++                const double desired_rate = std::max(
++                    -yaw_dot_max_, std::min(yaw_dot_max_,
++                                             (target - yaw) /
++                                                 kHeadingResponseTime));
++                const double next_rate = std::max(
++                    -yaw_dot_max_, std::min(yaw_dot_max_,
++                        std::max(rate - kYawAccelerationLimit * duration,
++                                 std::min(rate + kYawAccelerationLimit * duration,
++                                          desired_rate))));
++                const double acceleration = (next_rate - rate) / duration;
++                // Piece's trajectory math stores scalar yaw in a 3-row
++                // coefficient matrix (the unused rows must be zero).
++                Eigen::MatrixXd coefficients = Eigen::MatrixXd::Zero(3, 3);
++                coefficients(0, 0) = 0.5 * acceleration;
++                coefficients(0, 1) = rate;
++                coefficients(0, 2) = yaw;
++                local_yaw.emplace_back(duration, coefficients);
++                yaw += 0.5 * (rate + next_rate) * duration;
++                rate = next_rate;
++            }
++            out_traj = local_yaw;
++            out_traj.start_WT = pos_traj.start_WT;
++            return true;
++        }
+         const VecDf requested_way_pts = way_pts;
+         const double requested_goal_yaw = goal_state(0);
+         Trajectory yaw_traj;
+diff --git a/super_planner/test/yaw_rate_limit_test.cpp b/super_planner/test/yaw_rate_limit_test.cpp
+index c551c51..7731ec6 100644
+--- a/super_planner/test/yaw_rate_limit_test.cpp
++++ b/super_planner/test/yaw_rate_limit_test.cpp
+@@ -3,6 +3,7 @@
+ #include <cmath>
+ 
+ #include <traj_opt/yaw_traj_opt.h>
++#include <super_core/yaw_velocity_alignment_guard.h>
+ 
+ namespace {
+ 
+@@ -38,6 +39,26 @@ geometry_utils::Trajectory makeLatestFlightBendTrajectory() {
+     return position;
+ }
+ 
++geometry_utils::Trajectory makeSmoothQuarterTurnTrajectory() {
++    geometry_utils::Trajectory position;
++    constexpr int kPieces = 16;
++    constexpr double kDuration = 0.25;
++    constexpr double kRadius = 2.0;
++    for (int i = 0; i < kPieces; ++i) {
++        const double angle0 = M_PI_2 * i / kPieces;
++        const double angle1 = M_PI_2 * (i + 1) / kPieces;
++        Eigen::MatrixXd coefficients = Eigen::MatrixXd::Zero(3, 2);
++        coefficients(0, 0) = kRadius *
++            (std::sin(angle1) - std::sin(angle0)) / kDuration;
++        coefficients(1, 0) = kRadius *
++            (std::cos(angle0) - std::cos(angle1)) / kDuration;
++        coefficients(0, 1) = kRadius * std::sin(angle0);
++        coefficients(1, 1) = kRadius * (1.0 - std::cos(angle0));
++        position.emplace_back(kDuration, coefficients);
++    }
++    return position;
++}
++
+ }  // namespace
+ 
+ TEST(YawRateLimit, ClipsHalfTurnToFitShortPositionLeg) {
+@@ -139,6 +160,53 @@ TEST(YawRateLimit, LatestFlightBendKeepsYawNearVelocityTangent) {
+     }
+ }
+ 
++TEST(YawRateLimit, LocalTrackingDoesNotFreezeYawAfterSharpTurn) {
++    const auto position = makeRightAnglePositionTrajectory();
++    super_utils::Vec4f initial = super_utils::Vec4f::Zero();
++    super_utils::Vec4f requested = super_utils::Vec4f::Zero();
++    requested(0) = M_PI_2;
++    geometry_utils::Trajectory yaw;
++    traj_opt::YawTrajOpt optimizer(0.6, 0.2, true);
++    ASSERT_TRUE(optimizer.optimize(initial, requested, position, yaw,
++                                   3, false, true));
++    EXPECT_LE(yaw.getMaxVelRate(), 0.6001);
++    EXPECT_GT(yaw.getPos(3.0).x(), 0.4);
++    EXPECT_GT(yaw.getPos(4.0).x(), 0.9);
++    for (int i = 1; i < yaw.getPieceNum(); ++i) {
++        const auto& before = yaw[i - 1];
++        const auto& after = yaw[i];
++        EXPECT_NEAR(before.getPos(before.getDuration()).x(),
++                    after.getPos(0.0).x(), 1e-7);
++        EXPECT_NEAR(before.getVel(before.getDuration()).x(),
++                    after.getVel(0.0).x(), 1e-7);
++    }
++}
++
++TEST(YawRateLimit, ExplorationAlignmentGuardRejectsSidewaysTurn) {
++    const auto position = makeRightAnglePositionTrajectory();
++    geometry_utils::Trajectory frozen_yaw;
++    Eigen::MatrixXd constant = Eigen::MatrixXd::Zero(1, 2);
++    frozen_yaw.emplace_back(4.0, constant);
++    const auto result = super_planner::measureYawVelocityAlignment(
++        position, frozen_yaw, 0.4);
++    EXPECT_GT(result.max_error, 1.5);
++    EXPECT_GT(result.speed, 0.9);
++}
++
++TEST(YawRateLimit, LocalTrackingAcceptsSmoothForwardTurn) {
++    const auto position = makeSmoothQuarterTurnTrajectory();
++    super_utils::Vec4f initial = super_utils::Vec4f::Zero();
++    super_utils::Vec4f requested = super_utils::Vec4f::Zero();
++    geometry_utils::Trajectory yaw;
++    traj_opt::YawTrajOpt optimizer(0.6, 0.2, true);
++    ASSERT_TRUE(optimizer.optimize(initial, requested, position, yaw,
++                                   3, false, true));
++    EXPECT_LE(yaw.getMaxVelRate(), 0.6001);
++    const auto alignment = super_planner::measureYawVelocityAlignment(
++        position, yaw, 0.4);
++    EXPECT_LT(alignment.max_error, 0.52);
++}
++
+ int main(int argc, char** argv) {
+     ::testing::InitGoogleTest(&argc, argv);
+     return RUN_ALL_TESTS();
