@@ -18,6 +18,9 @@ class ShaftMissionNode {
  public:
   ShaftMissionNode() : private_nh_("~"), mission_(loadConfig()) {
     private_nh_.param("input_timeout", input_timeout_, 0.4);
+    // The SDDM long-range return can take about 0.8 s. Keep the fast depth
+    // watchdog separate from the downward sensor's receive/stamp watchdog.
+    private_nh_.param("range_timeout", range_timeout_, input_timeout_);
     private_nh_.param("control_rate", control_rate_, 20.0);
     private_nh_.param<std::string>("required_depth_source", required_depth_source_, "");
     private_nh_.param<std::string>("required_range_frame", required_range_frame_, "");
@@ -35,8 +38,10 @@ class ShaftMissionNode {
                                    "/mine_uav/shaft/input_gate");
     private_nh_.param("max_depth_sigma_m", max_depth_sigma_m_, 0.25);
     if (!std::isfinite(control_rate_) || control_rate_ <= 0.0 ||
-        !std::isfinite(input_timeout_) || input_timeout_ <= 0.0) {
-      throw std::invalid_argument("shaft input_timeout and control_rate must be positive");
+        !std::isfinite(input_timeout_) || input_timeout_ <= 0.0 ||
+        !std::isfinite(range_timeout_) || range_timeout_ <= 0.0 ||
+        range_timeout_ > 2.0) {
+      throw std::invalid_argument("invalid shaft input/range timeout or control rate");
     }
     enable_sub_ = nh_.subscribe(enable_topic_, 1,
                                 &ShaftMissionNode::enableCallback, this);
@@ -98,10 +103,11 @@ class ShaftMissionNode {
     range_time_ = ros::Time::now();
   }
 
-  bool freshStamp(const ros::Time& stamp, const ros::Time& now) const {
+  bool freshStamp(const ros::Time& stamp, const ros::Time& now,
+                  double timeout) const {
     if (stamp.isZero()) return false;
     const double age = (now - stamp).toSec();
-    return age >= -0.05 && age <= input_timeout_;
+    return age >= -0.05 && age <= timeout;
   }
 
   void publishGate(const std::string& value) {
@@ -119,12 +125,14 @@ class ShaftMissionNode {
     const bool configured = !required_depth_source_.empty() &&
         !required_range_frame_.empty() && std::isfinite(max_depth_sigma_m_) &&
         max_depth_sigma_m_ > 0.0 && std::isfinite(input_timeout_) &&
-        input_timeout_ > 0.0 && std::isfinite(control_rate_) &&
+        input_timeout_ > 0.0 && std::isfinite(range_timeout_) &&
+        range_timeout_ > 0.0 && range_timeout_ <= 2.0 &&
+        std::isfinite(control_rate_) &&
         control_rate_ > 0.0;
     const bool depth_fresh = !depth_time_.isZero() &&
         (now - depth_time_).toSec() >= -0.05 &&
         (now - depth_time_).toSec() <= input_timeout_ &&
-        freshStamp(depth_stamp_, now);
+        freshStamp(depth_stamp_, now, input_timeout_);
     in.depth_valid = configured && depth_fresh && depth_good_ &&
         depth_source_ == required_depth_source_ && std::isfinite(depth_) &&
         std::isfinite(depth_sigma_) && depth_sigma_ >= 0.0 &&
@@ -132,8 +140,8 @@ class ShaftMissionNode {
     in.depth = depth_;
     in.range_fresh = configured && !range_time_.isZero() &&
         (now - range_time_).toSec() >= -0.05 &&
-        (now - range_time_).toSec() <= input_timeout_ &&
-        freshStamp(range_stamp_, now) &&
+        (now - range_time_).toSec() <= range_timeout_ &&
+        freshStamp(range_stamp_, now, range_timeout_) &&
         range_frame_ == required_range_frame_;
     in.bottom_range = range_;
     in.range_min = range_min_;
@@ -234,6 +242,7 @@ class ShaftMissionNode {
   double range_min_{0.0};
   double range_max_{30.0};
   double input_timeout_{0.4};
+  double range_timeout_{0.4};
   double max_depth_sigma_m_{0.25};
   double control_rate_{20.0};
   bool enabled_{false};

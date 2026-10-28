@@ -20,4 +20,7 @@ entrance_tolerance: 5.0
 max_depth_jump: 2.0
 max_acceleration: 0.5
 input_timeout: 0.4
+# SDDM long-range frames may be about 0.8 s apart. Depth/pose retains the
+# independent 0.4 s watchdog; only downward range uses this 1.2 s window.
+range_timeout: 1.2
 control_rate: 20.0

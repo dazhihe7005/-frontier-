@@ -108,6 +108,17 @@ class ShaftRosLogicTest(unittest.TestCase):
         self.wait_for(lambda: self.status == "DESCENDING" and
                       self.latest_command is not None and
                       self.latest_command.twist.linear.z < 0.0, "descent")
+        # Long-range SDDM reports can be spaced roughly 0.8 s apart. The
+        # mission must keep using the last valid range while fresh depth
+        # continues, then still fault after the separate 1.2 s range limit.
+        with self.lock:
+            self.publish_range = False
+            previous_command_time = self.last_command_time
+        time.sleep(0.8)
+        with self.lock:
+            self.assertEqual(self.status, "DESCENDING")
+            self.assertGreater(self.last_command_time, previous_command_time)
+            self.publish_range = True
         with self.lock:
             self.depth = 1.0
             self.bottom_range = 1.5
@@ -120,7 +131,7 @@ class ShaftRosLogicTest(unittest.TestCase):
         with self.lock:
             last_command = self.last_command_time
             self.publish_range = False
-        time.sleep(0.55)
+        time.sleep(1.3)
         with self.lock:
             self.assertEqual(self.status, "COMPLETE")
             self.assertEqual(last_command, self.last_command_time)

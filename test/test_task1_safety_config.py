@@ -293,6 +293,8 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(
             shaft["required_depth_source"], "omnilivo_planning_odometry")
         self.assertEqual(shaft["required_range_frame"], "sddm_down")
+        self.assertAlmostEqual(shaft["range_timeout"], 1.2)
+        self.assertLess(shaft["input_timeout"], shaft["range_timeout"])
         self.assertAlmostEqual(shaft["max_depth_sigma_m"], 5.0)
         self.assertAlmostEqual(shaft["entrance_tolerance"], 5.0)
         production = yaml.safe_load(
