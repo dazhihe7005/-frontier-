@@ -118,6 +118,8 @@
   <node pkg="mine_uav_control" type="shaft_mission_node"
         name="shaft_mission_node" output="screen" required="true">
     <rosparam command="load" file="$(find mine_uav_control)/config/shaft_mission_logic.yaml"/>
+    <!-- Historical 8 m STP23 model cannot detect the new 10 m SDDM threshold. -->
+    <param name="bottom_trigger" value="5.0"/>
     <param unless="$(arg use_vision_truth)" name="required_depth_source"
            value="fastlio2_vertical_displacement"/>
     <param if="$(arg use_vision_truth)" name="required_depth_source"

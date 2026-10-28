@@ -24,6 +24,18 @@ MEASURED_SPEED_TARGET = 1.0
 
 
 class Task1SafetyConfigTest(unittest.TestCase):
+    def test_legacy_eight_meter_shaft_sitl_keeps_reachable_bottom_trigger(self):
+        launch = ET.parse(
+            ROOT / "launch" / "task2_shaft_500m_opticalflow_px4_sitl.launch"
+        ).getroot()
+        mission = launch.find(".//node[@type='shaft_mission_node']")
+        self.assertIsNotNone(mission)
+        overrides = {
+            item.attrib["name"]: item.attrib["value"]
+            for item in mission.findall("param")
+        }
+        self.assertEqual(float(overrides["bottom_trigger"]), 5.0)
+
     def test_super_process_uses_separate_task_profiles(self):
         real = ET.parse(ROOT / "launch" / "task1_real.launch").getroot()
         sitl = ET.parse(ROOT / "launch" / "task1_px4_sitl.launch").getroot()
@@ -293,6 +305,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
         self.assertEqual(
             shaft["required_depth_source"], "omnilivo_planning_odometry")
         self.assertEqual(shaft["required_range_frame"], "sddm_down")
+        self.assertAlmostEqual(shaft["bottom_trigger"], 10.0)
         self.assertAlmostEqual(shaft["range_timeout"], 1.2)
         self.assertLess(shaft["input_timeout"], shaft["range_timeout"])
         self.assertAlmostEqual(shaft["max_depth_sigma_m"], 5.0)

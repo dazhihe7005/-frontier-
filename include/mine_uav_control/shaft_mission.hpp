@@ -16,7 +16,7 @@ class ShaftMission {
     double return_speed{0.5};
     // A fresh downward-laser reading at or below this distance starts
     // acceleration-limited braking and bottom confirmation.
-    double bottom_trigger{5.0};
+    double bottom_trigger{10.0};
     double bottom_stop_margin{0.8};
     double bottom_confirm_seconds{0.3};
     double max_depth{450.0};

@@ -49,7 +49,7 @@ TEST(ShaftMission, BottomConfirmationThenReturnToCapturedEntrance) {
   EXPECT_EQ(mission.step(in).state, ShaftMission::State::kComplete);
 }
 
-TEST(ShaftMission, FiveMeterLaserThresholdBrakesBeforeReversing) {
+TEST(ShaftMission, TenMeterLaserThresholdBrakesBeforeReversing) {
   ShaftMission mission({});
   ShaftMission::Input in;
   in.enabled = true;
@@ -67,12 +67,12 @@ TEST(ShaftMission, FiveMeterLaserThresholdBrakesBeforeReversing) {
   ASSERT_NEAR(out.vertical_speed_enu, -0.5, 1e-9);
 
   in.depth = 11.0;
-  in.bottom_range = 5.01;
+  in.bottom_range = 10.01;
   out = mission.step(in);
   EXPECT_EQ(out.state, ShaftMission::State::kDescending);
   EXPECT_NEAR(out.vertical_speed_enu, -0.5, 1e-9);
 
-  in.bottom_range = 5.0;
+  in.bottom_range = 10.0;
   double previous_speed = out.vertical_speed_enu;
   out = mission.step(in);
   EXPECT_EQ(out.state, ShaftMission::State::kDescending);
@@ -148,8 +148,8 @@ TEST(ShaftMission, SimulatedFourHundredTwentyMeterShaftCycle) {
     }
     if (out.state == ShaftMission::State::kComplete) {
       EXPECT_TRUE(saw_return);
-      EXPECT_GE(deepest, 415.0);
-      EXPECT_LT(deepest, shaft_bottom - 4.0);
+      EXPECT_GE(deepest, shaft_bottom - 11.0);
+      EXPECT_LT(deepest, shaft_bottom - 9.0);
       EXPECT_LE(simulated_depth, 0.5);
       return;
     }
@@ -162,6 +162,9 @@ TEST(ShaftMission, SimulatedFourHundredTwentyMeterShaftCycle) {
 
 TEST(ShaftMission, SimulatedFiveHundredMeterOpticalFlowEightMeterRangeCycle) {
   ShaftMission::Config config;
+  // Historical STP23 simulation has an 8 m maximum range. It cannot use
+  // the production SDDM's 10 m bottom threshold.
+  config.bottom_trigger = 5.0;
   config.max_depth = 505.0;
   config.max_duration = 2400.0;
   ShaftMission mission(config);
@@ -207,6 +210,7 @@ TEST(ShaftMission, SimulatedFiveHundredMeterOpticalFlowEightMeterRangeCycle) {
 
 TEST(ShaftMission, OpticalFlowBiasCanHideEntranceErrorWithoutAbsoluteZ) {
   ShaftMission::Config config;
+  config.bottom_trigger = 5.0;
   config.max_depth = 505.0;
   config.max_duration = 2400.0;
   ShaftMission mission(config);

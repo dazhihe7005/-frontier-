@@ -9,9 +9,9 @@ range_topic: "/mine_uav/task3/downward_range"
 max_depth_sigma_m: 5.0
 descent_speed: 0.5
 return_speed: 0.5
-# Downward laser: at <=5 m, decelerate immediately, confirm the reading, then
+# Downward SDDM: at <=10 m, decelerate immediately, confirm the reading, then
 # reverse into the return leg. The laser is not an EKF input or depth source.
-bottom_trigger: 5.0
+bottom_trigger: 10.0
 bottom_stop_margin: 0.8
 bottom_confirm_seconds: 0.3
 max_depth: 450.0
