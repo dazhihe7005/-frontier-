@@ -137,7 +137,7 @@ mkdir -p "${run_dir}/config"
 } >"${run_dir}/startup_metadata.txt"
 
 cp -a "${PROJECT_DIR}/config/five_meter_avoidance_test.yaml" \
-      "${PROJECT_DIR}/config/super_task1.yaml" \
+      "${PROJECT_DIR}/config/super_task1_goaf_1m.yaml" \
       "${PROJECT_DIR}/config/super_px4_command_bridge.yaml" \
       "${PROJECT_DIR}/launch/five_meter_avoidance_real.launch" \
       "${run_dir}/config/"

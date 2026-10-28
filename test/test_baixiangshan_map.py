@@ -111,6 +111,10 @@ class BaiXiangShanMapTest(unittest.TestCase):
         self.assertEqual(
             generic_defaults["decider_preferred_vehicle_radius"], "1.1")
         self.assertEqual(
+            generic_defaults["goaf_decider_vehicle_radius"], "1.0")
+        self.assertEqual(
+            generic_defaults["goaf_decider_preferred_vehicle_radius"], "1.5")
+        self.assertEqual(
             generic_defaults["decider_vertical_vehicle_radius"], "0.3")
 
         operator = generic.find("./node[@name='sitl_task_operator']")

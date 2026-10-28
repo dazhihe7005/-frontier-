@@ -1,5 +1,5 @@
-# Goaf SITL profile: 1 m/s speed limit and gentle acceleration for broad turns near the irregular
-# end wall. The general task-one and real-flight profile remains separate.
+# Legacy Task-4 SITL SUPER profile (kept at this path for existing launches).
+# Task 1 uses super_task1_goaf_1m_smooth.yaml in the profiled SITL launcher.
 fsm:
   frame_id: "task1_planning"
   click_goal_en: false

@@ -51,6 +51,10 @@
   <arg name="max_exploration_radius" default="0.0"/>
   <arg name="decider_vehicle_radius" default="0.8"/>
   <arg name="decider_preferred_vehicle_radius" default="1.1"/>
+  <!-- The legacy pair above belongs to Task 4. Task 1 has its own values;
+       scenario probes must override these goaf args, not the tunnel pair. -->
+  <arg name="goaf_decider_vehicle_radius" default="1.0"/>
+  <arg name="goaf_decider_preferred_vehicle_radius" default="1.5"/>
   <arg name="decider_vertical_vehicle_radius" default="0.3"/>
   <arg name="decider_vertical_vehicle_clearance_below" default="0.5"/>
   <arg name="decider_vertical_vehicle_clearance_above" default="0.5"/>
@@ -286,6 +290,10 @@
     <param name="vehicle_radius" value="$(arg decider_vehicle_radius)"/>
     <param name="preferred_vehicle_radius"
            value="$(arg decider_preferred_vehicle_radius)"/>
+    <param name="goaf_vehicle_radius"
+           value="$(arg goaf_decider_vehicle_radius)"/>
+    <param name="goaf_preferred_vehicle_radius"
+           value="$(arg goaf_decider_preferred_vehicle_radius)"/>
     <param name="vertical_vehicle_radius" value="$(arg decider_vertical_vehicle_radius)"/>
     <param name="vertical_vehicle_clearance_below"
            value="$(arg decider_vertical_vehicle_clearance_below)"/>

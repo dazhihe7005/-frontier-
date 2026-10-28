@@ -11,7 +11,7 @@
   <arg name="vehicle_sdf"
        default="$(find mine_uav_control)/models/iris_mid360/iris_mid360.sdf"/>
   <arg name="super_config_path"
-       default="$(find mine_uav_control)/config/super_task1.yaml"/>
+       default="$(find mine_uav_control)/config/super_task1_goaf_1m.yaml"/>
   <arg name="fastlio_config"
        default="$(find mine_uav_control)/config/fastlio_gazebo_mid360.yaml"/>
 

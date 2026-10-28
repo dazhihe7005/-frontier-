@@ -1,5 +1,5 @@
-# Repository-owned SUPER profile for task one. Do not edit SUPER's upstream
-# click_smooth_ros1.yaml for this project; all task-specific tuning lives here.
+# Legacy Task-4 tunnel SUPER profile (kept at this path for existing launches).
+# Task 1 uses super_task1_goaf_1m.yaml in the production task-profile launcher.
 fsm:
   frame_id: "task1_planning"
   click_goal_en: false

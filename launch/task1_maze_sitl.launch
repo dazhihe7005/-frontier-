@@ -16,8 +16,8 @@
     <arg name="rviz" value="$(arg rviz)"/>
     <arg name="allow_auto_arm" value="$(arg allow_auto_arm)"/>
     <arg name="super_config_path" value="$(arg super_config_path)"/>
-    <arg name="decider_vehicle_radius" value="$(arg decider_vehicle_radius)"/>
-    <arg name="decider_preferred_vehicle_radius"
+    <arg name="goaf_decider_vehicle_radius" value="$(arg decider_vehicle_radius)"/>
+    <arg name="goaf_decider_preferred_vehicle_radius"
          value="$(arg decider_preferred_vehicle_radius)"/>
     <arg name="decider_vertical_vehicle_radius" value="$(arg decider_vertical_vehicle_radius)"/>
     <arg name="decider_vertical_vehicle_clearance_below"

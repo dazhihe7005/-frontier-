@@ -90,7 +90,7 @@
     <node pkg="super_planner" type="fsm_node" name="fsm_node"
           output="screen" required="true">
       <param name="config_path"
-             value="$(find mine_uav_control)/config/super_task1.yaml"/>
+             value="$(find mine_uav_control)/config/super_task1_goaf_1m.yaml"/>
     </node>
   </group>
 

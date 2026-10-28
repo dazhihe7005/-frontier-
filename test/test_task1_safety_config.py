@@ -38,6 +38,10 @@ class Task1SafetyConfigTest(unittest.TestCase):
                       for item in nodes[0].findall("param")}
             self.assertIn(goaf_name, params["goaf_config_path"])
             self.assertIn(tunnel_name, params["tunnel_config_path"])
+        for name in ("five_meter_avoidance_real.launch",
+                     "five_meter_avoidance_sitl.launch"):
+            text = (ROOT / "launch" / name).read_text()
+            self.assertIn("super_task1_goaf_1m.yaml", text)
 
     def test_bridge_launch_cannot_override_production_speed_limits(self):
         launch_root = ET.parse(
@@ -446,6 +450,7 @@ class Task1SafetyConfigTest(unittest.TestCase):
             for node in sitl.findall("./arg")
         }
         self.assertEqual(launch_args["decider_vehicle_radius"], "0.8")
+        self.assertEqual(launch_args["goaf_decider_vehicle_radius"], "1.0")
         self.assertEqual(launch_args["mission_profile"], "goaf")
         self.assertEqual(
             launch_args["corridor_centering_enabled"], "true")
@@ -453,6 +458,27 @@ class Task1SafetyConfigTest(unittest.TestCase):
             launch_args["corridor_preview_enabled"], "true")
         self.assertEqual(
             launch_args["decider_preferred_vehicle_radius"], "1.1")
+        self.assertEqual(
+            launch_args["goaf_decider_preferred_vehicle_radius"], "1.5")
+        decider_node = sitl.find("./node[@name='super_exploration_decider']")
+        decider_params = {node.attrib["name"]: node.attrib["value"]
+                          for node in decider_node.findall("param")}
+        self.assertEqual(decider_params["vehicle_radius"],
+                         "$(arg decider_vehicle_radius)")
+        self.assertEqual(decider_params["goaf_vehicle_radius"],
+                         "$(arg goaf_decider_vehicle_radius)")
+        self.assertEqual(decider_params["goaf_preferred_vehicle_radius"],
+                         "$(arg goaf_decider_preferred_vehicle_radius)")
+        for scenario in ("task1_40m_platform_sitl.launch",
+                         "task1_maze_sitl.launch"):
+            root = ET.parse(ROOT / "launch" / scenario).getroot()
+            include_args = {node.attrib["name"]: node.attrib["value"]
+                            for node in root.findall(".//include/arg")}
+            self.assertEqual(include_args["goaf_decider_vehicle_radius"],
+                             "$(arg decider_vehicle_radius)", scenario)
+            self.assertEqual(
+                include_args["goaf_decider_preferred_vehicle_radius"],
+                "$(arg decider_preferred_vehicle_radius)", scenario)
         self.assertEqual(launch_args["no_frontier_timeout"], "7.0")
         self.assertEqual(
             launch_args["map_closure_no_frontier_time"], "10.0")
