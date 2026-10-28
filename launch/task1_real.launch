@@ -81,7 +81,7 @@
   </group>
 
   <group if="$(arg start_omnilivo)">
-    <include file="/home/nuc/uav_modes/releases/async_low_latency_height_20261026_02/mapping.launch">
+    <include file="/home/nuc/uav_modes/releases/async_visual_feedback_20261028_01/mapping.launch">
       <arg name="runtime_config" value="$(arg omnilivo_runtime_config)"/>
     </include>
   </group>

@@ -78,12 +78,8 @@ find_px4_serial() {
       "${px4_candidates[*]}" >&2
     return 1
   fi
-  if (( ${#serial_candidates[@]} == 1 )); then
-    printf '%s\n' "${serial_candidates[0]}"
-    return 0
-  fi
-  if (( ${#serial_candidates[@]} > 1 )); then
-    printf 'multiple generic serial devices found: %s\n' \
+  if (( ${#serial_candidates[@]} > 0 )); then
+    printf 'no explicitly identified PX4 device; refusing generic serial devices: %s\n' \
       "${serial_candidates[*]}" >&2
   else
     echo 'waiting for a PX4 serial device under /dev/serial/by-id' >&2
