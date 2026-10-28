@@ -503,7 +503,7 @@ rostopic pub -1 /mine_uav/exploration/return_home std_msgs/Bool "data: true"
 - CH7 再次稳定变化：取消等待中或活动中的任务四并撤销自动权限；
 - CH11 稳定电平变化（两个方向均可）：在任务二可用时启动 `shaft_exploration`；
 - 活动任务仍处理本任务通道的取消；其他忙碌期边沿不会排队到任务结束后误启动；
-- 遥控器或 MAVROS 断链会撤销当前任务；任务一还要求 Omni-LIVO 位姿新鲜。任务二要求来源声明为 `omnilivo_planning_odometry` 的入口相对深度、`stp23_down` 下视测距和水平点云，并由最大净空偏好加二维 CBF-QP 生成水平速度。生产任务允许约 5 m 的累计深度误差；原侧面光流深度不参与生产链。
+- 遥控器或 MAVROS 断链会撤销当前任务；任务一还要求 Omni-LIVO 位姿新鲜。任务二要求来源声明为 `omnilivo_planning_odometry` 的入口相对深度、`sddm_down` 下视测距和水平点云，并由最大净空偏好加二维 CBF-QP 生成水平速度。生产任务允许约 5 m 的累计深度误差；原侧面光流深度不参与生产链。
 - 已预留任务三压力控制：`active_task=3`、`/mine_uav/mission/task3_enable` 和
   `/mine_uav/task3/command_ready` 已接入调度器；物理通道现为 CH6，即
   `task3_trigger_channel=5`。独立实现位于 `/home/nuc/task3_ws`，已加入基于
@@ -857,7 +857,7 @@ SUPER 侧增量保存在 `patches/super_goal_continuous_retarget.patch`，需先
 
 新增隔离 22 m `task2_shaft_22m_vision_px4_sitl.launch`：Gazebo 世界真值全位姿经 MAVROS 进入 PX4 外部视觉，PX4 ULog 确认视觉高度参与融合。关闭模拟气压计/GPS 后任务仍完整返航；再断开视觉后 PX4 Z 失效，路由能停发指令，但仿真失速/断连，**未证明安全回收**。这是纯仿真接口实验，不是真实独立深度源；本机 PX4 SITL 的 `iris_vision` 机型需要[项目内的机型配置](px4_airframes/1013_gazebo-classic_iris_vision)，它不会自动安装到其他 PX4 工作树。完整证据与限制见[视觉高度实验报告](docs/task2_vision_height_sitl_2026-09-18.md)。
 
-2026-09-20 真机 PX4 只读探针确认下视 `stp23` 测距实例量程为 0.30–8.00 m，`EKF2_RNG_CTRL=0`，任务二现以 **5.00 m** 为激光减速/返航确认阈值，并对下降到上升的换向施加 0.5 m/s² 速度斜率限制。当前传感器串口通信存在但全部帧被驱动判为无效，尚不能接入任务控制；侧面光流入口相对深度源等待硬件安装后实现。生产 `shaft_task_available=false` 未改变。详见[真机测距探针记录](docs/task2_real_rangefinder_probe_2026-09-20.md)。
+2026-09-20 真机 PX4 只读探针确认下视 `stp23` 测距实例量程为 0.30–8.00 m，`EKF2_RNG_CTRL=0`，任务二现以 **5.00 m** 为激光减速/返航确认阈值，并对下降到上升的换向施加 0.5 m/s² 速度斜率限制。当前传感器串口通信存在但全部帧被驱动判为无效，尚不能接入任务控制；侧面光流入口相对深度源等待硬件安装后实现。生产 `shaft_task_available=false` 未改变。详见[真机测距探针记录](docs/task2_real_rangefinder_probe_2026-09-20.md)。该段是历史记录；2026-10-27 当前下视模块已改为 SDDM，生产数据契约为 `sddm_down`、4--600 m 且 1.2 s 超时失效。
 
 2026-09-21 最新任务二代码通过隔离 **500 m PX4/Gazebo nominal SITL**：任务层深度只使用侧面光流积分代理，下视测距仅 0.3–8 m；5 m 开始限加速度刹车，最低 Range 3.646 m，命令加速度不超过 0.5 m/s²，完整返航后进入 AUTO.LOITER。该结果不代表真实 500 m 飞行已安全，尤其积分漂移仍不可由任务状态机自行观测。详见[500 m 光流深度验收报告](docs/task2_500m_opticalflow_acceptance_2026-09-21.md)。
 
